@@ -9,6 +9,11 @@ let currentQrToken = null;
 let currentQrVolunteerId = null;
 let currentQrShiftId = null;
 let qrCountdownTimer = null;
+let currentVolunteerFaction = 'TEAM_KERNEL';
+let gymsCache = [];
+let hackStopsCache = [];
+let userInventoryCache = [];
+let canvasParticles = [];
 
 // Tab Switcher
 function switchTab(tabId) {
@@ -25,6 +30,11 @@ function switchTab(tabId) {
 
   if (tabId === 'tab-qr' && shiftsCache.length > 0 && !currentQrShiftId) {
     setupDefaultQr();
+  }
+  if (tabId === 'tab-pokeshift') {
+    loadGymsData();
+    loadHackStopsData();
+    loadUserInventory();
   }
 }
 
@@ -46,6 +56,9 @@ async function init() {
   await fetchStats();
   await fetchLeaderboard();
   await loadSOSTickets();
+  await loadGymsData();
+  await loadHackStopsData();
+  await loadUserInventory();
   initCampusRadar();
   connectSSE();
 }
@@ -224,6 +237,29 @@ function connectSSE() {
     logChaosTerminal(`🔄 [ADONIX SYNC] ${payload.syncedCount} official HackIllinois shifts synchronized live!`);
     fetchShifts();
     fetchStats();
+  });
+
+  eventSource.addEventListener('GYM_REINFORCED', () => {
+    loadGymsData();
+  });
+
+  eventSource.addEventListener('GYM_ATTACKED', () => {
+    loadGymsData();
+  });
+
+  eventSource.addEventListener('GYM_CAPTURED', () => {
+    if (window.soundEngine) window.soundEngine.playGymVictoryFanfare();
+    loadGymsData();
+  });
+
+  eventSource.addEventListener('HACKSTOP_SPUN', () => {
+    loadHackStopsData();
+    loadUserInventory();
+  });
+
+  eventSource.addEventListener('POWERUP_CONSUMED', () => {
+    loadUserInventory();
+    loadGymsData();
   });
 }
 
@@ -580,7 +616,16 @@ function initCampusRadar() {
     ctx.stroke();
     ctx.restore();
 
-    // 4. Draw Campus Venues
+    // 4. Draw Campus Venues & Faction Gym Towers
+    const FACTION_COLORS = {
+      TEAM_KERNEL: { primary: '#00F2FE', glow: 'rgba(0, 242, 254, 0.4)', tag: 'KERNEL' },
+      TEAM_TENSOR: { primary: '#FF007F', glow: 'rgba(255, 0, 127, 0.4)', tag: 'TENSOR' },
+      TEAM_SILICON: { primary: '#FFB300', glow: 'rgba(255, 179, 0, 0.4)', tag: 'SILICON' },
+      NEUTRAL: { primary: '#A0AEC0', glow: 'rgba(160, 174, 192, 0.25)', tag: 'NEUTRAL' },
+    };
+
+    const nowTime = Date.now();
+
     for (const [key, venue] of Object.entries(CAMPUS_VENUES)) {
       if (key !== 'SIEBEL') {
         ctx.beginPath();
@@ -592,19 +637,104 @@ function initCampusRadar() {
         ctx.setLineDash([]);
       }
 
-      ctx.fillStyle = venue.color;
-      ctx.fillRect(venue.x - 7, venue.y - 7, 14, 14);
+      // Look up corresponding Gym if any
+      const gym = gymsCache.find((g) => g.locationName?.toLowerCase().includes(venue.name.slice(0, 4).toLowerCase()));
+      const faction = gym ? gym.controllingFaction : (key === 'SIEBEL' ? 'TEAM_KERNEL' : key === 'ECEB' ? 'TEAM_TENSOR' : 'TEAM_SILICON');
+      const fColor = FACTION_COLORS[faction] || FACTION_COLORS.NEUTRAL;
+
+      // Draw Holographic Vertical Gym Pillar
+      const towerHeight = 35 + ((gym ? gym.controlPoints / gym.maxControlPoints : 0.5) * 30);
+      const ringOffset = (nowTime / 25) % towerHeight;
+
+      // Holographic beam
+      const beamGrad = ctx.createLinearGradient(venue.x, venue.y, venue.x, venue.y - towerHeight);
+      beamGrad.addColorStop(0, fColor.glow);
+      beamGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = beamGrad;
+      ctx.fillRect(venue.x - 10, venue.y - towerHeight, 20, towerHeight);
+
+      // Rising Energy Ring
+      ctx.strokeStyle = fColor.primary;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(venue.x, venue.y - ringOffset, 12, 4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Rotating 3D Crystal Octahedron Glyph above the Gym
+      const spinAngle = (nowTime / 800) % (Math.PI * 2);
+      const crystalY = venue.y - towerHeight - 12;
+      ctx.save();
+      ctx.translate(venue.x, crystalY);
+      ctx.fillStyle = fColor.primary;
+      ctx.shadowColor = fColor.primary;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(0, -9);
+      ctx.lineTo(7 * Math.cos(spinAngle), 0);
+      ctx.lineTo(0, 9);
+      ctx.lineTo(-7 * Math.cos(spinAngle), 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Base Venue Node
+      ctx.fillStyle = fColor.primary;
+      ctx.fillRect(venue.x - 6, venue.y - 6, 12, 12);
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1;
-      ctx.strokeRect(venue.x - 7, venue.y - 7, 14, 14);
+      ctx.strokeRect(venue.x - 6, venue.y - 6, 12, 12);
 
+      // Label & CP Badge
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px monospace';
+      ctx.font = 'bold 9px monospace';
       ctx.fillText(venue.name, venue.x + 12, venue.y + 4);
+      if (gym) {
+        ctx.fillStyle = fColor.primary;
+        ctx.font = '8px monospace';
+        ctx.fillText(`[${gym.controlPoints} CP]`, venue.x + 12, venue.y + 14);
+      }
     }
 
-    // 5. Draw Active On-Duty Volunteers
-    const nowTime = Date.now();
+    // 5. Draw HackStop Supply Beacons (Cyan Rotating Diamonds)
+    hackStopsCache.forEach((stop) => {
+      // Map coordinates to canvas relative to Siebel
+      const dx = (stop.longitude - (-88.224937)) * 120000;
+      const dy = -(stop.latitude - 40.113812) * 120000;
+      const sx = centerX + dx;
+      const sy = centerY + dy;
+
+      const spin = (nowTime / 600) % (Math.PI * 2);
+      const bob = Math.sin(nowTime / 250) * 3;
+
+      // Geofence Ring
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + bob, 15, 6, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0, 243, 255, 0.35)';
+      ctx.setLineDash([2, 2]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Floating Diamond
+      ctx.save();
+      ctx.translate(sx, sy + bob - 8);
+      ctx.fillStyle = '#00F2FE';
+      ctx.shadowColor = '#00F2FE';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(0, -7);
+      ctx.lineTo(6 * Math.cos(spin), 0);
+      ctx.lineTo(0, 7);
+      ctx.lineTo(-6 * Math.cos(spin), 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = '#A0AEC0';
+      ctx.font = '8px monospace';
+      ctx.fillText(`🌀 ${stop.name.slice(0, 12)}`, sx + 8, sy - 5);
+    });
+
+    // 6. Draw Active On-Duty Volunteers
     shiftsCache.forEach((shift, idx) => {
       if (shift.filledSlots > 0) {
         const venue = shift.location.includes('ECEB') ? CAMPUS_VENUES.ECEB :
@@ -630,7 +760,7 @@ function initCampusRadar() {
       }
     });
 
-    // 6. Draw Open SOS Distress Beacons
+    // 7. Draw Open SOS Distress Beacons
     openSosTicketsCache.forEach((ticket) => {
       const isBasement = ticket.tableLocation.toLowerCase().includes('basement');
       const isECEB = ticket.tableLocation.toLowerCase().includes('eceb');
@@ -663,6 +793,26 @@ function initCampusRadar() {
       ctx.font = 'bold 9px monospace';
       ctx.fillText(`SOS: ${ticket.hackerName} (${ticket.category.slice(0, 10)})`, targetX + 12, targetY - 2);
     });
+
+    // 8. Draw & Update Particle System
+    for (let pIdx = canvasParticles.length - 1; pIdx >= 0; pIdx--) {
+      const p = canvasParticles[pIdx];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= 0.02;
+
+      if (p.life <= 0) {
+        canvasParticles.splice(pIdx, 1);
+        continue;
+      }
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.life;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
 
     radarAnimationId = requestAnimationFrame(renderRadar);
   }
@@ -832,6 +982,303 @@ function logSosTerminal(msg) {
   if (!term) return;
   const time = new Date().toLocaleTimeString();
   term.innerHTML = `[${time}] ${msg}\n` + term.innerHTML;
+}
+
+// ----------------------------------------------------
+// PokéShift Campus Turf Wars & HackStops Operations
+// ----------------------------------------------------
+function changeUserFaction(faction) {
+  currentVolunteerFaction = faction;
+  const colors = {
+    TEAM_KERNEL: 'var(--cyan)',
+    TEAM_TENSOR: '#FF007F',
+    TEAM_SILICON: '#FFB300',
+  };
+  const selector = document.getElementById('user-faction-selector');
+  if (selector) selector.style.borderColor = colors[faction] || 'var(--cyan)';
+  renderGymsList();
+}
+
+async function loadGymsData() {
+  try {
+    const res = await fetch('/api/v1/pokeshift/gyms');
+    const json = await res.json();
+    if (json.success) {
+      gymsCache = json.data;
+      renderGymsList();
+    }
+  } catch (err) {
+    console.error('Failed to load gyms:', err);
+  }
+}
+
+function renderGymsList() {
+  const container = document.getElementById('gyms-list-container');
+  if (!container) return;
+
+  const factionTheme = {
+    TEAM_KERNEL: { name: '🔷 TEAM KERNEL', color: '#00F2FE', bg: 'rgba(0, 242, 254, 0.08)', border: 'rgba(0, 242, 254, 0.35)' },
+    TEAM_TENSOR: { name: '🟣 TEAM TENSOR', color: '#FF007F', bg: 'rgba(255, 0, 127, 0.08)', border: 'rgba(255, 0, 127, 0.35)' },
+    TEAM_SILICON: { name: '🟠 TEAM SILICON', color: '#FFB300', bg: 'rgba(255, 179, 0, 0.08)', border: 'rgba(255, 179, 0, 0.35)' },
+    NEUTRAL: { name: '⚪ UNCLAIMED', color: '#A0AEC0', bg: 'rgba(160, 174, 192, 0.08)', border: 'rgba(160, 174, 192, 0.25)' },
+  };
+
+  container.innerHTML = gymsCache.map((g) => {
+    const theme = factionTheme[g.controllingFaction] || factionTheme.NEUTRAL;
+    const percent = Math.min(100, Math.round((g.controlPoints / g.maxControlPoints) * 100));
+    const isAlly = g.controllingFaction === currentVolunteerFaction || g.controllingFaction === 'NEUTRAL';
+    const actionLabel = isAlly ? '🛡️ FORTIFY GYM (+150 CP)' : '⚔️ ATTACK GYM (-150 CP)';
+    const btnStyle = isAlly ? 'background: rgba(0, 242, 254, 0.2); border-color: var(--cyan); color: var(--cyan);' : 'background: rgba(255, 94, 94, 0.2); border-color: var(--hazard-coral); color: var(--hazard-coral);';
+
+    return `
+      <div style="background: ${theme.bg}; border: 1px solid ${theme.border}; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h4 style="font-size: 1rem; color: #fff; margin-bottom: 2px;">${g.name}</h4>
+            <span style="font-size: 0.75rem; color: var(--text-dim);">${g.locationName}</span>
+          </div>
+          <span style="font-size: 0.72rem; font-weight: 700; color: ${theme.color}; padding: 3px 8px; border-radius: 4px; border: 1px solid ${theme.color};">
+            ${theme.name}
+          </span>
+        </div>
+
+        <div>
+          <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 4px; font-family: monospace;">
+            <span>CONTROL POWER:</span>
+            <span style="color: ${theme.color}; font-weight: 700;">${g.controlPoints} / ${g.maxControlPoints} CP (${percent}%)</span>
+          </div>
+          <div style="background: rgba(255,255,255,0.08); height: 8px; border-radius: 4px; overflow: hidden;">
+            <div style="width: ${percent}%; height: 100%; background: ${theme.color}; transition: width 0.4s ease-out;"></div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-dim);">
+          <span>Leader: <strong style="color: #fff;">${g.leaderName || 'Unclaimed'}</strong></span>
+          <span>Level: <strong style="color: var(--amber-surge);">Lv. ${g.level}</strong></span>
+        </div>
+
+        <button class="btn" onclick="battleOrFortifyGym('${g._id}')" style="${btnStyle} font-weight: 700; font-size: 0.8rem; padding: 8px; cursor: pointer;">
+          ${actionLabel}
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function battleOrFortifyGym(gymId) {
+  if (volunteersCache.length === 0) return;
+  const vol = volunteersCache[0];
+
+  try {
+    const res = await fetch(`/api/v1/pokeshift/gyms/${gymId}/battle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        volunteerId: vol._id,
+        faction: currentVolunteerFaction,
+        power: 150,
+      }),
+    });
+    const json = await res.json();
+    if (json.success) {
+      if (json.data.action === 'CAPTURED') {
+        if (window.soundEngine) window.soundEngine.playGymVictoryFanfare();
+      } else {
+        if (window.soundEngine) window.soundEngine.playSonarPing();
+      }
+      logChaosTerminal(`🏛️ [GYM ${json.data.action}] ${json.data.message}`);
+      loadGymsData();
+      fetchStats();
+    } else {
+      alert(`Gym Battle Failed: ${json.message}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+async function loadHackStopsData() {
+  try {
+    const res = await fetch('/api/v1/pokeshift/hackstops');
+    const json = await res.json();
+    if (json.success) {
+      hackStopsCache = json.data;
+      renderHackStopsList();
+    }
+  } catch (err) {
+    console.error('Failed to load hackstops:', err);
+  }
+}
+
+function renderHackStopsList() {
+  const container = document.getElementById('hackstops-list-container');
+  if (!container) return;
+
+  container.innerHTML = hackStopsCache.map((stop) => `
+    <div style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 6px; padding: 10px; display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <div style="font-weight: 700; font-size: 0.85rem; color: #fff;">🌀 ${stop.name}</div>
+        <div style="font-size: 0.72rem; color: var(--text-dim);">${stop.locationName} (75m Geofence)</div>
+      </div>
+      <button class="btn btn-secondary" onclick="spinHackStop('${stop.beaconId}', ${stop.latitude}, ${stop.longitude})" style="width: auto; padding: 5px 12px; font-size: 0.75rem; border-color: var(--cyan); color: var(--cyan);">
+        🌀 SPIN
+      </button>
+    </div>
+  `).join('');
+}
+
+async function spinHackStop(beaconId, lat, lon) {
+  if (volunteersCache.length === 0) return;
+  const vol = volunteersCache[0];
+
+  if (window.soundEngine) window.soundEngine.playStopSpin();
+
+  try {
+    const res = await fetch(`/api/v1/pokeshift/hackstops/${beaconId}/spin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        volunteerId: vol._id,
+        coordinates: { latitude: lat, longitude: lon },
+      }),
+    });
+    const json = await res.json();
+
+    if (json.success) {
+      const item = json.data.itemDetails;
+      const isLegendary = item.rarity === 'LEGENDARY' || item.rarity === 'MYTHIC';
+
+      // Trigger canvas particle fountain at center
+      spawnParticles(325, 190, isLegendary ? '#FFD700' : '#00F2FE', 30);
+
+      // Play loot drop chime
+      if (window.soundEngine) window.soundEngine.playLootDrop(isLegendary);
+
+      // Show loot modal
+      showLootModal(item, json.data.awardedKarma);
+
+      logChaosTerminal(`🎁 [HACKSTOP SPUN] Spun ${json.data.name}! Received: ${item.name} (+${json.data.awardedKarma} Karma)`);
+      loadUserInventory();
+      fetchStats();
+    } else {
+      alert(`HackStop Spin Failed: ${json.message}`);
+    }
+  } catch (err) {
+    alert(`Error spinning HackStop: ${err.message}`);
+  }
+}
+
+function showLootModal(item, karma) {
+  const modal = document.getElementById('loot-drop-modal');
+  const nameEl = document.getElementById('loot-item-name');
+  const rarityEl = document.getElementById('loot-item-rarity');
+  const descEl = document.getElementById('loot-item-desc');
+  const karmaEl = document.getElementById('loot-karma-awarded');
+
+  if (nameEl) nameEl.innerText = item.name;
+  if (rarityEl) {
+    rarityEl.innerText = item.rarity;
+    rarityEl.style.color = item.rarity === 'MYTHIC' ? '#ff3366' : item.rarity === 'LEGENDARY' ? '#ffd700' : item.rarity === 'EPIC' ? '#b026ff' : 'var(--cyan)';
+  }
+  if (descEl) descEl.innerText = item.description;
+  if (karmaEl) karmaEl.innerText = `+${karma} Karma Awarded!`;
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeLootModal() {
+  const modal = document.getElementById('loot-drop-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function loadUserInventory() {
+  if (volunteersCache.length === 0) return;
+  const vol = volunteersCache[0];
+
+  try {
+    const res = await fetch(`/api/v1/pokeshift/inventory/${vol._id}`);
+    const json = await res.json();
+    if (json.success) {
+      userInventoryCache = json.data;
+      renderUserInventory();
+    }
+  } catch (err) {
+    console.error('Failed to load user inventory:', err);
+  }
+}
+
+function renderUserInventory() {
+  const container = document.getElementById('inventory-list-container');
+  if (!container) return;
+
+  if (userInventoryCache.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: span 2; color: var(--text-dim); font-size: 0.8rem; font-style: italic; text-align: center; padding: 25px 0;">
+        Bag is empty! Spin campus HackStops to find power-ups.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = userInventoryCache.map((item) => `
+    <div style="background: rgba(255, 170, 0, 0.06); border: 1px solid rgba(255, 170, 0, 0.25); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 6px;">
+      <div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-weight: 700; font-size: 0.8rem; color: #fff;">${item.name}</span>
+          <span style="font-size: 0.72rem; color: var(--amber-surge); font-weight: 700;">x${item.quantity}</span>
+        </div>
+        <span style="font-size: 0.68rem; color: var(--text-dim);">${item.rarity}</span>
+      </div>
+      <button class="btn btn-primary" onclick="deployPowerUp('${item.itemType}')" style="font-size: 0.7rem; padding: 4px 8px; width: 100%;">
+        ✨ DEPLOY
+      </button>
+    </div>
+  `).join('');
+}
+
+async function deployPowerUp(itemType) {
+  if (volunteersCache.length === 0) return;
+  const vol = volunteersCache[0];
+  const targetGym = gymsCache[0];
+
+  try {
+    const res = await fetch('/api/v1/pokeshift/inventory/use', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        volunteerId: vol._id,
+        itemType,
+        targetGymId: targetGym ? targetGym._id : undefined,
+      }),
+    });
+    const json = await res.json();
+    if (json.success) {
+      if (window.soundEngine) window.soundEngine.playSonarPing();
+      logChaosTerminal(`✨ [ITEM DEPLOYED] ${json.data.message}`);
+      loadUserInventory();
+      loadGymsData();
+      fetchStats();
+    } else {
+      alert(`Could not use item: ${json.message}`);
+    }
+  } catch (err) {
+    alert(`Error deploying power-up: ${err.message}`);
+  }
+}
+
+function spawnParticles(x, y, color, count = 25) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 3 + 1;
+    canvasParticles.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: Math.random() * 4 + 2,
+      color,
+      life: 1.0,
+    });
+  }
 }
 
 // Bootstrap

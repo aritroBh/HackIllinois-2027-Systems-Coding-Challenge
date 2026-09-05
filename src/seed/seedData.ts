@@ -3,6 +3,9 @@ import { Shift, ShiftCategory } from '../models/shift.model';
 import { Volunteer, VolunteerRole, PrestigeTier } from '../models/volunteer.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { ShiftSwap, SwapStatus } from '../models/swap.model';
+import { Gym, Faction } from '../models/gym.model';
+import { HackStop } from '../models/hackstop.model';
+import { HACKILLINOIS_VENUES } from '../common/utils/geo';
 
 export async function seedDatabase(): Promise<void> {
   console.log('🌱 [SEED] Starting database hydration with HackIllinois scenarios...');
@@ -14,7 +17,10 @@ export async function seedDatabase(): Promise<void> {
     Volunteer.deleteMany({}),
     Registration.deleteMany({}),
     ShiftSwap.deleteMany({}),
+    Gym.deleteMany({}),
+    HackStop.deleteMany({}),
   ]);
+
 
   const now = new Date();
   const baseTime = new Date(now);
@@ -246,11 +252,102 @@ export async function seedDatabase(): Promise<void> {
     },
   ]);
 
+  // 5. Seed Campus Gyms (PokéShift Turf Wars)
+  await Gym.create([
+    {
+      name: 'Siebel Core Coliseum',
+      locationName: 'Siebel Center for CS',
+      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
+      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+      controllingFaction: Faction.TEAM_KERNEL,
+      controlPoints: 1200,
+      maxControlPoints: 2000,
+      leaderVolunteerId: charlie._id,
+      leaderName: 'Charlie Patel (Team Kernel)',
+      level: 4,
+    },
+    {
+      name: 'ECEB Silicon Bastion',
+      locationName: 'ECE Building (ECEB)',
+      latitude: HACKILLINOIS_VENUES.ECEB_LOBBY.latitude,
+      longitude: HACKILLINOIS_VENUES.ECEB_LOBBY.longitude,
+      controllingFaction: Faction.TEAM_TENSOR,
+      controlPoints: 850,
+      maxControlPoints: 2000,
+      leaderVolunteerId: bob._id,
+      leaderName: 'Bob Martinez (Team Tensor)',
+      level: 3,
+    },
+    {
+      name: 'Kenney Thunderdome',
+      locationName: 'Kenney Gym Annex',
+      latitude: HACKILLINOIS_VENUES.KENNEY_GYM.latitude,
+      longitude: HACKILLINOIS_VENUES.KENNEY_GYM.longitude,
+      controllingFaction: Faction.TEAM_SILICON,
+      controlPoints: 950,
+      maxControlPoints: 2000,
+      leaderVolunteerId: alice._id,
+      leaderName: 'Alice Chen (Team Silicon)',
+      level: 3,
+    },
+  ]);
+
+  // 6. Seed HackStop Beacons
+  await HackStop.create([
+    {
+      beaconId: 'BEACON_SIEBEL_ATRIUM',
+      name: 'Siebel Cyber Fountain',
+      locationName: 'Siebel Center Atrium',
+      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
+      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+      cooldownSeconds: 300,
+      geofenceRadiusMeters: 75,
+    },
+    {
+      beaconId: 'BEACON_SIEBEL_BASEMENT',
+      name: 'Basement Solder Relic',
+      locationName: 'Siebel Center Basement',
+      latitude: HACKILLINOIS_VENUES.SIEBEL_BASEMENT.latitude,
+      longitude: HACKILLINOIS_VENUES.SIEBEL_BASEMENT.longitude,
+      cooldownSeconds: 300,
+      geofenceRadiusMeters: 75,
+    },
+    {
+      beaconId: 'BEACON_ECEB_LOBBY',
+      name: 'ECEB Tesla Coil Relay',
+      locationName: 'ECEB Main Lobby',
+      latitude: HACKILLINOIS_VENUES.ECEB_LOBBY.latitude,
+      longitude: HACKILLINOIS_VENUES.ECEB_LOBBY.longitude,
+      cooldownSeconds: 300,
+      geofenceRadiusMeters: 75,
+    },
+    {
+      beaconId: 'BEACON_KENNEY_GYM',
+      name: 'Kenney Arena Supply Pod',
+      locationName: 'Kenney Gym Central',
+      latitude: HACKILLINOIS_VENUES.KENNEY_GYM.latitude,
+      longitude: HACKILLINOIS_VENUES.KENNEY_GYM.longitude,
+      cooldownSeconds: 300,
+      geofenceRadiusMeters: 75,
+    },
+    {
+      beaconId: 'BEACON_DCL_BRIDGE',
+      name: 'DCL Nexus Transceiver',
+      locationName: 'DCL Bridge Walkway',
+      latitude: HACKILLINOIS_VENUES.DCL_BRIDGE.latitude,
+      longitude: HACKILLINOIS_VENUES.DCL_BRIDGE.longitude,
+      cooldownSeconds: 300,
+      geofenceRadiusMeters: 75,
+    },
+  ]);
+
   console.log('✅ [SEED COMPLETED] Seeded:');
   console.log(`   - 5 Volunteers (Alice, Bob, Charlie, Dana, Evan)`);
   console.log(`   - 5 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag)`);
   console.log(`   - 1 Contested Shift with 1 Waitlisted Candidate`);
   console.log(`   - 1 3-Way Circular Trade Demand Ring (Alice -> Bob -> Charlie -> Alice)`);
+  console.log(`   - 3 Campus Faction Gyms (Siebel, ECEB, Kenney)`);
+  console.log(`   - 5 Campus Supply HackStops with 75m Geofencing`);
 }
 
 if (require.main === module) {

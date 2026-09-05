@@ -150,6 +150,13 @@ When demonstrating WaveShift Nexus during your interview:
 - **Live Event Ingestion Client:** Integrates with official HackIllinois backend (`https://adonix.hackillinois.org/event/`) to ingest real-time hackathon schedules.
 - **Volunteer Shift Synthesis:** Maps event categories, durations, and sponsor requirements directly into volunteer shift capacities and base karma allocations using idempotent `$setOnInsert` upserts.
 
+### 10. 🎮 PokéShift // UIUC Campus Turf Wars & HackStop Engine
+- **Three Faction Strongholds:** **Team Kernel** (Siebel Center HQ, Electric Cyan `#00F2FE`), **Team Tensor** (ECEB Labs, Neon Magenta `#FF007F`), and **Team Silicon** (Kenney Gym, Electric Amber `#FFB300`) clash for campus dominion.
+- **Atomic CAS Gym Combat ($I_{\text{gym}}$):** Concurrency-safe optimistic locking (`{ _id, version }`) allowing allies to fortify control points (up to 2,000 CP) and rival factions to attack. When defense reaches 0, the Gym is captured and flies the conquering faction's banner.
+- **Geofenced HackStops ($I_{\text{cd}}$):** Geofenced supply beacons (Siebel Atrium, Basement, ECEB, Kenney Gym, DCL Bridge) requiring volunteers to be within 75 meters. Enforces a 5-minute sliding cooldown and rolls for rare drops.
+- **Power-Up Vault & Consumables ($I_{\text{inv}}$):** Collect and deploy rare hackathon power-ups (**Cold Brew Elixir of Haste**, **Insomnia S'mores Cookie Shield**, **Overclocked Solder Core**, **Rubber Duck of Debugging Omniscience**, and **The Forbidden 100W Anker Gauntlet**).
+- **Holographic 60fps Canvas Visualizer:** Renders vertical energy light pillars, rising rings, rotating 3D crystal glyphs, and particle fountains upon spinning stops.
+
 ---
 
 ## 📊 Automated Test Coverage Matrix
@@ -163,6 +170,8 @@ When demonstrating WaveShift Nexus during your interview:
 | `checkin.test.ts` | Dynamic QR Security | HMAC token verification + clock drift tolerance + replay rejection | ✅ PASS |
 | `shifts.test.ts` | Catalog & Surge Pricing | Zod time ordering validation + Circadian/Scarcity surge math | ✅ PASS |
 | `geoSos.test.ts` | Spatial Geofence & SOS Dispatch | Haversine distance + 75m geofence rejection + nearest SOS dispatch + Adonix sync | ✅ PASS |
+| `pokestop.test.ts` | PokéShift Gyms & HackStops | 75m beacon geofence + 5-min cooldown + ally fortify + gym capture + inventory CAS | ✅ PASS |
+
 
 
 ---

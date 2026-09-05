@@ -43,6 +43,7 @@
   <nav class="tabs-nav">
     <button class="tab-btn active" onclick="switchTab('tab-shifts')">📡 Shift Radar</button>
     <button class="tab-btn" onclick="switchTab('tab-radar-sos')">🗺️ Venue Radar & Hacker SOS</button>
+    <button class="tab-btn" onclick="switchTab('tab-pokeshift')">🎮 PokéShift Turf Wars</button>
     <button class="tab-btn" onclick="switchTab('tab-chaos')">💣 Chaos & Concurrency</button>
     <button class="tab-btn" onclick="switchTab('tab-qr')">📱 Dynamic QR Check-In</button>
     <button class="tab-btn" onclick="switchTab('tab-leaderboard')">🏆 Karma Leaderboard</button>
@@ -122,6 +123,99 @@
         </div>
       </div>
     </section>
+
+    <!-- TAB: PokéShift Turf Wars & Supply Beacons -->
+    <section id="tab-pokeshift" class="tab-content">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
+        <div>
+          <h2 style="font-size: 1.3rem; display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--cyan); animation: pulse-dot 1.2s infinite;">⚡</span>
+            PokéShift // UIUC Campus Turf Wars & HackStops
+          </h2>
+          <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: 4px;">
+            Contest campus strongholds for your faction, spin geofenced HackStops for rare consumables, and deploy power-ups.
+          </p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 0.82rem; color: var(--text-dim);">FACTION:</span>
+          <select id="user-faction-selector" onchange="changeUserFaction(this.value)" style="background: #0d1a33; color: var(--cyan); border: 1px solid var(--cyan); padding: 6px 12px; border-radius: 6px; font-weight: 700; font-family: monospace; cursor: pointer;">
+            <option value="TEAM_KERNEL">🔷 TEAM KERNEL (Siebel HQ)</option>
+            <option value="TEAM_TENSOR">🟣 TEAM TENSOR (ECEB Labs)</option>
+            <option value="TEAM_SILICON">🟠 TEAM SILICON (Kenney Gym)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Grid Layout: Gyms on Left, HackStops & Inventory on Right -->
+      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px;">
+        <!-- Left: Campus Gym Strongholds -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 1rem; color: var(--text-main); letter-spacing: 0.05em;">
+              🏛️ CAMPUS GYM STRONGHOLDS
+            </h3>
+            <button class="btn btn-secondary" onclick="loadGymsData()" style="width: auto; padding: 2px 8px; font-size: 0.7rem;">
+              REFRESH
+            </button>
+          </div>
+          <div id="gyms-list-container" style="display: flex; flex-direction: column; gap: 14px;">
+            <!-- Gyms dynamically injected -->
+          </div>
+        </div>
+
+        <!-- Right: HackStops & My Power-Up Inventory -->
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <!-- HackStops Beacons -->
+          <div style="background: rgba(10, 20, 38, 0.8); border: 1px solid rgba(0, 243, 255, 0.25); border-radius: 8px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <h3 style="font-size: 0.95rem; color: var(--cyan); letter-spacing: 0.05em;">
+                🌀 CAMPUS HACKSTOPS (75m Geofence)
+              </h3>
+              <button class="btn btn-secondary" onclick="loadHackStopsData()" style="width: auto; padding: 2px 8px; font-size: 0.7rem;">
+                REFRESH
+              </button>
+            </div>
+            <div id="hackstops-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 250px; overflow-y: auto;">
+              <!-- HackStops dynamically injected -->
+            </div>
+          </div>
+
+          <!-- Power-Up Vault ("My Bag") -->
+          <div style="background: rgba(10, 20, 38, 0.8); border: 1px solid rgba(255, 170, 0, 0.3); border-radius: 8px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <h3 style="font-size: 0.95rem; color: var(--amber-surge); letter-spacing: 0.05em;">
+                🎒 POWER-UP INVENTORY ("MY BAG")
+              </h3>
+              <button class="btn btn-secondary" onclick="loadUserInventory()" style="width: auto; padding: 2px 8px; font-size: 0.7rem;">
+                REFRESH
+              </button>
+            </div>
+            <div id="inventory-list-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-height: 220px; overflow-y: auto;">
+              <!-- Inventory items dynamically injected -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loot Drop Modal Notification -->
+      <div id="loot-drop-modal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(8px); z-index: 100; align-items: center; justify-content: center;">
+        <div style="background: #0a1428; border: 2px solid var(--cyan); border-radius: 12px; padding: 24px; max-width: 420px; text-align: center; box-shadow: 0 0 40px rgba(0, 243, 255, 0.4); animation: pulse-dot 0.5s ease-out;">
+          <div style="font-size: 3rem; margin-bottom: 8px;">🎁</div>
+          <h2 id="loot-item-name" style="color: var(--cyan); font-size: 1.3rem; margin-bottom: 6px;">Cold Brew Elixir</h2>
+          <span id="loot-item-rarity" style="font-size: 0.75rem; background: rgba(0, 243, 255, 0.2); color: var(--cyan); padding: 3px 8px; border-radius: 4px; font-weight: 700;">UNCOMMON</span>
+          <p id="loot-item-desc" style="color: var(--text-dim); font-size: 0.85rem; margin: 12px 0 16px 0; line-height: 1.4;">
+            Grants +50 Karma and +35% speed.
+          </p>
+          <div style="color: var(--neon-green); font-weight: bold; margin-bottom: 16px; font-size: 0.95rem;" id="loot-karma-awarded">
+            +50 Karma Awarded!
+          </div>
+          <button class="btn btn-primary" onclick="closeLootModal()" style="margin: 0 auto; width: 140px;">
+            COLLECT
+          </button>
+        </div>
+      </div>
+    </section>
+
 
     <!-- TAB 2: Chaos & Concurrency Bomb -->
     <section id="tab-chaos" class="tab-content">
