@@ -1,0 +1,53 @@
+Nexus Quest — third-party data, assets and licences
+====================================================
+
+The code in this repository is MIT licensed (see LICENSE). The items below are
+redistributed under their own terms. If you fork this project for another
+campus or event, keep this file and add your own sources to it.
+
+Map data
+--------
+* public/gl/uiuc-campus.json and everything under design/osm/ are derived from
+  OpenStreetMap. © OpenStreetMap contributors. Licensed under the Open Database
+  License (ODbL) 1.0 — https://opendatacommons.org/licenses/odbl/1.0/
+  The baked model is a "derivative database" under the ODbL; if you modify and
+  redistribute it, you must offer it under the ODbL too. Any UI that shows this
+  map must credit "© OpenStreetMap contributors".
+* (Planned, whole-campus pipeline) Building footprints and attributes from the
+  Overture Maps Foundation buildings theme — ODbL 1.0, because it includes
+  OpenStreetMap data. https://docs.overturemaps.org/attribution/
+* (Planned) Microsoft US Building Footprints (Champaign County) — ODbL 1.0.
+  https://github.com/microsoft/USBuildingFootprints
+* (Planned) USGS 3D Elevation Program lidar,
+  IL_8County_PlusChampaign_B3_QL1_2019 — US Government work, public domain.
+  Building heights derived from it carry no licence restriction.
+
+Reference photographs (design/refs/*.jpg)
+-----------------------------------------
+Downloaded from Wikimedia Commons for material and colour reference only; they
+are not served by the application. Each file is Creative Commons licensed by
+its photographer — the exact licence and author are on the file's Commons
+page. Files: alma-mater.jpg, altgeld.jpg, beckman.jpg, foellinger.jpg,
+grainger.jpg, krannert.jpg, siebel.jpg, stadium.jpg, state-farm.jpg, union.jpg.
+If you redistribute these images, reproduce the per-file attribution from
+Commons.
+
+Text
+----
+* public/gl/monuments-info.json summarises facts from Wikipedia articles about
+  the University of Illinois Urbana-Champaign campus. Wikipedia text is
+  CC BY-SA 4.0 — https://creativecommons.org/licenses/by-sa/4.0/ — entries
+  marked "approximate": true are paraphrased from general knowledge.
+
+Fonts
+-----
+The dashboard uses Silkscreen, Jersey 10, Pixelify Sans and VT323, all
+released under the SIL Open Font License 1.1 (https://openfontlicense.org/).
+They are currently loaded from Google Fonts; when they are vendored under
+public/fonts/ the OFL text for each family must be shipped beside them.
+
+Trademarks
+----------
+"HackIllinois" and the University of Illinois names, marks and colours belong
+to their respective owners and are used here to describe a specific event and
+campus. Forks for other events must replace the branding in their content pack.

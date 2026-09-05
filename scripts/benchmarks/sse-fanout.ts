@@ -3,7 +3,7 @@
  * measure how many clients receive it and how long the slowest waits.
  * Then hammer mutations and check for dropped events / heap growth.
  *
- *   NODE_ENV=test CLIENTS=1000 npx tsx .gstack/qa-reports/sse-fanout.ts
+ *   CLIENTS=1000 npm run bench:sse
  */
 import http from 'http';
 import mongoose from 'mongoose';

@@ -102,8 +102,19 @@ if (parsedEnv.data.NODE_ENV === 'production') {
     console.error('❌ Refusing to boot: ORGANIZER_SECRET is the committed default. Set a strong secret.');
     process.exit(1);
   }
+  // A production process with no database URI would boot on mongodb-memory-server and
+  // lose every roster, karma total and ticket the moment it restarts — mid-event, that is
+  // the worst possible failure, and it used to be only a warning. There is deliberately
+  // no escape hatch: in-memory Mongo is for `development` and `test` only.
   if (!parsedEnv.data.MONGODB_URI) {
-    console.warn('⚠️  No MONGODB_URI: booting on ephemeral in-memory Mongo — all data is lost on restart.');
+    console.error('❌ Refusing to boot: MONGODB_URI is required in production (in-memory Mongo loses all data on restart).');
+    process.exit(1);
+  }
+  // Every mutating route is otherwise open to anyone on the venue Wi-Fi. The flag stays
+  // optional for demos; production must opt in explicitly so the choice is visible.
+  if (!parsedEnv.data.REQUIRE_AUTH) {
+    console.error('❌ Refusing to boot: REQUIRE_AUTH must be true in production (mutating routes would be unauthenticated).');
+    process.exit(1);
   }
 }
 

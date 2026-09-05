@@ -17,8 +17,12 @@
  *   WAITLISTED ──cascade promotion──> CONFIRMED
  *   WAITLISTED ──cancel──> CANCELLED
  *
- * SWAP_PENDING marks a row mid-trade so the schedule-conflict checker still counts it
- * as occupied and a second swap cannot claim the same slot.
+ * SWAP_PENDING is defined for a row mid-trade — the schedule-conflict checker and the
+ * partial unique index both count it as occupied — but note that **nothing currently writes
+ * it**: swaps rewrite `volunteerId` on the existing registration rather than parking it in an
+ * intermediate state. It is read-side only today. Anything that starts writing it must also
+ * teach `cancelRegistration` to treat it as seat-occupying, or cancelling such a row will
+ * release no seat and strand it.
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 

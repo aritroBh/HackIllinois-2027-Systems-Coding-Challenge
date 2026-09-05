@@ -50,13 +50,24 @@ During a massive 1,000+ attendee hackathon across the Siebel Center, ECEB, and K
 - **Verified via automated stress test firing 50 concurrent requests against a 2-spot shift**: Exactly 2 confirmed, 48 waitlisted, 0 oversold.
 
 ### 2. 🌊 Autonomous FIFO Waitlist Cascade Engine
-- When a confirmed volunteer cancels, the system automatically triggers an atomic cascade:
-  1. Decrements `filledSlots`.
-  2. Queries the head of the waitlist (`position = 1`).
-  3. Verifies that the candidate has no schedule conflicts with their other confirmed shifts.
-  4. Atomically transitions candidate to `CONFIRMED` and decrements `waitlistCount`.
+- When a confirmed volunteer cancels, the system triggers a cascade that **holds the seat
+  rather than freeing it**:
+  1. Queries the head of the waitlist (`position = 1`). `filledSlots` is deliberately *not*
+     decremented first — see below.
+  2. Verifies that the candidate has no schedule conflicts with their other confirmed shifts.
+  3. Claims the candidate with a conditional update on `status = WAITLISTED`, so two cancels
+     racing on the same shift cannot both promote the same person. A loser takes the next
+     candidate.
+  4. Transitions them to `CONFIRMED` and decrements `waitlistCount`. `filledSlots` does not
+     move: the seat *transfers* from the canceller to the promoted volunteer.
   5. Re-indexes remaining waitlist positions monotonically ($1, 2, \dots, n$) to preserve queue contiguity.
   6. Broadcasts real-time SSE notifications to the live dashboard.
+  7. Only if nobody could be promoted does `filledSlots` finally decrement.
+- **Why the seat is held.** Freeing it first opens a window — a find, a sort, and a conflict
+  check per candidate — in which a concurrent reservation passes the `$expr` capacity guard on
+  the very seat the promotion is about to hand over. Both then hold it and the shift finishes
+  at `capacity + 1`. `tests/concurrency.test.ts` races the two and reports 3 confirmed on a
+  2-seat shift against the old ordering.
 
 ### 3. ⏱️ Anti-Burnout Rest Buffers & 8-Hour Daily Fatigue Limit
 - **30-Minute Rest Buffer:** Enforces that consecutive shifts must have at least 30 minutes of rest time between them ($[S_A, E_A) \cap [S_B - 30\text{m}, E_B + 30\text{m}) = \emptyset$).

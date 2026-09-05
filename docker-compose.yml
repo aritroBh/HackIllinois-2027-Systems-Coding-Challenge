@@ -1,26 +1,68 @@
-version: '3.8'
-
+# Production-shaped compose file.
+#
+# - Mongo runs as a single-node replica set because the application uses
+#   multi-document transactions (the same shape the test harness uses).
+# - No secret has a default here. Put them in a `.env` file next to this
+#   compose file (see .env.example); `docker compose` reads it automatically and
+#   the `:?` syntax makes a missing secret a hard error instead of a silent
+#   fallback to a value that is committed to git.
+#
+#   QR_HMAC_SECRET=...      ORGANIZER_SECRET=...      (and, once M1 lands,
+#   SESSION_SECRET=...)
+#
+# Usage:  docker compose up --build
 services:
   app:
     build: .
     ports:
       - "3000:3000"
     environment:
-      - PORT=3000
-      - NODE_ENV=development
-      - MONGODB_URI=mongodb://mongo:27017/waveshift
-      - QR_HMAC_SECRET=hackillinois_waveshift_secret_key_2027
+      PORT: "3000"
+      NODE_ENV: production
+      MONGODB_URI: mongodb://mongo:27017/waveshift?replicaSet=rs0
+      QR_HMAC_SECRET: ${QR_HMAC_SECRET:?set QR_HMAC_SECRET in .env}
+      ORGANIZER_SECRET: ${ORGANIZER_SECRET:?set ORGANIZER_SECRET in .env}
+      REQUIRE_AUTH: "true"
+      REQUIRE_GEOFENCE: "true"
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
     depends_on:
-      - mongo
+      mongo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   mongo:
     image: mongo:7.0
-    ports:
-      - "27017:27017"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
+
+  # One-shot: initiates the replica set the first time, no-op afterwards.
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint:
+      - mongosh
+      - --host
+      - mongo:27017
+      - --quiet
+      - --eval
+      - >-
+        try { rs.status(); print('replica set already initiated'); }
+        catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }); print('replica set initiated'); }
+    restart: "no"
 
 volumes:
   mongo_data:
