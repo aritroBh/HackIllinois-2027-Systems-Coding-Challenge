@@ -19,6 +19,7 @@
 11. [HackStop Supply Beacons & CAS Power-Up Inventory](#11-hackstop-supply-beacons--cas-power-up-inventory)
 12. [Reactive Event Mesh: Server-Sent Events (SSE) Hub](#12-reactive-event-mesh-server-sent-events-sse-hub)
 13. [Security, Threat Modeling & Adversarial Hardening](#13-security-threat-modeling--adversarial-hardening)
+14. [NEXUS OS War Room: The WebGL Campus Renderer](#14-nexus-os-war-room-the-webgl-campus-renderer)
 
 ---
 
@@ -39,7 +40,7 @@ flowchart TD
 
     subgraph Gateway["HTTP Gateway & Security Layer"]
         B1["CORS & Request Preflight"]
-        B2["Express Rate Limiter (100 req/min)"]
+        B2["Express Rate Limiter (300 req/min)"]
         B3["Contract-First Zod Validation Middleware"]
         B4["Idempotency Filter (X-Idempotency-Key)"]
     end
@@ -298,13 +299,24 @@ stateDiagram-v2
     state CancellationLifecycle {
         CONFIRMED --> CANCELLED : Volunteer Drops Shift
         note right of CANCELLED
-            1. Atomic decrement filledSlots
-            2. Locate waitlist position 1
-            3. Verify 0 conflicts for candidate
+            The seat is HELD, not freed:
+            1. Locate waitlist position 1
+            2. Verify 0 conflicts for candidate
+            3. Claim it (CAS on status=WAITLISTED)
+            filledSlots only drops if nobody
+            is promoted - see note below
         end note
 
         CANCELLED --> CASCADE_PROMOTION : Eligible Candidate Found
         CANCELLED --> VACANT : Waitlist Empty
+        note right of VACANT
+            Only here does filledSlots
+            decrement. Freeing it earlier
+            let a concurrent reservation
+            claim the seat the promotion
+            was about to transfer, ending
+            at capacity + 1.
+        end note
     }
 
     state CASCADE_PROMOTION {
@@ -608,11 +620,230 @@ sequenceDiagram
 
 ---
 
-## 14. Verification & Operational Matrix
+## 14. NEXUS OS War Room: The WebGL Campus Renderer
+
+The dashboard renders the live operation on a 3D model of the actual University
+of Illinois Urbana-Champaign campus. Fourteen real landmarks are the contestable
+territory gyms, so a captured stronghold is a recognisable building rather than
+an abstract marker.
+
+### 14.1 Why hand-written WebGL2
+
+`src/app.ts` serves the dashboard under a Content-Security-Policy whose
+`script-src` is `'self' 'unsafe-inline'`. A CDN build of three.js is blocked
+outright, and vendoring a full engine to draw ~900 boxes is disproportionate.
+`public/gl/glx.js` is therefore a ~450-line WebGL2 layer — mat4/vec3, program
+and VAO plumbing, half-float render targets, geometry generators, ear-clipping
+triangulation and a static batcher — and `public/gl/campus3d.js` is the scene.
+
+### 14.2 Data provenance
+
+The city is not hand-authored. `design/build-campus.py` bakes two cached
+OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API and committed
+under `design/osm/`) into `public/gl/uiuc-campus.json`:
+
+```text
+  design/osm/buildings.json   2.4 MB   2493 building ways
+  design/osm/extra.json       4.1 MB   parks, stadiums, artwork nodes, highways
+                    │
+                    ▼  build-campus.py
+      ┌─────────────────────────────────────────────┐
+      │ • project WGS84 → local metric frame        │  origin = Main Quad
+      │   (+x east, +z south, 10 m per world unit)  │  40.10746, -88.22713
+      │ • Douglas-Peucker simplify at 1.1 m         │
+      │ • height from OSM height= / building:levels │  419 buildings tagged
+      │ • resolve 14 monuments by name, then by     │
+      │   proximity (<55 m, no double-claiming)     │
+      └─────────────────────────────────────────────┘
+                    │
+                    ▼
+  public/gl/uiuc-campus.json   247 KB
+    899 building footprints · 983 street polylines · 241 lawns · 14 monuments
+```
+
+Landmark coordinates in `HACKILLINOIS_VENUES` (`src/common/utils/geo.ts`) were
+cross-checked against OSM building centroids while building the map. That audit
+corrected several venue positions — Kenney Gym was ~450 m south of its true
+location — so the geofencing engine and the map now agree on where campus is.
+
+Two monuments are massed from their verified centroid rather than an outline:
+Alma Mater is a `tourism=artwork` node, and neither ECEB nor the Main Library
+carries a `building=*` way in the extract. Each is flagged `src: "synth"` in the
+model so the distinction stays visible rather than being quietly implied.
+
+### 14.3 Render pipeline
+
+```text
+   ┌── pass 1 ─────────────────────────────────────────────┐
+   │  ground plane   procedural grid + range rings + sweep │
+   │  static batch   899 footprints, ONE draw call         │  ← mergeStatic()
+   │  decal batch    streets + lawns, ONE draw call        │
+   │  monuments      14 × footprint + landmark crown       │
+   │  actors         volunteers / beacons / distress cones │
+   │  additive       auras, geofence rings, shockwaves     │
+   └───────────────────────┬───────────────────────────────┘
+                           ▼  RGBA16F target
+   ┌── pass 2: bloom ──────────────────────────────────────┐
+   │  bright pass (soft-knee threshold 0.58) → half res    │
+   │  3 × separable 9-tap Gaussian (H then V)              │
+   └───────────────────────┬───────────────────────────────┘
+                           ▼
+   ┌── pass 3: composite ──────────────────────────────────┐
+   │  scene + bloom · ACES tonemap · chromatic aberration  │
+   │  scanlines · vignette · film grain                    │
+   └───────────────────────────────────────────────────────┘
+```
+
+Two details carry most of the visual weight:
+
+- **Static batching.** 899 buildings as 899 draw calls stutters on integrated
+  GPUs. `mergeStatic()` bakes position, normal, per-vertex colour and emissive
+  into one interleaved buffer, so the ambient city costs a single
+  `drawElements`. Only the 14 monuments are dynamic, because only they change
+  colour when a faction captures them.
+- **Analytic LOD on the window lights** (and, since the fidelity pass, on every procedural material). Facades carry a procedural window grid
+  keyed on a per-cell hash. Left unguarded it aliases into sparkling noise once
+  a cell falls below a pixel, so the shader measures the cell's screen
+  footprint with `fwidth()` and fades the pattern out — the reasoning a mip
+  chain applies, done analytically because the pattern has no texture.
+
+### 14.4 Live binding
+
+| Domain event | Map response |
+|---|---|
+| `GYM_CAPTURED` / `GYM_ATTACKED` | monument recolours to the holding faction; shockwave ring |
+| Filled shift slot | a crystal enters orbit around that shift's venue |
+| `HACKSTOP_SPUN` | beacon pulses; its 75 m geofence ring is drawn to scale |
+| `SOS_TICKET_CREATED` | distress cone at the ticket's real coordinates, alarm rings |
+| Monument click | camera eases in; garrison, level and control points open in the rail |
+
+Monument labels are HTML positioned from projected world coordinates each
+frame, not canvas text — they stay crisp at any zoom and inherit page
+typography.
+
+---
+
+### 14.5 Fidelity pass — reference-driven materials and surveyed detail
+
+A second pass pushed the model from "a city of boxes" toward the actual campus.
+Everything in it is traceable to a source in the repo.
+
+**Surveyed detail (design/osm/detail.overpass → design/osm/detail.json).** A
+third Overpass extract adds the layers OSM maps individually: **2,343
+`natural=tree` nodes** (the elm rows on the Quad are real positions; generated
+rows only fill gaps > 12 m from a surveyed tree), 63 street lamps (+ generated
+fill to 360), 32 water features including Boneyard Creek, the Illinois Central
+rail line, 243 parking pads, 12 fountains, and `roof:shape` where tagged. They
+bake into three static batches — buildings + roof caps, ground decals, and
+greenery — so the whole ambient campus is still three draw calls.
+
+**Reference photographs (design/refs/).** Ten Wikimedia Commons photographs
+of the monuments were fetched and read; `design/refs/MATERIALS.md` records the
+albedo, trim and roof of each building as observed, and corrected the brief
+in several places (Altgeld is grey rusticated limestone under a red terracotta
+spire, not orange sandstone; Foellinger's dome is verdigris; the Union carries
+a white cupola over slate). The official brand palette was verified against
+brand.illinois.edu: Illini Orange `#FF5F05`, Illini Blue `#13294B`, and the
+secondary set (Patina `#007E8E` is, conveniently, the verdigris).
+
+**Procedural materials (public/gl/materials.js).** Twenty-two surfaces —
+brick with mortar courses, grey and buff limestone, verdigris (flat and
+ribbed for domes), slate, terracotta tile, glass curtain wall, ribbed concrete,
+asphalt with centre line, walk, lawn, canopy, water, rail ballast, bronze,
+granite — as pure GLSL functions of world position. No textures: the CSP
+forbids them and the patterns are metric anyway (a brick is 0.2 × 0.065 m at
+10 m per world unit). Every `fwidth()` is evaluated at the top of
+`material()` outside any branch, and each pattern fades to its flat albedo once
+a cell drops below ~1 px, so the campus reads as solid mass from altitude and
+as coursed brick from the Quad.
+
+```text
+  static batch vertex:  pos · nrm · colour · emissive · [matId, nightTint] · [across, along]
+                                                          ▲                    ▲
+                        mergeStatic() assigns per piece ──┘   ribbonGeometry ──┘ (centre lines, rails)
+
+  fragment:  s = material(vMat, world, N, t, extras)      one call, unconditional
+             albedo = s.albedo × tint · N' = N + s.nrm · rim × (1 − rough)
+             + window lights · + radar sweep · fog → HDR target → bloom → composite
+```
+
+Monuments take a `uMat` per draw, inferred from the material reference each
+crown piece already used (`MAT.copper → verdigris`, `MAT.tile → terracotta`,
+`MAT.trim → whiteTrim`, State Farm's concrete → ribbed with `uRibCenter` at the
+building centre). A viewer-side floodlight term lets a monument read in its
+own material at night instead of dissolving into blue ambient.
+
+**Sky, fog, cinema.** A starfield pass with an Industrial→Illini-blue
+gradient and orange skyglow replaces the flat clear colour; height fog is
+gated to campus-wide zoom so it never muddies a close-up. The dashboard's
+Campus Grid is now the full-width hero with a telemetry strip (fps, buildings,
+monuments, camera distance) and a cinematic mode that hides the chrome
+(Escape exits). Clicking a monument opens a dossier from
+`public/gl/monuments-info.json` — year, architect, style and three facts per
+landmark, sourced from Wikipedia and flagged `approximate` where no article
+exists.
+
+**What is still approximate.** ECEB and the Main Library have no building way
+in OSM and are massed from verified centroids (`src: "synth"`). Alma Mater is
+a low-poly figure group, not a sculpture. The stadium is a tiered ellipse with
+end blocks rather than a true open horseshoe mesh. Only three OSM buildings
+carry `roof:shape`.
+
+---
+
+### 14.6 Nexus Quest — the retro game layer
+
+The dashboard's chrome was rebuilt as a pixel-art game UI after two polished
+"ops console" passes were judged generic. Three directions were mocked in
+OpenPencil (`design/directions/{gameboy,snes,neoretro}.mjs`, rendered to
+`design/exports/<dir>/`); **Neo-retro indie** was chosen — Silkscreen, Jersey
+10, Pixelify Sans and VT323, hard 4 px offset shadows, 4 px chamfer notches,
+tab buttons that depress, sticker badges, a Boneyard-duck mascot — borrowing
+the SNES direction's battle window and message box for gym encounters.
+
+```text
+  public/sprites.js     16x16 memorabilia + icons rasterised from public/gl/memorabilia.json
+  public/avatar.js      webcam/photo → 32x32 (OKLab quantise, Bayer dither) → 128x48 walk sheet
+  public/game.js        trainer profile, sticker book, encounter overlay, walk-to-spin gate,
+                        geolocation "Walk with me", retro toggle, duck toasts
+  public/gl/campus3d.js player billboard (NEAREST-filtered sheet), WASD + follow-cam,
+                        setPlayerLatLng (same frame as build-campus.py), proximity events
+                        with hysteresis, renderMinimap, setRetro (pixelate/posterize)
+```
+
+**The Pokémon-Go loop.** The player sprite walks the real campus — WASD, or
+`navigator.geolocation.watchPosition` piped into `setPlayerLatLng` (opt-in by
+click; resumed only when permission is already granted and the Campus tab is
+open). Off campus the sprite parks at the model's edge and says so. Standing
+within 75 m of a HackStop enables Spin; a gym row opens the encounter (FIGHT /
+REINFORCE / BAG / MAP / RUN, Escape closes and returns focus). **Proof of
+presence is real, not cosmetic:** spins and battles send the *player's*
+position (`fromWorld(x, z)`), not the target's coordinates, so the server's
+existing 75 m geofence does the check — the client gate is UX, the server is
+the authority. Loot drops reveal as "YOU FOUND" with a memorabilia sprite of
+the same rarity; holding a monument earns its badge on the trainer card.
+
+**Content.** `public/gl/memorabilia.json` — 16 HackIllinois items with 16×16
+palette-indexed pixel grids, rarity, how each is earned, and one gym badge per
+monument (validated at load; a malformed item is skipped with a warning, never
+thrown). `public/gl/monuments-info.json` feeds the collectible monument card.
+
+**Cross-review.** Three rounds of independent read-only review (muse and agy
+on the renderer, opencode on the app; codex and cursor-agent unavailable for
+billing/login). Confirmed and fixed from the final round: keyboard steps
+fighting GPS smoothing, a wrong sprite-aspect formula for 48 px avatars,
+`fwidth(atan)` spiking at the ±π seam on ribbed domes, a stretched minimap,
+retro DPR baked once, proximity keyed by id without kind, target-coordinate
+spins (above), a geolocation prompt that could fire without a click, an
+encounter with no keyboard exit, 7 px labels, and unvalidated content.
+
+---
+
+## 15. Verification & Operational Matrix
 
 ```text
 ========================================================================================
-🚀 WAVESHIFT NEXUS: COMPREHENSIVE VERIFICATION MATRIX (9/9 SUITES, 26/26 TESTS PASSING)
+🚀 WAVESHIFT NEXUS: COMPREHENSIVE VERIFICATION MATRIX (9/9 SUITES, 42/42 TESTS PASSING)
 ========================================================================================
 [PASS] tests/masterEndToEnd.test.ts  - 10-System Interconnected Operational Simulation
 [PASS] tests/concurrency.test.ts     - 50-Worker High-Contention Race Condition Latch

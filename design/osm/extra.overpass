@@ -1,0 +1,10 @@
+[out:json][timeout:90];
+(
+  way["leisure"~"^(stadium|pitch|park|garden)$"](40.0930,-88.2460,40.1200,-88.2150);
+  way["landuse"~"^(grass|recreation_ground|forest)$"](40.0930,-88.2460,40.1200,-88.2150);
+  node["tourism"="artwork"](40.0930,-88.2460,40.1200,-88.2150);
+  node["historic"](40.0930,-88.2460,40.1200,-88.2150);
+  way["amenity"="library"](40.0930,-88.2460,40.1200,-88.2150);
+  way["highway"~"^(primary|secondary|tertiary|residential|unclassified|service|footway|path)$"](40.0980,-88.2420,40.1180,-88.2180);
+);
+out geom;
