@@ -42,13 +42,21 @@ export class HackStopService {
       throw ApiError.notFound(`Active HackStop beacon "${beaconId}" not found.`);
     }
 
+    if (
+      !userCoords ||
+      !Number.isFinite(userCoords.latitude) ||
+      !Number.isFinite(userCoords.longitude)
+    ) {
+      throw ApiError.badRequest('Valid finite latitude and longitude coordinates are required.');
+    }
+
     // 1. Geodesic Geofence Verification via Haversine
     const distanceMeters = GeoEngine.haversineDistanceMeters(userCoords, {
       latitude: hackStop.latitude,
       longitude: hackStop.longitude,
     });
 
-    if (distanceMeters > hackStop.geofenceRadiusMeters) {
+    if (Number.isNaN(distanceMeters) || distanceMeters > hackStop.geofenceRadiusMeters) {
       throw ApiError.forbidden(
         `Out of range: You are ${Math.round(distanceMeters)}m away. Must be within ${hackStop.geofenceRadiusMeters}m to spin ${hackStop.name}.`
       );

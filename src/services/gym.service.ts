@@ -36,6 +36,10 @@ export class GymService {
     power: number = 100,
     coordinates?: IGeoCoordinates
   ): Promise<IBattleResult> {
+    if (!Number.isFinite(power) || power < 10 || power > 500) {
+      throw ApiError.badRequest('Attack/defense power must be a finite number between 10 and 500.');
+    }
+
     const volunteer = await Volunteer.findById(volunteerId);
     if (!volunteer) {
       throw ApiError.notFound('Volunteer not found.');

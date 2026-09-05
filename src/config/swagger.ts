@@ -4,9 +4,9 @@ export const swaggerDocument = {
     title: 'WaveShift Nexus API',
     version: '1.0.0',
     description:
-      'High-Performance Volunteer Scheduling & Operations Engine for HackIllinois Systems Team. Features atomic concurrency guarantees, waitlist cascade promotion, fatigue buffers, multi-party cyclic swaps, and dynamic HMAC-SHA256 attendance tokens.',
+      'High-Performance Volunteer Scheduling, SOS Spatial Dispatch & PokéShift Operations Engine for HackIllinois Systems Team. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, Tarjan directed cyclic swaps, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',
     contact: {
-      name: 'HackIllinois Systems Candidate',
+      name: 'HackIllinois Systems Team Candidate',
       url: 'https://github.com/HackIllinois/adonix',
     },
   },
@@ -15,6 +15,16 @@ export const swaggerDocument = {
       url: 'http://localhost:3000/api/v1',
       description: 'Local Development Server',
     },
+  ],
+  tags: [
+    { name: 'Shifts', description: 'Volunteer shift management & dynamic surge pricing' },
+    { name: 'Registrations', description: 'Atomic CAS slot reservation & waitlist cascade engine' },
+    { name: 'Swaps', description: 'Bilateral atomic swaps & Tarjan directed cycle trade discovery' },
+    { name: 'Attendance', description: 'Dynamic 30s HMAC-SHA256 tokens & geofenced check-in' },
+    { name: 'SOS', description: 'Hacker emergency distress tickets & spatial nearest-volunteer dispatch' },
+    { name: 'PokéShift', description: 'UIUC campus Gym turf wars, HackStop supply beacons & power-up inventory' },
+    { name: 'Adonix', description: 'Official HackIllinois Adonix backend event synchronization' },
+    { name: 'Stats', description: 'Real-time telemetry, leaderboards & Server-Sent Events (SSE)' },
   ],
   paths: {
     '/shifts': {
@@ -59,7 +69,7 @@ export const swaggerDocument = {
           },
         },
         responses: {
-          201: { description: 'Shift created' },
+          201: { description: 'Shift created successfully' },
         },
       },
     },
@@ -98,8 +108,9 @@ export const swaggerDocument = {
           {
             name: 'idempotency-key',
             in: 'header',
+            required: false,
             schema: { type: 'string' },
-            description: 'Unique client key to prevent duplicate booking under network retries',
+            description: 'Client UUID preventing duplicate signups on network retries',
           },
         ],
         requestBody: {
@@ -110,72 +121,51 @@ export const swaggerDocument = {
                 type: 'object',
                 required: ['shiftId', 'volunteerId'],
                 properties: {
-                  shiftId: { type: 'string' },
-                  volunteerId: { type: 'string' },
+                  shiftId: { type: 'string', example: '65e7a9b0c123456789abcdef' },
+                  volunteerId: { type: 'string', example: '65e7a9b0c123456789abcde0' },
                 },
               },
             },
           },
         },
         responses: {
-          201: { description: 'Slot confirmed or waitlisted' },
-          409: { description: 'Schedule collision, buffer conflict, or already registered' },
-        },
-      },
-      get: {
-        summary: 'List shift registrations',
-        tags: ['Registrations'],
-        responses: {
-          200: { description: 'List of registrations' },
+          201: { description: 'Registration confirmed or placed on waitlist' },
+          400: { description: 'Validation failed or missing certification' },
+          409: { description: 'Schedule conflict, rest buffer violation, or daily fatigue limit reached' },
         },
       },
     },
     '/registrations/{id}': {
       delete: {
-        summary: 'Cancel registration and trigger automatic waitlist cascade promotion',
+        summary: 'Cancel registration and trigger autonomous FIFO waitlist cascade',
         tags: ['Registrations'],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
-          200: { description: 'Registration cancelled; waitlist candidate promoted if present' },
+          200: { description: 'Registration cancelled; candidate #1 promoted if waitlist exists' },
         },
       },
     },
-    '/volunteers': {
-      get: {
-        summary: 'List all volunteers with prestige tiers and badges',
-        tags: ['Volunteers'],
-        responses: {
-          200: { description: 'List of volunteers' },
-        },
-      },
+    '/swaps': {
       post: {
-        summary: 'Register a volunteer',
-        tags: ['Volunteers'],
+        summary: 'Propose a shift swap into the escrow engine',
+        tags: ['Swaps'],
         requestBody: {
           required: true,
           content: {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['name', 'email'],
+                required: ['sourceRegistrationId', 'targetShiftId'],
                 properties: {
-                  name: { type: 'string', example: 'Alex Morgan' },
-                  email: { type: 'string', example: 'alex@illinois.edu' },
-                  certifications: { type: 'array', items: { type: 'string' }, example: ['DRIVERS_LICENSE', 'FIRST_AID'] },
+                  sourceRegistrationId: { type: 'string' },
+                  targetShiftId: { type: 'string' },
+                  targetVolunteerId: { type: 'string' },
+                  preferredCategories: { type: 'array', items: { type: 'string' } },
                 },
               },
             },
           },
         },
-        responses: {
-          201: { description: 'Volunteer registered' },
-        },
-      },
-    },
-    '/swaps': {
-      post: {
-        summary: 'Create a shift swap proposal',
-        tags: ['Swaps'],
         responses: { 201: { description: 'Swap proposed' } },
       },
       get: {
@@ -196,7 +186,7 @@ export const swaggerDocument = {
       post: {
         summary: 'Discover and resolve multi-party directed cycle trades (e.g. A->B->C->A)',
         tags: ['Swaps'],
-        responses: { 200: { description: 'Cycles discovered and executed' } },
+        responses: { 200: { description: 'Cycles discovered and executed via Tarjan SCC' } },
       },
     },
     '/attendance/token': {
@@ -208,11 +198,12 @@ export const swaggerDocument = {
     },
     '/attendance/verify': {
       post: {
-        summary: 'Verify dynamic QR code and mark check-in',
+        summary: 'Verify dynamic QR code and mark check-in with geodesic geofencing',
         tags: ['Attendance'],
         responses: {
-          200: { description: 'Check-in verified' },
+          200: { description: 'Check-in verified and marked' },
           400: { description: 'Token expired or malformed' },
+          403: { description: 'Outside 75m geofence radius' },
           409: { description: 'Replay attack detected' },
         },
       },
@@ -225,9 +216,230 @@ export const swaggerDocument = {
         responses: { 200: { description: 'Checked out; karma and hours updated' } },
       },
     },
+    '/sos/tickets': {
+      post: {
+        summary: 'File a real-time hacker distress ticket with spatial coordinates',
+        tags: ['SOS'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['hackerName', 'tableLocation', 'coordinates', 'description'],
+                properties: {
+                  hackerName: { type: 'string', example: 'Alex Turing' },
+                  tableLocation: { type: 'string', example: 'Siebel Basement Lab 0220' },
+                  coordinates: {
+                    type: 'object',
+                    required: ['latitude', 'longitude'],
+                    properties: {
+                      latitude: { type: 'number', example: 40.1138 },
+                      longitude: { type: 'number', example: -88.2249 },
+                    },
+                  },
+                  category: { type: 'string', enum: ['HARDWARE_MALFUNCTION', 'SPILL_CLEANUP', 'POWER_OUTAGE', 'MEDICAL_FIRST_AID', 'LOGISTICS_SUPPLIES'] },
+                  description: { type: 'string', example: 'FPGA development board power rail failure.' },
+                  urgency: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+                  requiredSkill: { type: 'string', example: 'HARDWARE' },
+                  karmaBounty: { type: 'number', example: 250 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: 'SOS ticket filed and broadcast via SSE' },
+        },
+      },
+      get: {
+        summary: 'List active or past SOS tickets',
+        tags: ['SOS'],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['OPEN', 'DISPATCHED', 'RESOLVED', 'CANCELLED'] } },
+        ],
+        responses: {
+          200: { description: 'List of tickets' },
+        },
+      },
+    },
+    '/sos/tickets/{id}/dispatch': {
+      post: {
+        summary: 'Dispatch nearest available on-duty volunteer using spatial Euclidean search',
+        tags: ['SOS'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Volunteer dispatched with telemetry vector' },
+          404: { description: 'Ticket not found or no on-duty volunteers available' },
+        },
+      },
+    },
+    '/sos/tickets/{id}/resolve': {
+      post: {
+        summary: 'Resolve SOS ticket and award Karma bounty + First Responder badge',
+        tags: ['SOS'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  volunteerId: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Ticket marked resolved; karma credited' },
+          409: { description: 'Ticket already resolved' },
+        },
+      },
+    },
+    '/pokeshift/gyms': {
+      get: {
+        summary: 'List campus PokéShift Gyms and faction dominance status',
+        tags: ['PokéShift'],
+        responses: {
+          200: { description: 'Campus Gyms list' },
+        },
+      },
+    },
+    '/pokeshift/gyms/{id}/battle': {
+      post: {
+        summary: 'Reinforce friendly Gym or battle opposing faction for territorial conquest',
+        tags: ['PokéShift'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['volunteerId', 'faction', 'power'],
+                properties: {
+                  volunteerId: { type: 'string' },
+                  faction: { type: 'string', enum: ['TEAM_KERNEL', 'TEAM_TENSOR', 'TEAM_SILICON'] },
+                  power: { type: 'number', minimum: 10, maximum: 500, example: 100 },
+                  coordinates: {
+                    type: 'object',
+                    properties: {
+                      latitude: { type: 'number' },
+                      longitude: { type: 'number' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Battle or reinforcement executed with OCC version guard' },
+          403: { description: 'Outside 75m Gym geofence perimeter or gym is shielded' },
+        },
+      },
+    },
+    '/pokeshift/hackstops': {
+      get: {
+        summary: 'List all physical HackStop supply beacons on UIUC campus',
+        tags: ['PokéShift'],
+        responses: {
+          200: { description: 'List of HackStops' },
+        },
+      },
+    },
+    '/pokeshift/hackstops/{beaconId}/spin': {
+      post: {
+        summary: 'Spin a HackStop beacon within 75m for randomized power-up drops and Karma',
+        tags: ['PokéShift'],
+        parameters: [{ name: 'beaconId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['volunteerId', 'coordinates'],
+                properties: {
+                  volunteerId: { type: 'string' },
+                  coordinates: {
+                    type: 'object',
+                    required: ['latitude', 'longitude'],
+                    properties: {
+                      latitude: { type: 'number' },
+                      longitude: { type: 'number' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Beacon spun; item awarded to inventory' },
+          403: { description: 'Outside 75m geofence radius' },
+          409: { description: 'Beacon cooling down (5-minute cooldown)' },
+        },
+      },
+    },
+    '/pokeshift/inventory/{volunteerId}': {
+      get: {
+        summary: 'Get volunteer item backpack and power-up inventory',
+        tags: ['PokéShift'],
+        parameters: [{ name: 'volunteerId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Volunteer power-up inventory' },
+        },
+      },
+    },
+    '/pokeshift/inventory/use': {
+      post: {
+        summary: 'Activate a power-up from inventory (atomic decrement CAS)',
+        tags: ['PokéShift'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['volunteerId', 'itemType'],
+                properties: {
+                  volunteerId: { type: 'string' },
+                  itemType: { type: 'string', enum: ['COLD_BREW_ELIXIR', 'INSOMNIA_COOKIE_SHIELD', 'OVERCLOCK_SOLDER_CORE', 'RUBBER_DUCK_OMNISCIENCE', 'ANKER_GAUNTLET'] },
+                  targetGymId: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Power-up activated' },
+          400: { description: 'Insufficient inventory or item not found' },
+        },
+      },
+    },
+    '/adonix/sync': {
+      post: {
+        summary: 'Synchronize official HackIllinois Adonix events and synthesize shifts',
+        tags: ['Adonix'],
+        responses: {
+          200: { description: 'Synchronization completed with count of shifts synthesized' },
+        },
+      },
+    },
+    '/adonix/events': {
+      get: {
+        summary: 'Fetch live official schedule events from Adonix API',
+        tags: ['Adonix'],
+        responses: {
+          200: { description: 'List of Adonix events' },
+        },
+      },
+    },
     '/stats/leaderboard': {
       get: {
-        summary: 'Get volunteer leaderboard ranked by Karma points',
+        summary: 'Get volunteer leaderboard ranked by Karma points and prestige tier',
         tags: ['Stats'],
         responses: { 200: { description: 'Leaderboard rankings' } },
       },
@@ -241,7 +453,7 @@ export const swaggerDocument = {
     },
     '/stats/events': {
       get: {
-        summary: 'Real-time Server-Sent Events (SSE) stream',
+        summary: 'Real-time Server-Sent Events (SSE) stream for War Room dashboard',
         tags: ['Stats'],
         responses: { 200: { description: 'SSE event stream' } },
       },

@@ -156,6 +156,10 @@ export class SOSService {
       throw ApiError.notFound('SOS ticket not found.');
     }
 
+    if (ticket.status === SOSTicketStatus.RESOLVED) {
+      throw ApiError.conflict('Ticket is already resolved.');
+    }
+
     ticket.status = SOSTicketStatus.RESOLVED;
     ticket.resolvedAt = new Date();
     await ticket.save();
