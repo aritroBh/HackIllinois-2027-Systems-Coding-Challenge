@@ -1,4 +1,20 @@
+/**
+ * Environment contract — parsed once, validated at boot, exported as a typed object.
+ *
+ * Configuration is read through this module and nowhere else. Reading `process.env`
+ * directly elsewhere would bypass both the schema and the production guards below, so
+ * the rest of the codebase imports `env` instead.
+ *
+ * The design principle is **fail fast at boot, never at 3 a.m.** A misconfigured secret
+ * should stop the process on startup, where it is obvious, rather than silently minting
+ * forgeable tokens under load — hence the production refusal when `QR_HMAC_SECRET` is
+ * still the committed default.
+ *
+ * Defaults let a fresh clone run with zero setup (in-memory Mongo, open CORS, auth off).
+ * That is right for a demo and wrong for an event; see the hardening flags in the README.
+ */
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { z } from 'zod';
 
 dotenv.config();
@@ -9,6 +25,63 @@ const envSchema = z.object({
   MONGODB_URI: z.string().optional(),
   QR_HMAC_SECRET: z.string().default('hackillinois_waveshift_secret_key_2027'),
   CORS_ORIGIN: z.string().default('*'),
+  // When true, gym battles reject requests that omit GPS coordinates, closing the
+  // remote-capture bypass. Default false preserves the open-demo behaviour.
+  //
+  // Scope note, because the name over-promises: this flag governs `GymService` only.
+  // Attendance check-in does NOT consult it — `verifyCheckInSchema` makes coordinates
+  // unconditionally required, in every environment, so check-in is already closed and
+  // needs no flag.
+  REQUIRE_GEOFENCE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+  // When true, all mutating API routes require the organizer secret in the
+  // X-Organizer-Secret header. Default false preserves the open-demo contract.
+  REQUIRE_AUTH: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+  ORGANIZER_SECRET: z.string().default('waveshift_change_me_in_production'),
+
+  // --- capacity -------------------------------------------------------------
+  // The per-IP rate limit must be tunable at deploy time. It was previously a
+  // hardcoded 300/min whose only escape hatch was NODE_ENV=test — an env under
+  // which index.ts deliberately never starts a listener, so no running server
+  // could ever raise it. For an event expecting thousands of concurrent users
+  // behind shared campus NAT, that ceiling is the binding constraint.
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  // Number of proxy hops to trust for client-IP resolution (0 = trust none).
+  // Without this, every client behind a load balancer resolves to the proxy's
+  // address and shares a single rate-limit bucket. Set it to the real hop count;
+  // do not set it blindly, since an over-large value lets clients spoof
+  // X-Forwarded-For and evade the limit entirely.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+
+  // --- HTTP socket timeouts -------------------------------------------------
+  // Node's defaults are permissive enough to be a slowloris invitation: a client can
+  // announce a large Content-Length, send nothing, and pin a connection for 300 s.
+  // These bounds are configuration rather than constants because the correct value for
+  // KEEP_ALIVE depends entirely on what sits in front of the process.
+  //
+  // Two invariants the defaults satisfy and any override must preserve:
+  //
+  //   REQUEST_TIMEOUT_MS > HEADERS_TIMEOUT_MS > KEEP_ALIVE_TIMEOUT_MS
+  //
+  // The second half is Node's own requirement. If `headersTimeout` were the shorter of
+  // the two, a keep-alive socket could be reaped mid-request.
+  //
+  // **Deploying behind a load balancer:** AWS ALB, GCP LB and nginx all default to a
+  // 60 s upstream idle timeout. If this process closes an idle socket first, the proxy
+  // will still consider it reusable, send a request into a closing connection, and
+  // return 502 to the user. The standard remedy is to make the backend outlive the
+  // proxy — KEEP_ALIVE_TIMEOUT_MS=65000 and HEADERS_TIMEOUT_MS=70000 against a 60 s
+  // proxy. The 10 s default here is correct for a directly-exposed process and wrong
+  // behind a proxy, which is exactly why it is not hardcoded.
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  HEADERS_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -18,4 +91,28 @@ if (!parsedEnv.success) {
   process.exit(1);
 }
 
+// Fail fast in production: the committed HMAC default mints forgeable attendance
+// tokens (proven live), and the organizer default neuters REQUIRE_AUTH.
+if (parsedEnv.data.NODE_ENV === 'production') {
+  if (parsedEnv.data.QR_HMAC_SECRET === 'hackillinois_waveshift_secret_key_2027') {
+    console.error('❌ Refusing to boot: QR_HMAC_SECRET is the committed default. Set a strong secret.');
+    process.exit(1);
+  }
+  if (parsedEnv.data.REQUIRE_AUTH && parsedEnv.data.ORGANIZER_SECRET === 'waveshift_change_me_in_production') {
+    console.error('❌ Refusing to boot: ORGANIZER_SECRET is the committed default. Set a strong secret.');
+    process.exit(1);
+  }
+  if (!parsedEnv.data.MONGODB_URI) {
+    console.warn('⚠️  No MONGODB_URI: booting on ephemeral in-memory Mongo — all data is lost on restart.');
+  }
+}
+
 export const env = parsedEnv.data;
+
+// ponytail: outside production, a committed-default secret is swapped for an ephemeral
+// random one per boot — offline forgery with the public string then fails even in demos
+// (previously proven live), at zero demo cost. Production refuses to boot instead (above).
+if (env.NODE_ENV !== 'production' && env.QR_HMAC_SECRET === 'hackillinois_waveshift_secret_key_2027') {
+  env.QR_HMAC_SECRET = `ephemeral_dev_${crypto.randomBytes(24).toString('hex')}`;
+  console.warn('⚠️  QR_HMAC_SECRET not set: using an ephemeral per-boot secret (tokens invalidate on restart).');
+}

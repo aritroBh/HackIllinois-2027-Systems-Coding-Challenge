@@ -38,7 +38,7 @@ export class ApiError extends Error {
     return new ApiError(403, ErrorCode.FORBIDDEN, message);
   }
 
-  public static notFound(message = 'Requested resource not found.', code = ErrorCode.BAD_REQUEST): ApiError {
+  public static notFound(message = 'Requested resource not found.', code = ErrorCode.NOT_FOUND): ApiError {
     return new ApiError(404, code, message);
   }
 

@@ -38,8 +38,9 @@ export class SurgePricingEngine {
       manualMultiplier = 1.0,
     } = params;
 
-    // 1. Circadian Deficit Multiplier (Peaking at 3:30 AM)
-    const hour = currentTime.getHours() + currentTime.getMinutes() / 60;
+    // 1. Circadian Deficit Multiplier (Peaking at 3:30 AM UTC).
+    // UTC is used deliberately so the peak does not wander with server timezone.
+    const hour = currentTime.getUTCHours() + currentTime.getUTCMinutes() / 60;
     // Cosine cycle: peaks at h = 3.5 (03:30 AM), trough at h = 15.5 (03:30 PM)
     const cosineComponent = (1 + Math.cos((2 * Math.PI * (hour - 3.5)) / 24)) / 2;
     const circadianFactor = 1.0 + 1.5 * Math.pow(cosineComponent, 2);

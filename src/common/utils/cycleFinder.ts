@@ -23,14 +23,16 @@ export class CyclicTradeFinder {
 
     const adj = new Map<string, string[]>();
     for (const a of assignments) {
-      const neighbors: string[] = [];
+      // Deduplicated: repeated desired shifts previously produced duplicate
+      // edges, which multiplied the discovered "cycles" and double-executed trades.
+      const neighbors = new Set<string>();
       for (const desiredShift of a.desiredShiftIds) {
         const targetVolunteer = shiftToOwner.get(desiredShift);
         if (targetVolunteer && targetVolunteer !== a.volunteerId) {
-          neighbors.push(targetVolunteer);
+          neighbors.add(targetVolunteer);
         }
       }
-      adj.set(a.volunteerId, neighbors);
+      adj.set(a.volunteerId, [...neighbors]);
     }
     return adj;
   }
@@ -57,7 +59,9 @@ export class CyclicTradeFinder {
       stack.push(currNode);
       inStack.add(currNode);
 
-      const neighbors = adj.get(currNode) || [];
+      // Deduplicated: callers passing hand-built adjacency with repeated
+      // edges must not multiply discovered cycles either.
+      const neighbors = [...new Set(adj.get(currNode) || [])];
       for (const next of neighbors) {
         // Enforce canonical minimum: only traverse nodes >= startNode
         if (next < startNode) continue;

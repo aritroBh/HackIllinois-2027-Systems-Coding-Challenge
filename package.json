@@ -4,13 +4,19 @@
   "description": "High-Performance Volunteer Scheduling & Operations Engine for HackIllinois Systems Team",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "seed": "tsx src/seed/seedData.ts",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
     "test:coverage": "jest --runInBand --coverage --detectOpenHandles --forceExit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "demo": "tsx scripts/devSeeded.ts",
+    "campus": "python3 design/build-campus.py",
+    "bench:load": "NODE_ENV=test tsx scripts/benchmarks/loadtest.ts",
+    "bench:sse": "NODE_ENV=test tsx scripts/benchmarks/sse-fanout.ts",
+    "bench:fuzz": "NODE_ENV=test tsx scripts/benchmarks/fuzz.ts",
+    "bench:pipeline": "tsx scripts/benchmarks/pipeline-check.ts"
   },
   "keywords": [
     "hackillinois",

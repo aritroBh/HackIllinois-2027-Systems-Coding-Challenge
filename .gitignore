@@ -4,3 +4,8 @@ dist
 coverage
 *.log
 .DS_Store
+.gstack/
+
+# Cached OpenStreetMap extracts (~6.5 MB). The committed .overpass queries
+# refetch them; public/gl/uiuc-campus.json is the built artefact that ships.
+design/osm/*.json
