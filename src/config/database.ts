@@ -1,3 +1,21 @@
+/**
+ * Database connection lifecycle.
+ *
+ * Two modes, chosen by whether `MONGODB_URI` is set:
+ *
+ *  - **Configured.** Connect to the URI given. This is the production path.
+ *  - **Zero-config.** Start an in-memory MongoDB *replica set* and connect to that, so
+ *    `git clone && npm install && npm run demo` works with no database installed.
+ *
+ * The in-memory instance is a replica set of one rather than a standalone `mongod`, and
+ * that detail is load-bearing: MongoDB only offers multi-document transactions on a
+ * replica set. The bilateral swap and the cyclic rotation both depend on
+ * `session.withTransaction`, so a standalone server would fail them at runtime rather
+ * than at startup — a confusing way to discover the requirement.
+ *
+ * WiredTiger is named explicitly for the same reason: it is the storage engine whose
+ * document-level concurrency control makes the atomic `$expr` capacity guard meaningful.
+ */
 import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { env } from './env';

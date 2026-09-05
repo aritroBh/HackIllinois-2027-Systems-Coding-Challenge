@@ -1,10 +1,27 @@
+/**
+ * OpenAPI 3 specification, served by Swagger UI at `/docs`.
+ *
+ * Written by hand rather than generated from decorators, so it is a *description* of the
+ * API and not a guarantee: nothing in the build fails when it drifts from the routers.
+ * When adding or changing an endpoint, update this file in the same commit — and prefer
+ * copying the bounds straight from the matching Zod schema in `src/schemas/`, since those
+ * are what actually reject a request at runtime.
+ *
+ * Every mounted route is now represented here, and nothing is documented that is not
+ * mounted: `/adonix/events` was described but never routed, so it was removed rather than
+ * implemented, and `/volunteers` was routed but undescribed, so it was written up. The
+ * `/health` and `/ready` probes sit at the server root rather than under `/api/v1`, so
+ * they carry an operation-level `servers` override. It is relative (`/`) rather than an
+ * absolute host, so the spec stays correct wherever it is deployed instead of pointing
+ * every reader at localhost.
+ */
 export const swaggerDocument = {
   openapi: '3.0.0',
   info: {
     title: 'WaveShift Nexus API',
     version: '1.0.0',
     description:
-      'High-Performance Volunteer Scheduling, SOS Spatial Dispatch & PokéShift Operations Engine for HackIllinois Systems Team. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, Tarjan directed cyclic swaps, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',
+      'High-Performance Volunteer Scheduling, SOS Spatial Dispatch & PokéShift Operations Engine for HackIllinois Systems Team. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, bounded elementary-cycle swap discovery, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',
     contact: {
       name: 'HackIllinois Systems Team Candidate',
       url: 'https://github.com/HackIllinois/adonix',
@@ -19,12 +36,14 @@ export const swaggerDocument = {
   tags: [
     { name: 'Shifts', description: 'Volunteer shift management & dynamic surge pricing' },
     { name: 'Registrations', description: 'Atomic CAS slot reservation & waitlist cascade engine' },
-    { name: 'Swaps', description: 'Bilateral atomic swaps & Tarjan directed cycle trade discovery' },
+    { name: 'Swaps', description: 'Bilateral atomic swaps & bounded elementary-cycle trade discovery' },
     { name: 'Attendance', description: 'Dynamic 30s HMAC-SHA256 tokens & geofenced check-in' },
     { name: 'SOS', description: 'Hacker emergency distress tickets & spatial nearest-volunteer dispatch' },
     { name: 'PokéShift', description: 'UIUC campus Gym turf wars, HackStop supply beacons & power-up inventory' },
     { name: 'Adonix', description: 'Official HackIllinois Adonix backend event synchronization' },
     { name: 'Stats', description: 'Real-time telemetry, leaderboards & Server-Sent Events (SSE)' },
+    { name: 'Volunteers', description: 'Volunteer records, certifications & faction allegiance' },
+    { name: 'Operations', description: 'Liveness and readiness probes for orchestrators' },
   ],
   paths: {
     '/shifts': {
@@ -101,6 +120,43 @@ export const swaggerDocument = {
       },
     },
     '/registrations': {
+      get: {
+        summary: 'List registrations, optionally filtered',
+        description:
+          'Filters are ANDed. `status` accepts every member of RegistrationStatus. Note that SWAP_PENDING is queryable but never currently written — swaps rewrite the registration in place — so it will match nothing until that changes.',
+        tags: ['Registrations'],
+        parameters: [
+          {
+            name: 'shiftId',
+            in: 'query',
+            schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' },
+          },
+          {
+            name: 'volunteerId',
+            in: 'query',
+            schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' },
+          },
+          {
+            name: 'status',
+            in: 'query',
+            schema: {
+              type: 'string',
+              enum: [
+                'CONFIRMED',
+                'WAITLISTED',
+                'CANCELLED',
+                'CHECKED_IN',
+                'COMPLETED',
+                'SWAP_PENDING',
+              ],
+            },
+          },
+        ],
+        responses: {
+          200: { description: 'Matching registrations' },
+          422: { description: 'Validation failed' },
+        },
+      },
       post: {
         summary: 'Atomically reserve a shift slot or join FIFO waitlist',
         tags: ['Registrations'],
@@ -186,7 +242,7 @@ export const swaggerDocument = {
       post: {
         summary: 'Discover and resolve multi-party directed cycle trades (e.g. A->B->C->A)',
         tags: ['Swaps'],
-        responses: { 200: { description: 'Cycles discovered and executed via Tarjan SCC' } },
+        responses: { 200: { description: 'Cycles discovered and executed via bounded elementary-cycle rotation' } },
       },
     },
     '/attendance/token': {
@@ -428,15 +484,6 @@ export const swaggerDocument = {
         },
       },
     },
-    '/adonix/events': {
-      get: {
-        summary: 'Fetch live official schedule events from Adonix API',
-        tags: ['Adonix'],
-        responses: {
-          200: { description: 'List of Adonix events' },
-        },
-      },
-    },
     '/stats/leaderboard': {
       get: {
         summary: 'Get volunteer leaderboard ranked by Karma points and prestige tier',
@@ -456,6 +503,99 @@ export const swaggerDocument = {
         summary: 'Real-time Server-Sent Events (SSE) stream for War Room dashboard',
         tags: ['Stats'],
         responses: { 200: { description: 'SSE event stream' } },
+      },
+    },
+    '/volunteers': {
+      get: {
+        summary: 'List volunteers',
+        description:
+          'Unprojected and unpaginated — acceptable for the demo dataset, but it must gain both before it carries real attendee records.',
+        tags: ['Volunteers'],
+        responses: { 200: { description: 'All volunteers' } },
+      },
+      post: {
+        summary: 'Create a volunteer',
+        description:
+          'Certifications are self-declared at signup; there is no organiser issuance step, so the skill gate documents intent rather than enforcing it.',
+        tags: ['Volunteers'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['name', 'email'],
+                properties: {
+                  name: { type: 'string', minLength: 2, maxLength: 100 },
+                  email: { type: 'string', format: 'email' },
+                  phone: { type: 'string' },
+                  certifications: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'DRIVERS_LICENSE',
+                        'FOOD_HANDLING',
+                        'FIRST_AID',
+                        'TECHNICAL_MENTOR',
+                        'CROWD_CONTROL',
+                      ],
+                    },
+                  },
+                  faction: { type: 'string', enum: ['ORANGE', 'BLUE', 'NEUTRAL'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: 'Volunteer created' },
+          409: { description: 'Email already registered' },
+          422: { description: 'Validation failed' },
+        },
+      },
+    },
+    '/volunteers/{id}': {
+      get: {
+        summary: 'Get one volunteer by id',
+        tags: ['Volunteers'],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' },
+          },
+        ],
+        responses: {
+          200: { description: 'Volunteer record' },
+          404: { description: 'Not found' },
+        },
+      },
+    },
+    // The two probes live at the server root, not under /api/v1, so they carry their own
+    // `servers` override. Without it Swagger UI would render them as /api/v1/health.
+    '/health': {
+      get: {
+        summary: 'Liveness probe',
+        description:
+          'Is the process up? Never touches the database, so it cannot be made to fail by a slow query. Always 200 while the event loop is responsive.',
+        tags: ['Operations'],
+        servers: [{ url: '/', description: 'Server root (relative to this host)' }],
+        responses: { 200: { description: 'Process is alive' } },
+      },
+    },
+    '/ready': {
+      get: {
+        summary: 'Readiness probe',
+        description:
+          'Can this instance serve traffic? Reports the Mongoose connection state and returns 503 when it is not connected, so an orchestrator drains this pod during a database outage rather than routing requests that will hang.',
+        tags: ['Operations'],
+        servers: [{ url: '/', description: 'Server root (relative to this host)' }],
+        responses: {
+          200: { description: 'Connected and serving' },
+          503: { description: 'Database not connected — do not route traffic here' },
+        },
       },
     },
   },
