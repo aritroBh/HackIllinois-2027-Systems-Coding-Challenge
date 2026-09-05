@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WaveShift Nexus // HackIllinois War Room</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+</head>
+<body>
+  <!-- HUD Header -->
+  <header>
+    <div class="hud-container">
+      <div class="logo-group">
+        <div class="pulse-dot"></div>
+        <h1>WAVESHIFT NEXUS</h1>
+        <span class="badge-tag">HACKILLINOIS 2027 SYSTEMS</span>
+      </div>
+
+      <div class="hud-metrics">
+        <div class="metric-item">
+          <span style="color: var(--text-dim)">SHIFTS:</span>
+          <span id="hud-total-shifts" style="color: var(--cyan)">--</span>
+        </div>
+        <div class="metric-item">
+          <span style="color: var(--text-dim)">COVERAGE:</span>
+          <span id="hud-fill-rate" style="color: var(--neon-green)">--%</span>
+        </div>
+        <div class="metric-item">
+          <span style="color: var(--text-dim)">TOTAL KARMA:</span>
+          <span id="hud-total-karma" style="color: var(--amber-surge)">--</span>
+        </div>
+        <button id="sound-toggle-btn" class="btn btn-secondary" style="width: auto; padding: 4px 10px; font-size: 0.75rem;">
+          🔊 AUDIO: ON
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="tabs-nav">
+    <button class="tab-btn active" onclick="switchTab('tab-shifts')">📡 Shift Radar</button>
+    <button class="tab-btn" onclick="switchTab('tab-chaos')">💣 Chaos & Concurrency</button>
+    <button class="tab-btn" onclick="switchTab('tab-qr')">📱 Dynamic QR Check-In</button>
+    <button class="tab-btn" onclick="switchTab('tab-leaderboard')">🏆 Karma Leaderboard</button>
+  </nav>
+
+  <!-- Main View -->
+  <main>
+    <!-- TAB 1: Shifts Radar -->
+    <section id="tab-shifts" class="tab-content active">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="font-size: 1.25rem;">Active HackIllinois Logistics Shifts</h2>
+        <span style="font-size: 0.85rem; color: var(--text-dim);">Live SSE Sync Active</span>
+      </div>
+      <div id="shifts-grid" class="shifts-grid">
+        <!-- Shift Cards Dynamically Injected -->
+      </div>
+    </section>
+
+    <!-- TAB 2: Chaos & Concurrency Bomb -->
+    <section id="tab-chaos" class="tab-content">
+      <div class="chaos-box">
+        <h2 style="color: var(--hazard-coral); font-size: 1.3rem; margin-bottom: 8px;">
+          🔥 Concurrency Bomb & Chaos Monkey Testbench
+        </h2>
+        <p style="color: var(--text-dim); font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px;">
+          Prove zero-overbooking and transactional resilience live during your interview. 
+          Simulate 50 parallel asynchronous workers hitting a 2-spot shift, trigger sudden dropouts to observe waitlist cascades, or execute a 3-way circular trade.
+        </p>
+
+        <div class="chaos-actions">
+          <button class="btn btn-danger" onclick="runConcurrencyBomb()">
+            💣 Fire 50-Worker Concurrency Bomb
+          </button>
+          <button class="btn btn-secondary" onclick="simulateDropCascade()">
+            ⚡ Simulate Drop & Waitlist Cascade
+          </button>
+          <button class="btn btn-secondary" onclick="resolveCyclicTrade()">
+            🔄 Resolve 3-Way Circular Trade (Tarjan)
+          </button>
+        </div>
+
+        <div class="log-terminal" id="chaos-terminal">
+Ready for stress test. Click [Fire 50-Worker Concurrency Bomb] to begin.
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: Dynamic QR Check-in -->
+    <section id="tab-qr" class="tab-content">
+      <div class="qr-container">
+        <h2 style="font-size: 1.2rem;">Dynamic 30s Rotating QR Token</h2>
+        <p style="font-size: 0.82rem; color: var(--text-dim); text-align: center;">
+          Rotates every 30 seconds with HMAC-SHA256 signatures to prevent screenshot sharing.
+        </p>
+
+        <div class="qr-box">
+          <img id="qr-image" src="" alt="Dynamic QR Token" style="width: 100%; height: 100%;">
+        </div>
+
+        <div class="countdown-bar">
+          <div id="countdown-fill" class="countdown-fill" style="width: 100%;"></div>
+        </div>
+        <span id="countdown-text" style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--neon-green);">
+          Expires in 30s
+        </span>
+
+        <div style="display: flex; gap: 8px; width: 100%; margin-top: 8px;">
+          <button class="btn" onclick="simulateDeskScan()">✅ Simulate Desk Scan</button>
+          <button class="btn btn-danger" onclick="simulateReplayAttack()">🚨 Test Replay Attack</button>
+        </div>
+
+        <div class="log-terminal" id="qr-terminal" style="width: 100%; max-height: 160px; font-size: 0.75rem;">
+Select a shift to generate dynamic tokens.
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: Leaderboard -->
+    <section id="tab-leaderboard" class="tab-content">
+      <h2 style="font-size: 1.25rem; margin-bottom: 16px;">HackIllinois Volunteer Leaderboard</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Volunteer</th>
+              <th>Prestige Tier</th>
+              <th>Hours Served</th>
+              <th>Karma Points</th>
+              <th>Badges</th>
+            </tr>
+          </thead>
+          <tbody id="leaderboard-body">
+            <!-- Dynamic rows -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/dashboard/soundEngine.js"></script>
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>
