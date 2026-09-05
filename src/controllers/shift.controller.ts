@@ -1,3 +1,14 @@
+/**
+ * Shift CRUD HTTP surface.
+ *
+ * `DELETE` is a soft delete — it flips `isActive` rather than removing the document, so
+ * historical registrations keep a valid reference and past shifts stay auditable.
+ *
+ * List responses are enriched with a computed surge multiplier per shift. That figure is
+ * derived at read time from the current clock and fill level, so the same shift can
+ * report different karma on two successive calls; it is an estimate shown to volunteers,
+ * not the amount banked at check-out.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { ShiftService } from '../services/shift.service';
 

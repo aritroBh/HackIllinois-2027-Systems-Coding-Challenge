@@ -1,4 +1,4 @@
-import { GeoEngine, HACKILLINOIS_VENUES } from '../src/common/utils/geo';
+import { GeoEngine, HACKILLINOIS_VENUES, resolveVenue } from '../src/common/utils/geo';
 import { SOSService } from '../src/services/sos.service';
 import { SOSTicketCategory, SOSTicketUrgency, SOSTicketStatus } from '../src/models/sosTicket.model';
 import { Volunteer } from '../src/models/volunteer.model';
@@ -7,6 +7,43 @@ import { Registration, RegistrationStatus } from '../src/models/registration.mod
 import { CheckInService } from '../src/services/checkin.service';
 import { AdonixSyncService } from '../src/services/adonixSync.service';
 
+
+describe('Campus venue resolution', () => {
+  // Resolution scores by hint specificity rather than table order. Under the
+  // old first-match rule these two resolved to a building over a kilometre
+  // away ("ATRIUM" -> Siebel, "MAIN STAGE" -> Kenney), which silently
+  // geofenced check-ins and SOS dispatch against the wrong coordinates.
+  it.each([
+    ['Main Library Atrium', 'MAIN_LIBRARY'],
+    ['State Farm Center Main Stage', 'STATE_FARM_CENTER'],
+    ['Siebel Center Atrium', 'SIEBEL_ATRIUM'],
+    ['Siebel Center Basement Lab', 'SIEBEL_BASEMENT'],
+    ['Kenney Gym bleachers', 'KENNEY_GYM'],
+    ['Memorial Stadium Gate 4', 'MEMORIAL_STADIUM'],
+    ['Foellinger Auditorium stage left', 'FOELLINGER_AUDITORIUM'],
+    ['Illini Union South Lounge', 'ILLINI_UNION'],
+    ['Grainger Library Rotunda', 'GRAINGER_LIBRARY'],
+    ['Altgeld Hall Steps', 'ALTGELD_HALL'],
+    ['ECEB Main Lobby', 'ECEB_LOBBY'],
+    ['DCL Bridge Walkway', 'DCL_BRIDGE'],
+  ])('resolves %s to %s', (location, expectedKey) => {
+    const resolved = resolveVenue(location);
+    expect(resolved.matched).toBe(true);
+    expect(resolved.key).toBe(expectedKey);
+  });
+
+  it('no venue hint is shadowed by a longer hint belonging to another venue', () => {
+    // Every venue must be reachable by its own most specific name.
+    for (const key of Object.keys(HACKILLINOIS_VENUES)) {
+      const humanised = key.replace(/_/g, ' ');
+      expect(resolveVenue(humanised).matched).toBe(true);
+    }
+  });
+
+  it('fails closed for an unknown location', () => {
+    expect(resolveVenue('Somewhere In Chicago').matched).toBe(false);
+  });
+});
 
 describe('Spatial Geofencing & Haversine Distance Engine', () => {
   it('correctly calculates Haversine distance between Siebel Center and ECEB', () => {
@@ -168,7 +205,20 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     const resolvedTicket = await SOSService.resolveTicket(ticket._id.toString(), volB._id.toString());
     expect(resolvedTicket.status).toBe(SOSTicketStatus.RESOLVED);
 
-    const updatedVolB = await Volunteer.findById(volB._id);
+    // A bystander resolving someone else's dispatched ticket is bounty theft -> forbidden.
+    const ticket2 = await SOSService.createTicket({
+      hackerName: 'Second Hacker',
+      tableLocation: 'Table 43 (Siebel Basement)',
+      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      category: SOSTicketCategory.HARDWARE_MALFUNCTION,
+      description: 'Need a USB-C cable.',
+      urgency: SOSTicketUrgency.MEDIUM,
+      requiredSkill: 'HARDWARE',
+    });
+    await SOSService.dispatchNearestVolunteer(ticket2._id.toString());
+    await expect(
+      SOSService.resolveTicket(ticket2._id.toString(), volC._id.toString())
+    ).rejects.toThrow(/only the dispatched volunteer/i);    const updatedVolB = await Volunteer.findById(volB._id);
     expect(updatedVolB?.karmaPoints).toBe(200 + 250);
     expect(updatedVolB?.badges).toContain('FIRST_RESPONDER');
   });

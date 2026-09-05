@@ -1,3 +1,11 @@
+/**
+ * Shift-swap HTTP surface — propose, accept, resolve cycles, list.
+ *
+ * `POST /swaps/cycles/resolve` is the interesting one: it takes no input. It reads every
+ * PENDING proposal, builds the directed "wants" graph, finds elementary cycles, and
+ * executes each rotation transactionally. It is idempotent in the sense that a second
+ * call finds nothing left to rotate.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { SwapService } from '../services/swap.service';
 import { SwapStatus } from '../models/swap.model';

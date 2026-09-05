@@ -1,3 +1,19 @@
+/**
+ * IdempotencyRecord — exactly-once semantics for reservation requests.
+ *
+ * Volunteers claim shifts from phones on congested event wifi, where a request can
+ * succeed server-side and still time out client-side. Without this table the natural
+ * client behaviour (retry) would double-book. With it, a retry carrying the same
+ * `Idempotency-Key` replays the stored response instead of re-executing.
+ *
+ * The record is claimed as PENDING before any work, then settled to COMMITTED (with the
+ * response body to replay) or FAILED. `requestHash` guards against key reuse with a
+ * different payload — the same key describing different work is a client bug, answered
+ * with 409 rather than silently serving the wrong cached response.
+ *
+ * Rows self-expire after 24 h via the TTL index below; the key space is per-request, so
+ * without expiry this collection would grow without bound.
+ */
 import mongoose, { Schema, Document } from 'mongoose';
 
 export enum IdempotencyStatus {
@@ -36,7 +52,10 @@ const IdempotencySchema = new Schema<IIdempotencyRecord>(
   { timestamps: true }
 );
 
-// Auto-purge records after 24 hours (86400 seconds)
+/**
+ * TTL: purge after 24 h. Long enough that any realistic client retry still replays the
+ * cached response, short enough that the collection stays bounded over a hackathon.
+ */
 IdempotencySchema.index({ createdAt: 1 }, { expireAfterSeconds: 86400 });
 
 export const IdempotencyRecord = mongoose.model<IIdempotencyRecord>('IdempotencyRecord', IdempotencySchema);

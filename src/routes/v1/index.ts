@@ -1,3 +1,14 @@
+/**
+ * API v1 router composition.
+ *
+ * Every resource is mounted under an explicit path prefix here, which keeps the URL
+ * surface visible in one file rather than scattered across route modules. The `/api/v1`
+ * prefix itself is applied in `app.ts`, together with the rate limiter and the mutation
+ * auth guard — so everything mounted below inherits both automatically.
+ *
+ * Routes stay declarative: a path, its validation schema, and a controller method. Any
+ * file in this directory that starts making decisions belongs in a service instead.
+ */
 import { Router } from 'express';
 import { shiftRouter } from './shift.routes';
 import { volunteerRouter } from './volunteer.routes';

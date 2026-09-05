@@ -1,3 +1,15 @@
+/**
+ * Attendance HTTP surface — mint a rotating QR token, verify a desk scan, check out.
+ *
+ * Thin by design: validation has already run, so these methods unpack the request and
+ * delegate. The interesting behaviour (HMAC verification, replay rejection, geofence,
+ * pro-rata karma) lives in `CheckInService`.
+ *
+ * Note that token minting is currently unauthenticated — anyone who can name a
+ * volunteer with a confirmed registration can obtain a valid token for them. The HMAC is
+ * unforgeable, but the issuing endpoint will sign for any caller, so this route should
+ * sit behind organiser auth before real use.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { CheckInService } from '../services/checkin.service';
 
@@ -26,7 +38,7 @@ export class CheckInController {
 
   public static async checkOut(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const checkIn = await CheckInService.checkOut(req.params.id as string);
+      const checkIn = await CheckInService.checkOut(req.params.id as string, req.body.volunteerId);
       res.status(200).json({ success: true, data: checkIn });
     } catch (error) {
       next(error);

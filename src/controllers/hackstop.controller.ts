@@ -1,3 +1,15 @@
+/**
+ * HackStop HTTP surface — list beacons, spin one, read and spend inventory.
+ *
+ * A spin is gated on both the 75 m geofence and a 5-minute per-volunteer cooldown, and
+ * the loot roll happens server-side so the client cannot influence rarity.
+ *
+ * Worth knowing about the shipped client: it sends the campus player's real position
+ * when one exists and falls back to the beacon's own coordinates when the player has not
+ * been placed on the map yet. So the geofence is genuinely exercised once you walk the
+ * avatar, and trivially satisfied before that. The server-side check is unconditional
+ * either way — the fallback is a client convenience, not a bypass.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { HackStopService } from '../services/hackstop.service';
 

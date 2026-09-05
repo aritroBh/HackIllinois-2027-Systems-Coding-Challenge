@@ -1,20 +1,34 @@
+/**
+ * Shift-swap contracts.
+ *
+ * `targetVolunteerId` is optional, and that optionality is the whole design: supplying
+ * it creates a bilateral proposal aimed at one person, omitting it creates an open offer
+ * that the cycle finder can weave into a multi-party rotation. `desiredShiftIds` carries
+ * the outgoing edges of that graph.
+ *
+ * `acceptSwapSchema` takes the accepting volunteer's id in the body. The service checks
+ * that this person actually holds the target shift, but the id is caller-asserted — so
+ * this authorises by claim, not by authenticated identity. Binding it to a session is
+ * the outstanding hardening step.
+ */
 import { z } from 'zod';
+import { objectId } from './common';
 
 export const createSwapRequestSchema = z.object({
   body: z.object({
-    proposerVolunteerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Volunteer ObjectId'),
-    proposerShiftId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Shift ObjectId'),
-    targetVolunteerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Volunteer ObjectId').optional(),
-    targetShiftId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Shift ObjectId'),
-    desiredShiftIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/)).optional(),
+    proposerVolunteerId: objectId('Invalid Volunteer ObjectId'),
+    proposerShiftId: objectId('Invalid Shift ObjectId'),
+    targetVolunteerId: objectId('Invalid Volunteer ObjectId').optional(),
+    targetShiftId: objectId('Invalid Shift ObjectId'),
+    desiredShiftIds: z.array(objectId()).optional(),
   }),
 });
 
 export const acceptSwapSchema = z.object({
   params: z.object({
-    id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Swap ObjectId'),
+    id: objectId('Invalid Swap ObjectId'),
   }),
   body: z.object({
-    targetVolunteerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Volunteer ObjectId'),
+    targetVolunteerId: objectId('Invalid Volunteer ObjectId'),
   }),
 });

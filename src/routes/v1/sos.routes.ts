@@ -1,3 +1,9 @@
+/**
+ * Hacker SOS routes — `/api/v1/sos`.
+ *
+ * `POST /tickets/:id/dispatch` takes no body; the responder is chosen server-side by
+ * skill match and Haversine proximity so a caller cannot nominate one.
+ */
 import { Router } from 'express';
 import { SOSController } from '../../controllers/sos.controller';
 import { validate } from '../../middleware/validate';

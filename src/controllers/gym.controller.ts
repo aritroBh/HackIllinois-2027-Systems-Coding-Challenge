@@ -1,3 +1,11 @@
+/**
+ * PokéShift gym HTTP surface — list control points, battle or reinforce one.
+ *
+ * A single endpoint covers both attack and defence: the service compares the caller's
+ * faction to the gym's controlling faction and branches into reinforce, damage, or
+ * capture. Keeping that decision server-side means a client cannot ask for the
+ * favourable branch.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { GymService } from '../services/gym.service';
 

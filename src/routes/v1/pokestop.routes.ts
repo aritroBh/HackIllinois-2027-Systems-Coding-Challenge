@@ -1,3 +1,9 @@
+/**
+ * PokéShift routes — `/api/v1/pokeshift`.
+ *
+ * Gym contests, geofenced beacon spins, and power-up inventory. Both mutating gym and
+ * beacon routes require GPS coordinates at the schema level.
+ */
 import { Router } from 'express';
 import { GymController } from '../../controllers/gym.controller';
 import { HackStopController } from '../../controllers/hackstop.controller';

@@ -1,3 +1,21 @@
+/**
+ * ShiftSwap — a proposal to trade shifts, and the input to the cycle finder.
+ *
+ * Two shapes share this collection:
+ *
+ *  - **Bilateral.** `targetVolunteerId` is set. A names B's specific shift; B accepts;
+ *    the two registrations exchange owners inside a transaction.
+ *  - **Open / cyclic.** `targetVolunteerId` is null and `desiredShiftIds` lists what the
+ *    proposer wants. These are the edges of a directed graph — an edge u→v means u wants
+ *    the shift v currently holds. `CyclicTradeFinder` searches that graph for elementary
+ *    cycles, which is how a 3-way trade completes when no bilateral pair exists.
+ *
+ * Direct 1-to-1 trades fail most of the time in practice: A wants B's shift, B wants
+ * C's, C wants A's. Cycle discovery is what turns that deadlock into one rotation.
+ *
+ * `status` is the concurrency guard — a proposal is claimed PENDING → EXECUTED so two
+ * resolvers cannot execute the same trade twice.
+ */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export enum SwapStatus {

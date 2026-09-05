@@ -1,3 +1,12 @@
+/**
+ * Hacker SOS HTTP surface — file a distress ticket, dispatch the nearest responder,
+ * resolve, and list.
+ *
+ * Dispatch takes no body: the service selects the responder itself by filtering on-duty
+ * volunteers by required skill and ranking them by Haversine distance to the ticket's
+ * coordinates. Selection is server-side precisely so a caller cannot nominate a
+ * favourable responder.
+ */
 import { Request, Response, NextFunction } from 'express';
 import { SOSService } from '../services/sos.service';
 import { SOSTicketStatus } from '../models/sosTicket.model';

@@ -1,3 +1,17 @@
+/**
+ * Volunteer records — identity, certifications, karma and faction allegiance.
+ *
+ * `certifications` is the gate the scheduler checks before letting anyone hold a shift
+ * that requires one (a driver for airport runs, food handling for the pizza stations).
+ * It is **self-declared at signup**: nothing here issues or verifies a credential, so the
+ * field documents intent rather than enforcing it. Issuing certifications from an
+ * organiser account is the change that would make this a real control.
+ *
+ * `karmaPoints` is the single source of truth for standing, and `prestigeTier` is a
+ * derived label over it — the thresholds live beside the enum members above. Storing the
+ * tier rather than computing it on read keeps the leaderboard a straight indexed sort
+ * instead of a scan plus a per-row computation.
+ */
 import mongoose, { Schema, Document } from 'mongoose';
 
 export enum VolunteerRole {
@@ -26,6 +40,10 @@ export interface IVolunteer extends Document {
   hoursServed: number;
   prestigeTier: PrestigeTier;
   badges: string[];
+  /** Faction locked on first gym battle; prevents one account playing both sides. */
+  faction?: string | null;
+  /** Last timestamp gym-battle karma was awarded; backs the anti-farm cooldown. */
+  lastGymKarmaAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -49,6 +67,8 @@ const VolunteerSchema = new Schema<IVolunteer>(
       default: PrestigeTier.NEOPHYTE_PLANKTON,
     },
     badges: { type: [String], default: [] },
+    faction: { type: String, default: null },
+    lastGymKarmaAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -1,3 +1,16 @@
+/**
+ * PowerUp inventory — consumable items won from HackStop beacons.
+ *
+ * Items are stacked, not row-per-item: one document per (volunteer, itemType) with a
+ * `quantity`, enforced by the compound unique index at the bottom. Awarding is an
+ * upsert with `$inc`, and consumption is a conditional decrement:
+ *
+ *   findOneAndUpdate({ volunteerId, itemType, quantity: { $gte: 1 } }, { $inc: { quantity: -1 } })
+ *
+ * The `quantity: { $gte: 1 }` predicate is the guard — it makes "spend an item" atomic,
+ * so two concurrent uses of a single remaining item cannot both succeed. A `null`
+ * result means the caller had none left.
+ */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export enum PowerUpType {
@@ -77,6 +90,7 @@ const PowerUpInventorySchema = new Schema<IPowerUpInventory>(
   { timestamps: true }
 );
 
+/** One stack per (volunteer, item). Makes the award upsert safe under concurrent spins. */
 PowerUpInventorySchema.index({ volunteerId: 1, itemType: 1 }, { unique: true });
 
 export const PowerUpInventory = mongoose.model<IPowerUpInventory>('PowerUpInventory', PowerUpInventorySchema);

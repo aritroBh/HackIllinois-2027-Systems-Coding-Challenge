@@ -1,3 +1,18 @@
+/**
+ * SOSTicket — a hacker's distress call and its dispatch record.
+ *
+ * A hacker with a dead power strip or a shorted soldering station files a ticket with
+ * their coordinates. Dispatch scores on-duty volunteers by required skill and then by
+ * Haversine distance to those coordinates, assigning the nearest qualified responder.
+ *
+ * Lifecycle: OPEN ──dispatch──> DISPATCHED ──resolve──> RESOLVED (or CANCELLED).
+ *
+ * The OPEN → DISPATCHED transition is a compare-and-swap on `status` so two concurrent
+ * dispatchers cannot assign two responders to the same incident.
+ *
+ * `karmaBounty` is the reward paid on resolution — higher for urgent or unpleasant work,
+ * which is what makes anyone take the 3 a.m. spill.
+ */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export enum SOSTicketCategory {

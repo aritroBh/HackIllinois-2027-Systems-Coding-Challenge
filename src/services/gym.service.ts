@@ -1,8 +1,40 @@
+/**
+ * Campus territory control — the PokéShift gym layer.
+ *
+ * Volunteers pick a faction and contest the fourteen mapped campus monuments. Reinforcing
+ * an allied gym raises its control points; attacking an enemy gym lowers them; driving
+ * them to zero flips the gym and makes the attacker its leader.
+ *
+ * Every battle mutation is an atomic compare-and-swap on a `version` field rather than a
+ * read-modify-write. Two volunteers attacking the same gym on the last control point
+ * would otherwise both read "1 point remaining", both write a capture, and both become
+ * leader — the classic lost update. The loser of the CAS retries against fresh state.
+ *
+ * Power-up effects reach a gym from `hackstop.service` rather than through this file, and
+ * they are not CAS retries — they are single atomic writes (a pipeline `$min`/`$add` for
+ * the control-point boost, a `$set` plus a `version` bump for the shield). Different
+ * mechanism, same guarantee: no path reads a gym, computes, and writes back.
+ *
+ * `awardBattleKarma` gates the *payout* behind a conditional per-volunteer cooldown, not
+ * the battle. Without it, holding down reinforce on a friendly gym mints karma as fast as
+ * requests can be issued. The conditional update also means two concurrent battles cannot
+ * both pass the cooldown check and pay twice. Battle effects still apply while the
+ * cooldown is active; only the karma stops, so spamming changes the map but not the score.
+ *
+ * `REQUIRE_GEOFENCE` optionally requires GPS on a battle, closing remote capture. It is
+ * off by default so the dashboard works without location permission, and it is the only
+ * place in the codebase that flag has any effect.
+ */
 import { Gym, IGym, Faction } from '../models/gym.model';
 import { Volunteer } from '../models/volunteer.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
+import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
+import { env } from '../config/env';
+
+/** Minimum gap between karma-paying battles per volunteer (anti-farm). */
+const GYM_KARMA_COOLDOWN_MS = 60000;
 
 export interface IBattleResult {
   gymId: string;
@@ -45,8 +77,34 @@ export class GymService {
       throw ApiError.notFound('Volunteer not found.');
     }
 
+    // Faction lock: the client names a faction per request, so without this
+    // one account could reinforce as an ally and attack as a rival at will.
+    // The first non-neutral battle binds the account; later mismatches fail.
+    if (volunteerFaction !== Faction.NEUTRAL) {
+      if (volunteer.faction && volunteer.faction !== volunteerFaction) {
+        throw ApiError.conflict(
+          `Faction allegiance locked to ${volunteer.faction}. Cannot battle as ${volunteerFaction}.`,
+          ErrorCode.FACTION_ALLEGIANCE_LOCKED
+        );
+      }
+      if (!volunteer.faction) {
+        await Volunteer.findByIdAndUpdate(volunteerId, { $set: { faction: volunteerFaction } });
+      }
+    }
+
+    // Strict mode closes the remote-capture bypass: coordinates mandatory.
+    if (env.REQUIRE_GEOFENCE && !coordinates) {
+      throw ApiError.badRequest('GPS coordinates are required to contest a gym.', {
+        code: ErrorCode.MISSING_REQUIRED_FIELD,
+      });
+    }
+
     const MAX_RETRIES = 5;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      // ponytail: jittered backoff between OCC retries — bare spin retries thunder the herd.
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 40 * attempt)));
+      }
       const gym = await Gym.findById(gymId);
       if (!gym) {
         throw ApiError.notFound('Gym not found.');
@@ -96,8 +154,7 @@ export class GymService {
 
         if (!updated) continue; // CAS conflict, retry next iteration
 
-        const karmaAward = Math.floor(power * 0.25);
-        await Volunteer.findByIdAndUpdate(volunteerId, { $inc: { karmaPoints: karmaAward } });
+        const karmaAward = await this.awardBattleKarma(volunteerId, Math.floor(power * 0.25));
 
         eventHub.broadcast({
           type: 'GYM_REINFORCED',
@@ -132,8 +189,7 @@ export class GymService {
 
           if (!updated) continue; // CAS conflict, retry next iteration
 
-          const karmaAward = Math.floor(power * 0.35);
-          await Volunteer.findByIdAndUpdate(volunteerId, { $inc: { karmaPoints: karmaAward } });
+          const karmaAward = await this.awardBattleKarma(volunteerId, Math.floor(power * 0.35));
 
           eventHub.broadcast({
             type: 'GYM_ATTACKED',
@@ -152,7 +208,10 @@ export class GymService {
           };
         } else {
           // --- CASE 3: GYM OVERTHROW / FACTION FLIP! ---
-          const freshControlPoints = Math.max(100, power);
+          // ponytail: clamp the reset inside [100, maxCP] — the old floor ignored
+          // the cap (fresh CP above max on small gyms). Defender history resets by
+          // design on capture (new regime); the flip itself is the audit trail.
+          const freshControlPoints = Math.min(gym.maxControlPoints, Math.max(100, power));
           const updated = await Gym.findOneAndUpdate(
             { _id: gym._id, version: gym.version },
             {
@@ -178,8 +237,7 @@ export class GymService {
 
           if (!updated) continue; // CAS conflict, retry next iteration
 
-          const karmaAward = 150; // Capture bonus!
-          await Volunteer.findByIdAndUpdate(volunteerId, { $inc: { karmaPoints: karmaAward } });
+          const karmaAward = await this.awardBattleKarma(volunteerId, 150); // Capture bonus!
 
           eventHub.broadcast({
             type: 'GYM_CAPTURED',
@@ -206,5 +264,24 @@ export class GymService {
     }
 
     throw ApiError.conflict('Gym contestation was interrupted by high-concurrency write contention. Please retry.');
+  }
+
+  /**
+   * Awards battle karma subject to an atomic per-volunteer cooldown. The
+   * conditional update means concurrent battles cannot both mint karma, and
+   * spamming reinforce on an allied gym stops paying after the first hit.
+   * Battle effects still apply during cooldown; only the payout is gated.
+   */
+  private static async awardBattleKarma(volunteerId: string, amount: number): Promise<number> {
+    const cutoff = new Date(Date.now() - GYM_KARMA_COOLDOWN_MS);
+    const awarded = await Volunteer.findOneAndUpdate(
+      {
+        _id: volunteerId,
+        $or: [{ lastGymKarmaAt: null }, { lastGymKarmaAt: { $lt: cutoff } }],
+      },
+      { $inc: { karmaPoints: amount }, $set: { lastGymKarmaAt: new Date() } },
+      { new: true }
+    );
+    return awarded ? amount : 0;
   }
 }

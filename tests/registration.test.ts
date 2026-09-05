@@ -164,4 +164,46 @@ describe('Registration Invariants, Rest Buffers & Fatigue Limits', () => {
     const updatedShift = await Shift.findById(shift._id);
     expect(updatedShift?.filledSlots).toBe(1);
   });
+
+  it('rejects cross-user cancellation (IDOR) and strips client-supplied roles', async () => {
+    const owner = await Volunteer.create({ name: 'Owner', email: 'owner@illinois.edu' });
+    const stranger = await Volunteer.create({ name: 'Stranger', email: 'stranger@illinois.edu' });
+
+    // Privilege escalation attempt: role is server-forced to VOLUNTEER.
+    const promoRes = await request(app)
+      .post('/api/v1/volunteers')
+      .send({ name: 'Mallory', email: 'mallory@illinois.edu', role: 'ADMIN' });
+    expect(promoRes.status).toBe(201);
+    expect(promoRes.body.data.role).toBe(VolunteerRole.VOLUNTEER);
+
+    const shift = await Shift.create({
+      title: 'IDOR Guard Shift',
+      description: 'Ownership proof required',
+      category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center',
+      startTime: new Date('2027-02-27T14:00:00Z'),
+      endTime: new Date('2027-02-27T16:00:00Z'),
+      capacity: 5,
+    });
+
+    const regRes = await request(app)
+      .post('/api/v1/registrations')
+      .send({ shiftId: shift._id.toString(), volunteerId: owner._id.toString() });
+    expect(regRes.status).toBe(201);
+    const regId = regRes.body.data._id;
+
+    // Anonymous cancel (no owner proof) -> 400; stranger cancel -> 403.
+    const anonRes = await request(app).delete(`/api/v1/registrations/${regId}`);
+    expect(anonRes.status).toBe(400);
+    const strangerRes = await request(app)
+      .delete(`/api/v1/registrations/${regId}`)
+      .send({ volunteerId: stranger._id.toString() });
+    expect(strangerRes.status).toBe(403);
+
+    // Owner cancel still works.
+    const ownerRes = await request(app)
+      .delete(`/api/v1/registrations/${regId}`)
+      .send({ volunteerId: owner._id.toString() });
+    expect(ownerRes.status).toBe(200);
+  });
 });

@@ -1,3 +1,22 @@
+/**
+ * Integration with Adonix, HackIllinois's official backend.
+ *
+ * Pulls the published event schedule and synthesises a volunteer shift per event, so the
+ * roster is derived from the real programme instead of being maintained twice. Shifts are
+ * upserted keyed on title, which makes a re-sync idempotent for the common case of a
+ * schedule that gained entries since the last run.
+ *
+ * Two properties of that keying are worth stating plainly, because both are sharp:
+ *
+ *  - Keying on **title** rather than an Adonix event id means a renamed event syncs as a
+ *    new shift and the old one is left stranded. An upstream stable id is the fix.
+ *  - An upsert **rewrites the times** of an existing shift. If organisers have already
+ *    hand-adjusted a shift, a sync silently reverts it, and volunteers are registered
+ *    against times that just changed under them.
+ *
+ * The route is also unauthenticated today, so those two together are the reason it should
+ * sit behind organiser auth before it runs against real data.
+ */
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { eventHub } from '../common/sse/eventHub';
 
@@ -92,10 +111,13 @@ export class AdonixSyncService {
     const createdShifts: Array<{ title: string; category: string; capacity: number }> = [];
 
     for (const ev of rawEvents) {
-      const category = this.projectCategory(ev.eventType, ev.locations[0]?.tags || [], ev.sponsor);
+      // ponytail: locations is optional-chained — a malformed upstream event with no
+      // locations array previously threw mid-sync (partial sync, 500, no resume).
+      const venueTags = ev.locations?.[0]?.tags ?? [];
+      const category = this.projectCategory(ev.eventType, venueTags, ev.sponsor);
       const capacity = this.calculateCapacity(ev.startTime, ev.endTime, category);
       const title = `Staffing: ${ev.name}`;
-      const location = ev.locations[0]?.description || 'Siebel Center';
+      const location = ev.locations?.[0]?.description || 'Siebel Center';
       const baseKarma = Math.max(100, (ev.points || 10) * 10);
 
       const shift = await Shift.findOneAndUpdate(

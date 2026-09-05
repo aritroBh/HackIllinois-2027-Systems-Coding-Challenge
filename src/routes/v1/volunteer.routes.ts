@@ -1,3 +1,10 @@
+/**
+ * Volunteer routes — `/api/v1/volunteers`.
+ *
+ * Reads are open by design so the live dashboard works without credentials; note that
+ * the list endpoint is unprojected and unpaginated, so it should gain both before it
+ * carries real attendee data.
+ */
 import { Router } from 'express';
 import { VolunteerController } from '../../controllers/volunteer.controller';
 import { validate } from '../../middleware/validate';

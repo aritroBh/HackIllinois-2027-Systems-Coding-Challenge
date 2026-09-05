@@ -1,3 +1,27 @@
+/**
+ * HackStop — a geofenced supply beacon that dispenses power-ups on a cooldown.
+ *
+ * Two gates protect a spin, and both matter:
+ *
+ *  - **Geofence.** The volunteer's coordinates must be within `geofenceRadiusMeters`
+ *    (75 m) of the beacon, by Haversine distance. This is what ties the reward to
+ *    actually walking to the location.
+ *  - **Cooldown.** `lastSpunUsers` maps volunteerId → last spin time, and a spin is
+ *    refused within `cooldownSeconds` (5 min).
+ *
+ * The cooldown is claimed with a single conditional update rather than read-then-write,
+ * so concurrent spins cannot both pass the check:
+ *
+ *   HackStop.findOneAndUpdate(
+ *     { _id, $or: [ { 'lastSpunUsers.<id>': { $exists: false } },
+ *                   { 'lastSpunUsers.<id>': { $lt: cutoff } } ] },
+ *     { $set: { 'lastSpunUsers.<id>': now }, $inc: { totalSpins: 1 } }
+ *   )
+ *
+ * Note the map key is the caller-supplied id string, so it must be normalised before
+ * use — differently-cased forms of one ObjectId would otherwise occupy separate keys
+ * and split the cooldown (see the audit's F1).
+ */
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IHackStop extends Document {

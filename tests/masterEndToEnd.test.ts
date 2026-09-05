@@ -182,7 +182,9 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     expect(headWaitlist).not.toBeNull();
 
     // Ada cancels her registration
-    const cancelRes = await request(app).delete(`/api/v1/registrations/${adaReg!._id}`);
+    const cancelRes = await request(app).delete(
+      `/api/v1/registrations/${adaReg!._id}?volunteerId=${volAda._id.toString()}`
+    );
     expect(cancelRes.status).toBe(200);
     expect(cancelRes.body.data.promoted).not.toBeNull();
     expect(cancelRes.body.data.promoted.volunteerId.toString()).toBe(headWaitlist!.volunteerId.toString());
@@ -266,16 +268,18 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     expect(dispatchRes.ticket.status).toBe(SOSTicketStatus.DISPATCHED);
     expect(dispatchRes.distanceMeters).toBeLessThan(100);
 
-    // Resolve SOS ticket and award Karma bounty
+    // Resolve SOS ticket and award Karma bounty (assignee-bound: only the
+    // dispatched volunteer may resolve — the old test resolved as a bystander).
+    const assigneeId = dispatchRes.ticket.assignedVolunteerId!.toString();
     const resolvedTicket = await SOSService.resolveTicket(
       ticket._id.toString(),
-      volAlan._id.toString()
+      assigneeId
     );
     expect(resolvedTicket.status).toBe(SOSTicketStatus.RESOLVED);
 
     // Double resolution must be rejected idempotently
     await expect(
-      SOSService.resolveTicket(ticket._id.toString(), volAlan._id.toString())
+      SOSService.resolveTicket(ticket._id.toString(), assigneeId)
     ).rejects.toThrow(/already resolved/i);
 
     // =========================================================================
@@ -346,7 +350,13 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     });
     expect(invItem?.quantity).toBe(1);
 
-    const useRes = await HackStopService.usePowerUp(volAda._id.toString(), spinRes.awardedPowerUp);
+    const useRes = await HackStopService.usePowerUp(
+      volAda._id.toString(),
+      spinRes.awardedPowerUp,
+      ['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD'].includes(spinRes.awardedPowerUp)
+        ? siebelGym._id.toString()
+        : undefined
+    );
     expect(useRes.remainingQuantity).toBe(0);
 
     const emptyInv = await PowerUpInventory.findOne({
@@ -357,7 +367,13 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
 
     // Attempting to consume again must fail
     await expect(
-      HackStopService.usePowerUp(volAda._id.toString(), spinRes.awardedPowerUp)
+      HackStopService.usePowerUp(
+        volAda._id.toString(),
+        spinRes.awardedPowerUp,
+        ['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD'].includes(spinRes.awardedPowerUp)
+          ? siebelGym._id.toString()
+          : undefined
+      )
     ).rejects.toThrow(/Insufficient inventory/i);
   }, 45000);
 });

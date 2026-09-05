@@ -53,7 +53,9 @@ describe('Autonomous FIFO Waitlist Cascade Engine', () => {
     expect(updatedShift?.waitlistCount).toBe(2);
 
     // 5. Vol1 cancels their confirmed registration
-    const cancelRes = await request(app).delete(`/api/v1/registrations/${reg1Id}`);
+    const cancelRes = await request(app).delete(
+      `/api/v1/registrations/${reg1Id}?volunteerId=${vol1._id.toString()}`
+    );
     expect(cancelRes.status).toBe(200);
     expect(cancelRes.body.data.promoted).toBeDefined();
 

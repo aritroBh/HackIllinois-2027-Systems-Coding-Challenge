@@ -1,3 +1,23 @@
+/**
+ * Demo data seeder.
+ *
+ * Builds a scenario that exercises the interesting paths rather than generic filler: a
+ * contested shift that is already at capacity with someone waiting, a 3:30 a.m. cleanup
+ * carrying a high surge multiplier, a pre-wired three-way trade ring (Alice wants Bob's
+ * shift, Bob wants Charlie's, Charlie wants Alice's) so cycle resolution has something to
+ * find, plus campus gyms and geofenced beacons.
+ *
+ * **This is destructive.** It deletes every collection before inserting. The guard below
+ * only refuses when `NODE_ENV === 'production'` without `FORCE_SEED=true`, so pointing
+ * `MONGODB_URI` at a shared development or staging database and running this will wipe
+ * it without prompting. Check the URI before you run it.
+ *
+ * Note the connection lifecycle: this script calls `connectDatabase()` itself. With no
+ * `MONGODB_URI` set that starts its *own* in-memory replica set, which is discarded when
+ * the process exits — so `npm run seed && npm run dev` leaves the server pointing at an
+ * empty database. Use `npm run demo` (`scripts/devSeeded.ts`), which shares one instance
+ * between seeding and serving, or set `MONGODB_URI` so both attach to the same database.
+ */
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { Volunteer, VolunteerRole, PrestigeTier } from '../models/volunteer.model';
@@ -5,13 +25,26 @@ import { Registration, RegistrationStatus } from '../models/registration.model';
 import { ShiftSwap, SwapStatus } from '../models/swap.model';
 import { Gym, Faction } from '../models/gym.model';
 import { HackStop } from '../models/hackstop.model';
+import { CheckIn } from '../models/checkin.model';
+import { SOSTicket } from '../models/sosTicket.model';
+import { PowerUpInventory } from '../models/powerup.model';
+import { IdempotencyRecord } from '../models/idempotency.model';
+import { ReservationLock } from '../models/reservationLock.model';
 import { HACKILLINOIS_VENUES } from '../common/utils/geo';
 
 export async function seedDatabase(): Promise<void> {
+  // ponytail: seed wipes every collection — refuse against a real database unless
+  // explicitly forced. An accidental `npm run seed` with MONGODB_URI set must not nuke prod.
+  if (process.env.NODE_ENV === 'production' && process.env.FORCE_SEED !== 'true') {
+    console.error('❌ Refusing to seed in production without FORCE_SEED=true (seed wipes all collections).');
+    process.exit(1);
+  }
   console.log('🌱 [SEED] Starting database hydration with HackIllinois scenarios...');
   await connectDatabase();
 
-  // Clear existing collections
+  // Clear existing collections (every collection, including attendance,
+  // SOS, inventory, and lock/idempotency state — stale check-in nonces or
+  // locks from a previous seed otherwise leak into the fresh dataset).
   await Promise.all([
     Shift.deleteMany({}),
     Volunteer.deleteMany({}),
@@ -19,6 +52,11 @@ export async function seedDatabase(): Promise<void> {
     ShiftSwap.deleteMany({}),
     Gym.deleteMany({}),
     HackStop.deleteMany({}),
+    CheckIn.deleteMany({}),
+    SOSTicket.deleteMany({}),
+    PowerUpInventory.deleteMany({}),
+    IdempotencyRecord.deleteMany({}),
+    ReservationLock.deleteMany({}),
   ]);
 
 
@@ -252,102 +290,96 @@ export async function seedDatabase(): Promise<void> {
     },
   ]);
 
-  // 5. Seed Campus Gyms (PokéShift Turf Wars)
-  await Gym.create([
-    {
-      name: 'Siebel Core Coliseum',
-      locationName: 'Siebel Center for CS',
-      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
-      controllingFaction: Faction.TEAM_KERNEL,
-      controlPoints: 1200,
-      maxControlPoints: 2000,
-      leaderVolunteerId: charlie._id,
-      leaderName: 'Charlie Patel (Team Kernel)',
-      level: 4,
-    },
-    {
-      name: 'ECEB Silicon Bastion',
-      locationName: 'ECE Building (ECEB)',
-      latitude: HACKILLINOIS_VENUES.ECEB_LOBBY.latitude,
-      longitude: HACKILLINOIS_VENUES.ECEB_LOBBY.longitude,
-      controllingFaction: Faction.TEAM_TENSOR,
-      controlPoints: 850,
-      maxControlPoints: 2000,
-      leaderVolunteerId: bob._id,
-      leaderName: 'Bob Martinez (Team Tensor)',
-      level: 3,
-    },
-    {
-      name: 'Kenney Thunderdome',
-      locationName: 'Kenney Gym Annex',
-      latitude: HACKILLINOIS_VENUES.KENNEY_GYM.latitude,
-      longitude: HACKILLINOIS_VENUES.KENNEY_GYM.longitude,
-      controllingFaction: Faction.TEAM_SILICON,
-      controlPoints: 950,
-      maxControlPoints: 2000,
-      leaderVolunteerId: alice._id,
-      leaderName: 'Alice Chen (Team Silicon)',
-      level: 3,
-    },
-  ]);
+  // 5. Seed Campus Territory Gyms (PokéShift Turf Wars)
+  //
+  // One stronghold per campus monument. These ids line up with the monuments
+  // in the 3D campus model (public/gl/uiuc-campus.json), so capturing a gym
+  // here recolours the matching landmark on the war-room map.
+  const LEADERS = [
+    { id: charlie._id, name: 'Charlie Patel' },
+    { id: bob._id, name: 'Bob Martinez' },
+    { id: alice._id, name: 'Alice Chen' },
+  ];
 
-  // 6. Seed HackStop Beacons
-  await HackStop.create([
-    {
-      beaconId: 'BEACON_SIEBEL_ATRIUM',
-      name: 'Siebel Cyber Fountain',
-      locationName: 'Siebel Center Atrium',
-      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+  const TERRITORIES: Array<{
+    name: string;
+    locationName: string;
+    venue: keyof typeof HACKILLINOIS_VENUES;
+    faction: Faction;
+    cp: number;
+    max: number;
+    level: number;
+  }> = [
+    { name: 'Siebel Core Coliseum', locationName: 'Siebel Center for CS', venue: 'SIEBEL_ATRIUM', faction: Faction.TEAM_KERNEL, cp: 1680, max: 2000, level: 5 },
+    { name: 'ECEB Silicon Bastion', locationName: 'ECE Building (ECEB)', venue: 'ECEB_LOBBY', faction: Faction.TEAM_TENSOR, cp: 1240, max: 2000, level: 4 },
+    { name: 'Kenney Thunderdome', locationName: 'Kenney Gym Annex', venue: 'KENNEY_GYM', faction: Faction.TEAM_SILICON, cp: 950, max: 2000, level: 3 },
+    { name: 'DCL Relay Keep', locationName: 'Digital Computer Laboratory', venue: 'DCL_BRIDGE', faction: Faction.TEAM_KERNEL, cp: 780, max: 2000, level: 3 },
+    { name: 'Grainger Archive Vault', locationName: 'Grainger Engineering Library', venue: 'GRAINGER_LIBRARY', faction: Faction.TEAM_KERNEL, cp: 1420, max: 2000, level: 4 },
+    { name: 'Beckman Deep Lab', locationName: 'Beckman Institute', venue: 'BECKMAN_INSTITUTE', faction: Faction.TEAM_TENSOR, cp: 1580, max: 2000, level: 5 },
+    { name: 'Alma Mater Shrine', locationName: 'Alma Mater Plaza', venue: 'ALMA_MATER', faction: Faction.NEUTRAL, cp: 500, max: 2500, level: 2 },
+    { name: 'Union Grand Hall', locationName: 'Illini Union', venue: 'ILLINI_UNION', faction: Faction.TEAM_SILICON, cp: 1310, max: 2000, level: 4 },
+    { name: 'Altgeld Chime Tower', locationName: 'Altgeld Hall', venue: 'ALTGELD_HALL', faction: Faction.TEAM_TENSOR, cp: 690, max: 2000, level: 3 },
+    { name: 'Foellinger Rotunda', locationName: 'Foellinger Auditorium', venue: 'FOELLINGER_AUDITORIUM', faction: Faction.TEAM_SILICON, cp: 1120, max: 2000, level: 4 },
+    { name: 'Main Library Stacks', locationName: 'Main Library', venue: 'MAIN_LIBRARY', faction: Faction.NEUTRAL, cp: 400, max: 2000, level: 2 },
+    { name: 'Krannert Stage Nexus', locationName: 'Krannert Center', venue: 'KRANNERT_CENTER', faction: Faction.TEAM_TENSOR, cp: 860, max: 2000, level: 3 },
+    { name: 'Memorial Stadium Bowl', locationName: 'Memorial Stadium', venue: 'MEMORIAL_STADIUM', faction: Faction.TEAM_SILICON, cp: 1940, max: 2500, level: 6 },
+    { name: 'State Farm Dome', locationName: 'State Farm Center', venue: 'STATE_FARM_CENTER', faction: Faction.TEAM_KERNEL, cp: 1050, max: 2500, level: 4 },
+  ];
+
+  await Gym.create(
+    TERRITORIES.map((t, i) => {
+      const leader = LEADERS[i % LEADERS.length];
+      const held = t.faction !== Faction.NEUTRAL;
+      return {
+        name: t.name,
+        locationName: t.locationName,
+        latitude: HACKILLINOIS_VENUES[t.venue].latitude,
+        longitude: HACKILLINOIS_VENUES[t.venue].longitude,
+        controllingFaction: t.faction,
+        controlPoints: t.cp,
+        maxControlPoints: t.max,
+        leaderVolunteerId: held ? leader.id : null,
+        leaderName: held ? `${leader.name} (${t.faction.replace('TEAM_', 'Team ')})` : 'Unclaimed',
+        level: t.level,
+      };
+    })
+  );
+
+  // 6. Seed HackStop Beacons across campus
+  const BEACONS: Array<{ id: string; name: string; where: string; venue: keyof typeof HACKILLINOIS_VENUES }> = [
+    { id: 'BEACON_SIEBEL_ATRIUM', name: 'Siebel Cyber Fountain', where: 'Siebel Center Atrium', venue: 'SIEBEL_ATRIUM' },
+    { id: 'BEACON_SIEBEL_BASEMENT', name: 'Basement Solder Relic', where: 'Siebel Center Basement', venue: 'SIEBEL_BASEMENT' },
+    { id: 'BEACON_ECEB_LOBBY', name: 'ECEB Tesla Coil Relay', where: 'ECEB Main Lobby', venue: 'ECEB_LOBBY' },
+    { id: 'BEACON_KENNEY_GYM', name: 'Kenney Arena Supply Pod', where: 'Kenney Gym Central', venue: 'KENNEY_GYM' },
+    { id: 'BEACON_DCL_BRIDGE', name: 'DCL Nexus Transceiver', where: 'DCL Bridge Walkway', venue: 'DCL_BRIDGE' },
+    { id: 'BEACON_GRAINGER', name: 'Grainger Reading Cache', where: 'Grainger Library Rotunda', venue: 'GRAINGER_LIBRARY' },
+    { id: 'BEACON_ALMA_MATER', name: 'Alma Mater Reliquary', where: 'Green & Wright', venue: 'ALMA_MATER' },
+    { id: 'BEACON_UNION', name: 'Union Courtyard Dispenser', where: 'Illini Union Courtyard', venue: 'ILLINI_UNION' },
+    { id: 'BEACON_ALTGELD', name: 'Altgeld Chime Resonator', where: 'Altgeld Hall Steps', venue: 'ALTGELD_HALL' },
+    { id: 'BEACON_FOELLINGER', name: 'Foellinger Colonnade Drop', where: 'Foellinger Portico', venue: 'FOELLINGER_AUDITORIUM' },
+    { id: 'BEACON_KRANNERT', name: 'Krannert Stage Door Crate', where: 'Krannert Terrace', venue: 'KRANNERT_CENTER' },
+    { id: 'BEACON_STADIUM', name: 'Stadium Tunnel Locker', where: 'Memorial Stadium Gate 4', venue: 'MEMORIAL_STADIUM' },
+  ];
+
+  await HackStop.create(
+    BEACONS.map((b) => ({
+      beaconId: b.id,
+      name: b.name,
+      locationName: b.where,
+      latitude: HACKILLINOIS_VENUES[b.venue].latitude,
+      longitude: HACKILLINOIS_VENUES[b.venue].longitude,
       cooldownSeconds: 300,
       geofenceRadiusMeters: 75,
-    },
-    {
-      beaconId: 'BEACON_SIEBEL_BASEMENT',
-      name: 'Basement Solder Relic',
-      locationName: 'Siebel Center Basement',
-      latitude: HACKILLINOIS_VENUES.SIEBEL_BASEMENT.latitude,
-      longitude: HACKILLINOIS_VENUES.SIEBEL_BASEMENT.longitude,
-      cooldownSeconds: 300,
-      geofenceRadiusMeters: 75,
-    },
-    {
-      beaconId: 'BEACON_ECEB_LOBBY',
-      name: 'ECEB Tesla Coil Relay',
-      locationName: 'ECEB Main Lobby',
-      latitude: HACKILLINOIS_VENUES.ECEB_LOBBY.latitude,
-      longitude: HACKILLINOIS_VENUES.ECEB_LOBBY.longitude,
-      cooldownSeconds: 300,
-      geofenceRadiusMeters: 75,
-    },
-    {
-      beaconId: 'BEACON_KENNEY_GYM',
-      name: 'Kenney Arena Supply Pod',
-      locationName: 'Kenney Gym Central',
-      latitude: HACKILLINOIS_VENUES.KENNEY_GYM.latitude,
-      longitude: HACKILLINOIS_VENUES.KENNEY_GYM.longitude,
-      cooldownSeconds: 300,
-      geofenceRadiusMeters: 75,
-    },
-    {
-      beaconId: 'BEACON_DCL_BRIDGE',
-      name: 'DCL Nexus Transceiver',
-      locationName: 'DCL Bridge Walkway',
-      latitude: HACKILLINOIS_VENUES.DCL_BRIDGE.latitude,
-      longitude: HACKILLINOIS_VENUES.DCL_BRIDGE.longitude,
-      cooldownSeconds: 300,
-      geofenceRadiusMeters: 75,
-    },
-  ]);
+    }))
+  );
 
   console.log('✅ [SEED COMPLETED] Seeded:');
   console.log(`   - 5 Volunteers (Alice, Bob, Charlie, Dana, Evan)`);
   console.log(`   - 5 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag)`);
   console.log(`   - 1 Contested Shift with 1 Waitlisted Candidate`);
   console.log(`   - 1 3-Way Circular Trade Demand Ring (Alice -> Bob -> Charlie -> Alice)`);
-  console.log(`   - 3 Campus Faction Gyms (Siebel, ECEB, Kenney)`);
-  console.log(`   - 5 Campus Supply HackStops with 75m Geofencing`);
+  console.log(`   - ${TERRITORIES.length} Campus Territory Gyms (Alma Mater, Foellinger, Altgeld, Memorial Stadium, ...)`);
+  console.log(`   - ${BEACONS.length} Campus Supply HackStops with 75m Geofencing`);
 }
 
 if (require.main === module) {

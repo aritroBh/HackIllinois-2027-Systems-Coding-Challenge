@@ -1,4 +1,17 @@
+/**
+ * Hacker SOS contracts.
+ *
+ * `coordinates` is required on ticket creation because dispatch ranks responders by
+ * Haversine distance to this point — a ticket without a position cannot be routed
+ * meaningfully. (The service carries a Siebel-Atrium fallback for direct internal calls;
+ * this schema is what stops it being reachable over HTTP.)
+ *
+ * `karmaBounty` has a floor of 50 so incidents are worth answering. It has no ceiling,
+ * which means a caller can mint an arbitrarily large reward — cap it before this is
+ * exposed to attendees.
+ */
 import { z } from 'zod';
+import { objectId } from './common';
 import { SOSTicketCategory, SOSTicketUrgency, SOSTicketStatus } from '../models/sosTicket.model';
 
 export const createSOSTicketSchema = z.object({
@@ -19,16 +32,16 @@ export const createSOSTicketSchema = z.object({
 
 export const dispatchSOSTicketSchema = z.object({
   params: z.object({
-    id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Ticket ObjectId'),
+    id: objectId('Invalid Ticket ObjectId'),
   }),
 });
 
 export const resolveSOSTicketSchema = z.object({
   params: z.object({
-    id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Ticket ObjectId'),
+    id: objectId('Invalid Ticket ObjectId'),
   }),
   body: z.object({
-    volunteerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid Volunteer ObjectId').optional(),
+    volunteerId: objectId('Invalid Volunteer ObjectId'),
   }),
 });
 

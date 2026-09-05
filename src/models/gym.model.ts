@@ -1,5 +1,35 @@
+/**
+ * Gym — a campus control point in the PokéShift territory layer.
+ *
+ * The gamification exists to solve a real scheduling problem: unglamorous shifts (3 a.m.
+ * cleanup, basement trash) go unfilled. Tying territory to physical presence gives
+ * volunteers a reason to be somewhere unpopular.
+ *
+ * Contention here is genuine — several volunteers can attack the same gym in the same
+ * second — so mutations use **optimistic concurrency control**, not a read-then-write:
+ *
+ *   Gym.findOneAndUpdate({ _id, version }, { ...change, $inc: { version: 1 } })
+ *
+ * A `null` result means another writer won and the version moved; the caller re-reads
+ * and retries, bounded by MAX_RETRIES. This is why `version` exists and why it must be
+ * included in the filter of every gym mutation that reads, computes, then writes.
+ *
+ * The power-up control-point boost in `hackstop.service` is the one write that does not
+ * carry `version` in its filter, and that is correct rather than an exception: it is an
+ * aggregation-pipeline update whose arithmetic (`$min` of `$add`) evaluates against the
+ * document's own current values, so it has nothing stale to lose. It bumps `version`
+ * anyway, so a battle CAS in flight re-reads instead of acting on a pre-boost snapshot.
+ * Do not "fix" it into a CAS retry loop — that would reintroduce the read-modify-write
+ * this replaced.
+ */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/**
+ * The three competing factions, plus NEUTRAL for an unclaimed control point.
+ *
+ * A volunteer's allegiance is bound on their first non-neutral battle and locked
+ * thereafter, so one account cannot reinforce as an ally and attack as a rival.
+ */
 export enum Faction {
   TEAM_KERNEL = 'TEAM_KERNEL',   // #00F2FE (Systems & Infrastructure - Siebel HQ)
   TEAM_TENSOR = 'TEAM_TENSOR',   // #FF007F (AI & ML - ECEB)
