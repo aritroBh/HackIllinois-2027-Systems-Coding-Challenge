@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Avatar creator · Nexus OS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root { --navy: #13294b; --ground: #0b1220; --panel: #111b2e; --orange: #ff5f05; --cream: #f4ede1; --line: #243450; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--ground); color: var(--cream); font-family: 'VT323', monospace; font-size: 20px; padding: 28px; min-height: 100vh; }
+    h1 { font-family: 'Silkscreen', monospace; font-size: 20px; color: var(--orange); letter-spacing: 0.02em; margin-bottom: 6px; }
+    h2 { font-family: 'Silkscreen', monospace; font-size: 11px; color: #8e9090; text-transform: uppercase; margin-bottom: 10px; }
+    .sub { color: #8e9090; margin-bottom: 24px; }
+    .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+    .panel { background: var(--panel); border: 2px solid var(--line); padding: 16px; box-shadow: 4px 4px 0 #000; }
+    canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; }
+    video { width: 220px; height: 220px; object-fit: cover; background: #000; transform: scaleX(-1); display: block; }
+    button, label.btn, select {
+      font-family: 'Silkscreen', monospace; font-size: 11px; text-transform: uppercase; cursor: pointer;
+      background: var(--orange); color: #0b0d14; border: 2px solid #0b0d14; padding: 9px 14px; box-shadow: 3px 3px 0 #000;
+    }
+    button:active, label.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #000; }
+    button.ghost, label.btn.ghost, select { background: var(--navy); color: var(--cream); }
+    button[aria-pressed="true"] { background: var(--cream); color: #0b0d14; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+    .drop { border: 2px dashed #31456a; padding: 14px; text-align: center; color: #8e9090; margin-top: 12px; }
+    .drop.over { border-color: var(--orange); color: var(--cream); }
+    .pal { display: flex; flex-direction: column; gap: 8px; align-items: center; cursor: pointer; }
+    .pal .name { font-family: 'Silkscreen', monospace; font-size: 10px; color: #8e9090; }
+    .pal.picked .name { color: var(--orange); }
+    .pal.picked canvas { outline: 3px solid var(--orange); outline-offset: 3px; }
+    .swatches { display: flex; gap: 2px; }
+    .swatches i { width: 12px; height: 12px; display: block; }
+    #status { color: var(--orange); min-height: 26px; margin-top: 8px; }
+    .count { font-family: 'Silkscreen', monospace; font-size: 48px; color: var(--orange); text-align: center; min-height: 60px; }
+    .reveal { display: flex; gap: 20px; align-items: flex-end; }
+    .tag { font-family: 'Silkscreen', monospace; font-size: 10px; color: var(--orange); }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+  <h1>THAT'S YOU!</h1>
+  <p class="sub">Camera or a photo → 32×32 pixel avatar → your walk cycle for the campus map.</p>
+
+  <div class="row">
+    <section class="panel">
+      <h2>1 · Capture</h2>
+      <video id="video" playsinline muted></video>
+      <div class="count" id="count"></div>
+      <div class="controls">
+        <button id="cam">📷 Take photo</button>
+        <label class="btn ghost" for="file">Upload photo</label>
+        <input type="file" id="file" accept="image/*">
+        <button class="ghost" id="synth">Synthetic face</button>
+      </div>
+      <div class="drop" id="drop">…or drop an image here</div>
+      <div id="status"></div>
+    </section>
+
+    <section class="panel">
+      <h2>2 · Pick a palette</h2>
+      <div class="row" id="palettes"></div>
+      <div class="controls">
+        <button class="ghost" id="dither" aria-pressed="true">Dither: on</button>
+        <label>Face bias <input type="range" id="bias" min="0" max="1" step="0.05" value="0.3"></label>
+        <label>Saturation <input type="range" id="sat" min="0.8" max="1.8" step="0.05" value="1.25"></label>
+      </div>
+    </section>
+
+  </div>
+  <div class="row" style="margin-top: 20px;">
+    <section class="panel" style="flex: 1;">
+      <h2>3 · Suit up</h2>
+      <div class="controls">
+        <select id="faction">
+          <option value="TEAM_KERNEL">Team Kernel</option>
+          <option value="TEAM_TENSOR">Team Tensor</option>
+          <option value="TEAM_SILICON">Team Silicon</option>
+          <option value="NEUTRAL">Unaffiliated</option>
+        </select>
+        <button class="ghost" id="cap" aria-pressed="true">Cap: on</button>
+      </div>
+      <div class="reveal" style="margin-top: 14px;">
+        <div>
+          <div class="tag">SHEET ×3</div>
+          <canvas id="sheet" width="384" height="144"></canvas>
+        </div>
+        <div>
+          <div class="tag">WALK ×6</div>
+          <canvas id="walk" width="192" height="288"></canvas>
+        </div>
+        <div>
+          <div class="tag">IN-GAME ×2</div>
+          <canvas id="tiny" width="64" height="96"></canvas>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="save">Save avatar</button>
+        <button class="ghost" id="load">Load saved</button>
+        <span id="saved" class="tag"></span>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="/dashboard/avatar-demo.js"></script>
+</body>
+</html>

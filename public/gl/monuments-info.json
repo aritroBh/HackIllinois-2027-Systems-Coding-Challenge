@@ -1,0 +1,161 @@
+{
+  "_source": "Wikipedia article summaries fetched 2026-09-05; entries marked approximate:true are from general knowledge where no article was available.",
+  "alma-mater": {
+    "title": "Alma Mater",
+    "year": 1929,
+    "architect": "Lorado Taft (sculptor)",
+    "style": "Bronze figurative sculpture",
+    "facts": [
+      "Three figures: Alma Mater with arms outstretched before a throne; Learning and Labor clasp hands behind her.",
+      "About 13 ft of bronze weighing 10,000 lb, on a granite base at Green and Wright.",
+      "Restored 2012–2014, when laser cleaning returned it from green patina to bronze."
+    ]
+  },
+  "illini-union": {
+    "title": "Illini Union",
+    "year": 1941,
+    "architect": "Colonial Revival",
+    "style": "Colonial Revival",
+    "facts": [
+      "The campus home for student organisations, at the north head of the Main Quad.",
+      "Red brick with a white portico, dormers and an octagonal clock cupola.",
+      "Built with a Public Works Administration grant plus a loan repaid through student fees."
+    ]
+  },
+  "foellinger": {
+    "title": "Foellinger Auditorium",
+    "year": 1907,
+    "architect": "Clarence H. Blackall",
+    "style": "Beaux-Arts",
+    "facts": [
+      "A 120 ft diameter circular hall of brick and Indiana limestone on a granite foundation.",
+      "The dome was re-clad in copper in the 1983–85 renovation and carries 396 embedded lights.",
+      "Closes the south end of the Main Quad, facing the Illini Union."
+    ]
+  },
+  "altgeld": {
+    "title": "Altgeld Hall",
+    "year": 1897,
+    "architect": "Nathan Ricker & James McLaren White",
+    "style": "Richardsonian Romanesque",
+    "facts": [
+      "The 132 ft chime tower holds 15 bells weighing 7.5 tons, played from a wooden chimestand.",
+      "Grey rusticated stone with a red tile pyramid roof and four corner turrets.",
+      "Home to the only gargoyle on campus."
+    ]
+  },
+  "siebel": {
+    "title": "Siebel Center for Computer Science",
+    "year": 2004,
+    "architect": "Bohlin Cywinski Jackson",
+    "style": "Contemporary glass and brick",
+    "facts": [
+      "225,000 sq ft across four floors, funded in part by alumnus Thomas Siebel.",
+      "Built as a ‘computing habitat’: sensor-driven locks, proximity awareness and intelligent building systems.",
+      "Glass curtain wall with a copper-clad drum on the north end."
+    ]
+  },
+  "eceb": {
+    "title": "Electrical & Computer Engineering Building",
+    "year": 2014,
+    "architect": "SmithGroupJJR",
+    "style": "Net-zero contemporary",
+    "approximate": true,
+    "facts": [
+      "Designed as a net-zero-energy building, with a rooftop solar array and terracotta rain-screen fins.",
+      "Glass-fronted lobby and second-floor balcony over the atrium.",
+      "Anchors the north edge of the engineering campus on Wright Street."
+    ]
+  },
+  "grainger": {
+    "title": "Grainger Engineering Library",
+    "year": 1994,
+    "architect": "Woollen, Molzan and Partners",
+    "style": "Postmodern",
+    "facts": [
+      "Five levels and over 92,000 sq ft; the main reading gallery seats 1,254.",
+      "A concave brick facade with a curved skylight runs along the Bardeen Quad.",
+      "Its 1994 ribbon-cutting was entirely digital — a touchscreen triggered on-screen fireworks."
+    ]
+  },
+  "dcl": {
+    "title": "Digital Computer Laboratory",
+    "year": 1957,
+    "architect": "University Architect’s Office",
+    "style": "Mid-century institutional",
+    "approximate": true,
+    "facts": [
+      "Housed ILLIAC, among the first computers built at a university.",
+      "Connected to Siebel by a bridge walkway.",
+      "Still home to Computer Science teaching space and the CS loading dock."
+    ]
+  },
+  "kenney": {
+    "title": "Kenney Gym",
+    "year": 1902,
+    "architect": "Nathan Ricker",
+    "style": "Brick armoury-gymnasium",
+    "approximate": true,
+    "facts": [
+      "The old men’s gymnasium on Springfield Avenue, now used for events and recreation.",
+      "One of the largest open floors on the engineering side of campus.",
+      "The HackIllinois main hall and bleacher seating."
+    ]
+  },
+  "stadium": {
+    "title": "Memorial Stadium",
+    "year": 1923,
+    "architect": "Holabird & Roche",
+    "style": "Classical Revival colonnades",
+    "facts": [
+      "Nearly 200 stone columns line the east and west facades, each engraved with the name of a fallen Illinois student or alumnus.",
+      "A U-shaped bowl open to the south, with double-decked sideline stands; capacity 60,670.",
+      "The playing field is Zuppke Field, with Illini-orange end zones."
+    ]
+  },
+  "state-farm": {
+    "title": "State Farm Center",
+    "year": 1963,
+    "architect": "Max Abramovitz",
+    "style": "Edge-supported concrete dome",
+    "facts": [
+      "Opened as Assembly Hall; the largest dome structure in North America until the Astrodome in 1965.",
+      "The folded concrete roof is held by 614 miles of quarter-inch steel wire wrapped around its base.",
+      "15,544 permanent seats; the warm light under the rim is the concourse."
+    ]
+  },
+  "main-library": {
+    "title": "Main Library",
+    "year": 1926,
+    "architect": "Charles A. Platt",
+    "style": "Georgian Revival",
+    "approximate": true,
+    "facts": [
+      "Anchor of one of the largest public university library collections in the world.",
+      "Red brick and limestone in the same Georgian language as the Union.",
+      "Sits south of the Main Quad on Gregory Drive."
+    ]
+  },
+  "beckman": {
+    "title": "Beckman Institute",
+    "year": 1989,
+    "architect": "Smith, Hinchman & Grylls",
+    "style": "Postmodern limestone and glass",
+    "facts": [
+      "Founded with a $40M gift from Arnold and Mabel Beckman plus $10M from the state.",
+      "One of the first research centres in the world dedicated to interdisciplinary science.",
+      "Roughly 200 faculty and 500 graduate students work across intelligent systems, imaging and molecular science."
+    ]
+  },
+  "krannert": {
+    "title": "Krannert Center for the Performing Arts",
+    "year": 1969,
+    "architect": "Max Abramovitz",
+    "style": "Brutalist brick and glass",
+    "facts": [
+      "Four venues: Foellinger Great Hall (2,078 seats), Tryon Festival Theatre, Colwell Playhouse and the Studio Theatre.",
+      "The lobby floor is Thai teak that cost $1M; the walls are Carrara marble.",
+      "The Great Hall has no parallel surfaces, so instrumental music needs no amplification."
+    ]
+  }
+}

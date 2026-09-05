@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>materials — swatch grid</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1220; color: #c6c7c6; font: 12px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+  #c { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  #labels { position: fixed; inset: 0; pointer-events: none; }
+  .lbl { position: absolute; transform: translate(-50%, 0); padding: 2px 6px; background: rgba(11,18,32,.75); border: 1px solid #243450; border-radius: 4px; white-space: nowrap; font-size: 11px; }
+  .lbl i { color: #8e9090; font-style: normal; }
+  #hud { position: fixed; top: 10px; left: 10px; background: rgba(11,18,32,.8); border: 1px solid #243450; border-radius: 6px; padding: 8px 10px; }
+  #hud b { color: #ff5f05; }
+  kbd { border: 1px solid #31456a; border-radius: 3px; padding: 0 4px; color: #eef0f2; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<div id="hud">
+  <b>materials.js</b> swatch grid — drag to orbit, wheel to zoom<br>
+  <kbd>1</kbd> close-up &nbsp; <kbd>2</kbd> mid &nbsp; <kbd>3</kbd> campus-wide (LOD check) &nbsp; <kbd>N</kbd> night/day
+  <div id="stat"></div>
+</div>
+<script type="module" src="/dashboard/gl/materials-demo.js"></script>
+</body>
+</html>
