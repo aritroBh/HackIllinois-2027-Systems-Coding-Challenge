@@ -574,6 +574,9 @@ export class RegistrationService {
     }
 
     let promotedRegistration: IRegistration | null = null;
+    // Whether the held seat has already been handed back, so the error path cannot
+    // release it twice. See the catch block at the end of the cascade.
+    let seatReleased = false;
 
     if (wasConfirmed) {
       // 2. Hold the seat while the cascade runs.
@@ -677,11 +680,18 @@ export class RegistrationService {
           await Shift.findByIdAndUpdate(shiftId, {
             $inc: { filledSlots: -1, version: 1 },
           });
+          seatReleased = true;
         }
       } catch (cascadeError) {
         // Release the held seat before propagating. Without this, a failure mid-cascade
         // strands the seat: counted against capacity, occupied by nobody, forever.
-        if (!promotedRegistration) {
+        //
+        // `seatReleased` guards the narrow case where the release below is itself what
+        // threw: a write can reach the server and still reject on the client (a socket
+        // dropped after the update applied), and re-releasing there would decrement a
+        // second time and under-count the shift — the mirror of the bug this whole block
+        // exists to prevent.
+        if (!promotedRegistration && !seatReleased) {
           await Shift.findByIdAndUpdate(shiftId, {
             $inc: { filledSlots: -1, version: 1 },
           }).catch(() => undefined);
