@@ -1,7 +1,8 @@
 import { Types } from 'mongoose';
 import { SOSTicket, ISOSTicket, SOSTicketStatus, SOSTicketCategory, SOSTicketUrgency } from '../models/sosTicket.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
-import { Volunteer, computePrestigeTier } from '../models/volunteer.model';
+import { Volunteer, IVolunteer, computePrestigeTier } from '../models/volunteer.model';
+import { IShift } from '../models/shift.model';
 import { GeoEngine, HACKILLINOIS_VENUES, IGeoCoordinates } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
 import { eventHub } from '../common/sse/eventHub';
@@ -94,12 +95,12 @@ export class SOSService {
     }
 
     // 2. Score candidates by skill match and distance
-    let bestCandidate: any = null;
+    let bestCandidate: IVolunteer | null = null;
     let shortestDistance = Infinity;
 
     for (const reg of activeRegs) {
-      const vol = reg.volunteerId as any;
-      const shift = reg.shiftId as any;
+      const vol = reg.volunteerId as unknown as IVolunteer;
+      const shift = reg.shiftId as unknown as IShift;
       if (!vol) continue;
 
       // Check skill if required
@@ -118,7 +119,7 @@ export class SOSService {
     }
 
     if (!bestCandidate) {
-      bestCandidate = (activeRegs[0].volunteerId as any);
+      bestCandidate = activeRegs[0].volunteerId as unknown as IVolunteer;
       shortestDistance = 25.0;
     }
 

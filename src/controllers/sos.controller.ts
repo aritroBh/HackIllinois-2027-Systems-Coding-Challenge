@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { SOSService } from '../services/sos.service';
+import { SOSTicketStatus } from '../models/sosTicket.model';
 
 export class SOSController {
   public static async createTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -31,7 +32,7 @@ export class SOSController {
 
   public static async listTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const tickets = await SOSService.listTickets(req.query.status as any);
+      const tickets = await SOSService.listTickets(req.query.status as SOSTicketStatus | undefined);
       res.status(200).json({ success: true, data: tickets });
     } catch (error) {
       next(error);

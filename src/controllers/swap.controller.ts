@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { SwapService } from '../services/swap.service';
+import { SwapStatus } from '../models/swap.model';
 
 export class SwapController {
   public static async createSwapRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -31,7 +32,7 @@ export class SwapController {
 
   public static async listSwaps(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const swaps = await SwapService.listSwaps(req.query.status as any);
+      const swaps = await SwapService.listSwaps(req.query.status as SwapStatus | undefined);
       res.status(200).json({ success: true, data: swaps });
     } catch (error) {
       next(error);
