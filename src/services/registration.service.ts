@@ -574,9 +574,10 @@ export class RegistrationService {
     }
 
     let promotedRegistration: IRegistration | null = null;
-    // Whether the held seat has already been handed back, so the error path cannot
-    // release it twice. See the catch block at the end of the cascade.
-    let seatReleased = false;
+    // Set if the cascade fails. The seat is released after the try/catch rather than
+    // inside it, so the release runs exactly once on every path; this carries the
+    // original failure across that release so the caller still sees it.
+    let cascadeError: unknown = null;
 
     if (wasConfirmed) {
       // 2. Hold the seat while the cascade runs.
@@ -676,28 +677,40 @@ export class RegistrationService {
         // No eligible candidate — the queue was empty or everyone in it has a conflict.
         // Only now does the seat genuinely become free, and releasing it here means it was
         // never briefly claimable while a promotion was still in flight.
-        if (!promotedRegistration) {
+      } catch (err) {
+        // Do not release here. Recording the failure and falling through means the
+        // release below is reached by exactly one path, whether the cascade succeeded
+        // or threw.
+        cascadeError = err;
+      }
+
+      // Release the held seat — exactly once, on every path.
+      //
+      // This sits outside the try deliberately. An earlier version released inside it and
+      // released again in the catch, guarded by a flag set after the await. That flag
+      // cannot work: `$inc` is not idempotent, and a write can apply on the server and
+      // still reject on the client (a socket dropped after the update landed). Setting
+      // the flag after the await double-decrements in exactly that case; setting it
+      // before strands the seat when the write genuinely never applied. There is no
+      // correct placement for it, because the question "did that write apply?" is not
+      // answerable from a rejected promise.
+      //
+      // Hoisting the release removes the question. One decision, one write, no retry —
+      // at-most-once semantics, which for a counter guarding capacity is the right side
+      // to err on: a stranded seat under-fills one shift, a double release oversells it.
+      if (!promotedRegistration) {
+        try {
           await Shift.findByIdAndUpdate(shiftId, {
             $inc: { filledSlots: -1, version: 1 },
           });
-          seatReleased = true;
+        } catch (releaseError) {
+          // A cascade failure is the more useful error to surface; only report this one
+          // when the cascade itself was fine and handing the seat back is what broke.
+          if (!cascadeError) throw releaseError;
         }
-      } catch (cascadeError) {
-        // Release the held seat before propagating. Without this, a failure mid-cascade
-        // strands the seat: counted against capacity, occupied by nobody, forever.
-        //
-        // `seatReleased` guards the narrow case where the release below is itself what
-        // threw: a write can reach the server and still reject on the client (a socket
-        // dropped after the update applied), and re-releasing there would decrement a
-        // second time and under-count the shift — the mirror of the bug this whole block
-        // exists to prevent.
-        if (!promotedRegistration && !seatReleased) {
-          await Shift.findByIdAndUpdate(shiftId, {
-            $inc: { filledSlots: -1, version: 1 },
-          }).catch(() => undefined);
-        }
-        throw cascadeError;
       }
+
+      if (cascadeError) throw cascadeError;
     } else if (oldWaitlistPos !== null && oldWaitlistPos !== undefined) {
       // Cancelled record was waitlisted -> decrement waitlist count and reindex
       await Shift.findByIdAndUpdate(shiftId, {
