@@ -16,6 +16,9 @@ During a massive 1,000+ attendee hackathon across the Siebel Center, ECEB, and K
 
 **WaveShift Nexus** solves every one of these operational failure modes with mathematical invariants, database-level atomic primitives, and a real-time reactive War Room.
 
+> [!TIP]
+> **Detailed Engineering Specification & 12 System Diagrams**: See [ARCHITECTURE.md](file:///Users/aritro/Downloads/HackIllinois%202027%20Systems%20Coding%20Challenge/ARCHITECTURE.md) for full Mermaid topologies, ERDs, WiredTiger CAS sequence flows, Tarjan cycle discovery, and threat models.
+
 ---
 
 ## 🚀 Key Systems Innovations
