@@ -29,6 +29,9 @@
           <span style="color: var(--text-dim)">TOTAL KARMA:</span>
           <span id="hud-total-karma" style="color: var(--amber-surge)">--</span>
         </div>
+        <button id="adonix-sync-btn" class="btn btn-secondary" onclick="triggerAdonixSync()" style="width: auto; padding: 4px 10px; font-size: 0.75rem; border-color: var(--cyan); color: var(--cyan);">
+          🔄 SYNC ADONIX API
+        </button>
         <button id="sound-toggle-btn" class="btn btn-secondary" style="width: auto; padding: 4px 10px; font-size: 0.75rem;">
           🔊 AUDIO: ON
         </button>
@@ -39,6 +42,7 @@
   <!-- Navigation Tabs -->
   <nav class="tabs-nav">
     <button class="tab-btn active" onclick="switchTab('tab-shifts')">📡 Shift Radar</button>
+    <button class="tab-btn" onclick="switchTab('tab-radar-sos')">🗺️ Venue Radar & Hacker SOS</button>
     <button class="tab-btn" onclick="switchTab('tab-chaos')">💣 Chaos & Concurrency</button>
     <button class="tab-btn" onclick="switchTab('tab-qr')">📱 Dynamic QR Check-In</button>
     <button class="tab-btn" onclick="switchTab('tab-leaderboard')">🏆 Karma Leaderboard</button>
@@ -54,6 +58,68 @@
       </div>
       <div id="shifts-grid" class="shifts-grid">
         <!-- Shift Cards Dynamically Injected -->
+      </div>
+    </section>
+
+    <!-- TAB: Venue Radar & Hacker SOS -->
+    <section id="tab-radar-sos" class="tab-content">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <h2 style="font-size: 1.25rem; display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--hazard-coral); animation: pulse-dot 1.5s infinite;">●</span>
+            UIUC Campus Venue Radar & Spatial SOS Dispatch
+          </h2>
+          <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: 4px;">
+            Real-time Haversine nearest-neighbor dispatch routing volunteers across Siebel Center, ECEB, Kenney Gym & DCL.
+          </p>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-danger" onclick="simulateHackerSOS()" style="width: auto; padding: 6px 14px; font-size: 0.82rem;">
+            🚨 Simulate Hacker SOS
+          </button>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-top: 10px;">
+        <!-- Canvas Radar Map -->
+        <div style="background: rgba(10, 20, 35, 0.85); border: 1px solid rgba(0, 243, 255, 0.25); border-radius: 8px; padding: 14px; position: relative; overflow: hidden;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--cyan); margin-bottom: 8px; font-family: monospace;">
+            <span>SCAN FREQ: 2.4GHz // GEOFENCE R: 75m</span>
+            <span id="radar-status-text">RADAR: TRACKING ON-DUTY VOLUNTEERS</span>
+          </div>
+          <canvas id="campus-radar-canvas" width="650" height="380" style="width: 100%; border-radius: 6px; background: radial-gradient(circle at center, #071526 0%, #030811 100%); cursor: crosshair; display: block;"></canvas>
+          <div style="display: flex; gap: 16px; margin-top: 10px; font-size: 0.75rem; color: var(--text-dim);">
+            <span><span style="color: var(--cyan);">■</span> Siebel Center</span>
+            <span><span style="color: #9d4edd;">■</span> ECEB Lobby</span>
+            <span><span style="color: #ff9e00;">■</span> Kenney Gym</span>
+            <span><span style="color: var(--neon-green);">●</span> On-Duty Volunteer</span>
+            <span><span style="color: var(--hazard-coral);">▲</span> Hacker SOS Beacon</span>
+          </div>
+        </div>
+
+        <!-- SOS Incident Feed -->
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="background: rgba(15, 25, 45, 0.7); border: 1px solid rgba(255, 94, 94, 0.3); border-radius: 8px; padding: 14px; flex: 1; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <h3 style="font-size: 0.95rem; color: var(--hazard-coral); text-transform: uppercase; letter-spacing: 0.05em;">
+                ⚡ Open Hacker Distress Tickets (<span id="sos-open-count">0</span>)
+              </h3>
+              <button class="btn btn-secondary" onclick="loadSOSTickets()" style="width: auto; padding: 2px 8px; font-size: 0.7rem;">
+                REFRESH
+              </button>
+            </div>
+            <div id="sos-tickets-container" style="flex: 1; overflow-y: auto; max-height: 260px; display: flex; flex-direction: column; gap: 10px;">
+              <div style="color: var(--text-dim); font-size: 0.8rem; font-style: italic; text-align: center; padding: 20px 0;">
+                No open emergency calls. All UIUC venues green.
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Dispatch Console Log -->
+          <div class="log-terminal" id="sos-terminal" style="font-size: 0.75rem; height: 110px; overflow-y: auto;">
+[TELEMETRY] Spatial Geodesic Dispatch Engine Online. Awaiting tickets...
+          </div>
+        </div>
       </div>
     </section>
 

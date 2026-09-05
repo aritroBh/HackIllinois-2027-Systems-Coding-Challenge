@@ -137,6 +137,21 @@ When demonstrating WaveShift Nexus during your interview:
 
 ---
 
+### 7. 🗺️ Spatial Geofencing & Haversine Distance Engine
+- **Sub-Millimeter Geodesic Metric:** Calculates great-circle Haversine distances across Siebel Center, ECEB, Kenney Gym, and DCL ($R = 6,371,000\text{m}$) with clamping to prevent precision underflow.
+- **75-Meter Check-In Geofence:** Protects against remote or proxy check-in fraud by enforcing that dynamic QR attendance verification must occur within a 75-meter boundary of the shift's designated campus venue.
+
+### 8. 🚨 Hacker SOS Emergency Dispatch Engine
+- **Hacker Distress Beacons:** Hackers at hardware tables or auditoriums create emergency tickets with urgency levels (`LOW` $\to$ `CRITICAL`) and categories (e.g. `HARDWARE_MALFUNCTION`, `POWER_OUTAGE`, `SPILL_CLEANUP`).
+- **Spatial Nearest-Neighbor Dispatch:** Algorithms filter on-duty checked-in volunteers by required skill certification, calculate Haversine distance to the distress location, and dispatch the closest volunteer with estimated walking ETAs.
+- **Volunteer Karma Bounties:** Resolving SOS incidents awards volunteers immediate Karma points and unlocks the exclusive `FIRST_RESPONDER` prestige badge.
+
+### 9. 🔄 Official HackIllinois Adonix API Synchronization
+- **Live Event Ingestion Client:** Integrates with official HackIllinois backend (`https://adonix.hackillinois.org/event/`) to ingest real-time hackathon schedules.
+- **Volunteer Shift Synthesis:** Maps event categories, durations, and sponsor requirements directly into volunteer shift capacities and base karma allocations using idempotent `$setOnInsert` upserts.
+
+---
+
 ## 📊 Automated Test Coverage Matrix
 
 | Test Suite | Focus Area | Assertions | Status |
@@ -147,6 +162,8 @@ When demonstrating WaveShift Nexus during your interview:
 | `swaps.test.ts` | P2P & Multi-Party Trades | Bilateral atomic swap + Tarjan 3-way circular trade resolution | ✅ PASS |
 | `checkin.test.ts` | Dynamic QR Security | HMAC token verification + clock drift tolerance + replay rejection | ✅ PASS |
 | `shifts.test.ts` | Catalog & Surge Pricing | Zod time ordering validation + Circadian/Scarcity surge math | ✅ PASS |
+| `geoSos.test.ts` | Spatial Geofence & SOS Dispatch | Haversine distance + 75m geofence rejection + nearest SOS dispatch + Adonix sync | ✅ PASS |
+
 
 ---
 

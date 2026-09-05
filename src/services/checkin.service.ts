@@ -5,9 +5,11 @@ import { Shift } from '../models/shift.model';
 import { Volunteer, computePrestigeTier } from '../models/volunteer.model';
 import { DynamicQrTokenEngine, IVerificationResult } from '../common/utils/crypto';
 import { SurgePricingEngine } from '../common/utils/surgePricing';
+import { GeoEngine, HACKILLINOIS_VENUES } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
+
 
 export class CheckInService {
   /**
@@ -39,11 +41,16 @@ export class CheckInService {
   }
 
   /**
-   * Verifies an incoming dynamic QR code and marks attendance.
+   * Verifies an incoming dynamic QR code and marks attendance with optional geofence verification.
    */
-  public static async verifyAndCheckIn(token: string, scannerId = 'DESK_SCANNER_MAIN'): Promise<{
+  public static async verifyAndCheckIn(
+    token: string,
+    scannerId = 'DESK_SCANNER_MAIN',
+    userCoordinates?: { latitude: number; longitude: number }
+  ): Promise<{
     checkIn: ICheckIn;
     verification: IVerificationResult;
+    geofenceStatus?: { distanceMeters: number; maxAllowedMeters: number; passed: boolean };
   }> {
     const verification = DynamicQrTokenEngine.verifyToken(token);
 
@@ -70,11 +77,32 @@ export class CheckInService {
       throw ApiError.notFound('Confirmed registration for this shift not found.', ErrorCode.REGISTRATION_NOT_FOUND);
     }
 
+    const shift = await Shift.findById(shiftId);
+    if (!shift) {
+      throw ApiError.notFound('Shift not found.');
+    }
+
+    let geofenceStatus: { distanceMeters: number; maxAllowedMeters: number; passed: boolean } | undefined;
+    if (userCoordinates) {
+      const venueCoord = HACKILLINOIS_VENUES[shift.location] || HACKILLINOIS_VENUES.SIEBEL_ATRIUM;
+      const geoCheck = GeoEngine.isWithinGeofence(userCoordinates, venueCoord, 75);
+      geofenceStatus = {
+        distanceMeters: geoCheck.distanceMeters,
+        maxAllowedMeters: geoCheck.maxRadiusMeters,
+        passed: geoCheck.allowed,
+      };
+      if (!geoCheck.allowed) {
+        throw ApiError.forbidden(
+          `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: 75m). Move closer to the check-in terminal.`
+        );
+      }
+    }
+
     // Check if already checked in
     if (reg.status === RegistrationStatus.CHECKED_IN) {
       const existingCheckIn = await CheckIn.findOne({ registrationId: reg._id });
       if (existingCheckIn) {
-        return { checkIn: existingCheckIn, verification };
+        return { checkIn: existingCheckIn, verification, geofenceStatus };
       }
     }
 
@@ -95,10 +123,7 @@ export class CheckInService {
     reg.checkInTime = new Date();
     await reg.save();
 
-    const [vol, shift] = await Promise.all([
-      Volunteer.findById(volunteerId),
-      Shift.findById(shiftId),
-    ]);
+    const vol = await Volunteer.findById(volunteerId);
 
     eventHub.broadcast({
       type: 'VOLUNTEER_CHECKED_IN',
@@ -106,12 +131,13 @@ export class CheckInService {
         volunteerId,
         volunteerName: vol ? vol.name : 'Volunteer',
         shiftId,
-        shiftTitle: shift ? shift.title : 'Shift',
+        shiftTitle: shift.title,
         checkInTime: checkIn.checkInTime,
+        geofenceVerified: Boolean(userCoordinates),
       },
     });
 
-    return { checkIn, verification };
+    return { checkIn, verification, geofenceStatus };
   }
 
   /**

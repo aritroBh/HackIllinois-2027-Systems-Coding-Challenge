@@ -105,6 +105,58 @@ class WaveShiftAudioEngine {
     osc.start();
     osc.stop(this.ctx.currentTime + 0.36);
   }
+
+  /**
+   * High-urgency dual-frequency siren on Hacker SOS broadcast
+   */
+  playSosAlarm() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+    osc.frequency.setValueAtTime(600, this.ctx.currentTime + 0.12);
+    osc.frequency.setValueAtTime(800, this.ctx.currentTime + 0.24);
+
+    gain.gain.setValueAtTime(0.22, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.45);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.46);
+  }
+
+  /**
+   * Sci-fi telemetry ping when nearest volunteer is dispatched
+   */
+  playDispatchChime() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, this.ctx.currentTime); // C5
+    osc.frequency.exponentialRampToValueAtTime(1046.50, this.ctx.currentTime + 0.15); // C6
+
+    gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.31);
+  }
 }
 
 window.soundEngine = new WaveShiftAudioEngine();
+

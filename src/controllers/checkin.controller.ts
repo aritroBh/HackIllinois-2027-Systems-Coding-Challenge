@@ -13,7 +13,11 @@ export class CheckInController {
 
   public static async verifyCheckIn(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await CheckInService.verifyAndCheckIn(req.body.token, req.body.scannerId);
+      const result = await CheckInService.verifyAndCheckIn(
+        req.body.token,
+        req.body.scannerId,
+        req.body.coordinates
+      );
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);

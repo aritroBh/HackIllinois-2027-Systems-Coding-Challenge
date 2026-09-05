@@ -45,6 +45,8 @@ async function init() {
   await fetchShifts();
   await fetchStats();
   await fetchLeaderboard();
+  await loadSOSTickets();
+  initCampusRadar();
   connectSSE();
 }
 
@@ -194,6 +196,34 @@ function connectSSE() {
   eventSource.addEventListener('VOLUNTEER_CHECKED_OUT', () => {
     fetchStats();
     fetchLeaderboard();
+  });
+
+  eventSource.addEventListener('SOS_TICKET_CREATED', (e) => {
+    const payload = JSON.parse(e.data);
+    if (window.soundEngine) window.soundEngine.playSosAlarm();
+    logSosTerminal(`🚨 [SOS BROADCAST] ${payload.hackerName} reported ${payload.category} at ${payload.tableLocation} (+${payload.karmaBounty} Karma)`);
+    loadSOSTickets();
+  });
+
+  eventSource.addEventListener('SOS_TICKET_DISPATCHED', (e) => {
+    const payload = JSON.parse(e.data);
+    if (window.soundEngine) window.soundEngine.playDispatchChime();
+    logSosTerminal(`⚡ [DISPATCH COMMITTED] ${payload.volunteerName} en route to ${payload.hackerName} (${payload.distanceMeters}m away)`);
+    loadSOSTickets();
+  });
+
+  eventSource.addEventListener('SOS_TICKET_RESOLVED', (e) => {
+    const payload = JSON.parse(e.data);
+    logSosTerminal(`✅ [INCIDENT RESOLVED] Ticket ${payload.ticketId.slice(-6)} resolved by ${payload.volunteerName}. +${payload.karmaAwarded} Karma awarded!`);
+    loadSOSTickets();
+    fetchLeaderboard();
+  });
+
+  eventSource.addEventListener('ADONIX_EVENTS_SYNCED', (e) => {
+    const payload = JSON.parse(e.data);
+    logChaosTerminal(`🔄 [ADONIX SYNC] ${payload.syncedCount} official HackIllinois shifts synchronized live!`);
+    fetchShifts();
+    fetchStats();
   });
 }
 
@@ -466,5 +496,344 @@ async function quickSignUp(shiftId) {
   }
 }
 
+// ----------------------------------------------------
+// UIUC Campus Venue Radar Map & Hacker SOS Dispatch Engine
+// ----------------------------------------------------
+let radarAngle = 0;
+let radarAnimationId = null;
+let openSosTicketsCache = [];
+
+const CAMPUS_VENUES = {
+  SIEBEL: { name: 'Siebel Center (HQ)', x: 325, y: 190, color: '#00f3ff', tag: 'HQ' },
+  ECEB: { name: 'ECEB Lobby', x: 170, y: 110, color: '#9d4edd', tag: 'LABS' },
+  KENNEY: { name: 'Kenney Gym', x: 130, y: 290, color: '#ff9e00', tag: 'ARENA' },
+  DCL: { name: 'DCL Hub', x: 235, y: 220, color: '#00e5ff', tag: 'BRIDGE' },
+};
+
+function initCampusRadar() {
+  const canvas = document.getElementById('campus-radar-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  function renderRadar() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const centerX = CAMPUS_VENUES.SIEBEL.x;
+    const centerY = CAMPUS_VENUES.SIEBEL.y;
+
+    // 1. Grid Background
+    ctx.strokeStyle = 'rgba(0, 243, 255, 0.05)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < canvas.width; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = 0; y < canvas.height; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+
+    // 2. Geofence Range Rings (25m, 50m, 75m boundary, 150m perimeter)
+    const rings = [
+      { r: 40, label: '25m' },
+      { r: 85, label: '50m' },
+      { r: 130, label: '75m GEOFENCE' },
+      { r: 200, label: '150m PERIMETER' },
+    ];
+
+    rings.forEach((ring, idx) => {
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, ring.r, 0, Math.PI * 2);
+      ctx.strokeStyle = idx === 2 ? 'rgba(0, 243, 255, 0.45)' : 'rgba(0, 243, 255, 0.12)';
+      ctx.setLineDash(idx === 2 ? [4, 4] : []);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(0, 243, 255, 0.45)';
+      ctx.font = '9px monospace';
+      ctx.fillText(ring.label, centerX + ring.r + 4, centerY - 4);
+    });
+
+    // 3. Sweeping Sonar Beam
+    radarAngle += 0.025;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.arc(centerX, centerY, 220, radarAngle - 0.35, radarAngle);
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 220);
+    grad.addColorStop(0, 'rgba(0, 243, 255, 0.35)');
+    grad.addColorStop(1, 'rgba(0, 243, 255, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(centerX + 220 * Math.cos(radarAngle), centerY + 220 * Math.sin(radarAngle));
+    ctx.strokeStyle = 'rgba(0, 243, 255, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+
+    // 4. Draw Campus Venues
+    for (const [key, venue] of Object.entries(CAMPUS_VENUES)) {
+      if (key !== 'SIEBEL') {
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(venue.x, venue.y);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.setLineDash([2, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.fillStyle = venue.color;
+      ctx.fillRect(venue.x - 7, venue.y - 7, 14, 14);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(venue.x - 7, venue.y - 7, 14, 14);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px monospace';
+      ctx.fillText(venue.name, venue.x + 12, venue.y + 4);
+    }
+
+    // 5. Draw Active On-Duty Volunteers
+    const nowTime = Date.now();
+    shiftsCache.forEach((shift, idx) => {
+      if (shift.filledSlots > 0) {
+        const venue = shift.location.includes('ECEB') ? CAMPUS_VENUES.ECEB :
+                      shift.location.includes('Kenney') ? CAMPUS_VENUES.KENNEY :
+                      shift.location.includes('DCL') ? CAMPUS_VENUES.DCL : CAMPUS_VENUES.SIEBEL;
+
+        for (let s = 0; s < shift.filledSlots; s++) {
+          const orbitAngle = (nowTime / 3500) + (idx * 1.5) + (s * (Math.PI * 2 / Math.max(1, shift.filledSlots)));
+          const orbitRadius = 18 + (s * 6);
+          const vx = venue.x + Math.cos(orbitAngle) * orbitRadius;
+          const vy = venue.y + Math.sin(orbitAngle) * orbitRadius;
+
+          ctx.beginPath();
+          ctx.arc(vx, vy, 4.5, 0, Math.PI * 2);
+          ctx.fillStyle = '#00ff88';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(vx, vy, 7 + Math.sin(nowTime / 180) * 2, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(0, 255, 136, 0.4)';
+          ctx.stroke();
+        }
+      }
+    });
+
+    // 6. Draw Open SOS Distress Beacons
+    openSosTicketsCache.forEach((ticket) => {
+      const isBasement = ticket.tableLocation.toLowerCase().includes('basement');
+      const isECEB = ticket.tableLocation.toLowerCase().includes('eceb');
+      const isKenney = ticket.tableLocation.toLowerCase().includes('kenney');
+
+      const targetX = isECEB ? CAMPUS_VENUES.ECEB.x + 20 :
+                      isKenney ? CAMPUS_VENUES.KENNEY.x - 20 :
+                      isBasement ? CAMPUS_VENUES.SIEBEL.x - 30 : CAMPUS_VENUES.SIEBEL.x + 35;
+      const targetY = isECEB ? CAMPUS_VENUES.ECEB.y + 25 :
+                      isKenney ? CAMPUS_VENUES.KENNEY.y - 15 :
+                      isBasement ? CAMPUS_VENUES.SIEBEL.y + 35 : CAMPUS_VENUES.SIEBEL.y - 30;
+
+      const pulseSize = 10 + (Math.sin(nowTime / 140) + 1) * 8;
+      ctx.beginPath();
+      ctx.arc(targetX, targetY, pulseSize, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 94, 94, 0.25)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 94, 94, 0.85)';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(targetX, targetY - 10);
+      ctx.lineTo(targetX + 9, targetY + 6);
+      ctx.lineTo(targetX - 9, targetY + 6);
+      ctx.closePath();
+      ctx.fillStyle = '#ff5e5e';
+      ctx.fill();
+
+      ctx.fillStyle = '#ff9e9e';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`SOS: ${ticket.hackerName} (${ticket.category.slice(0, 10)})`, targetX + 12, targetY - 2);
+    });
+
+    radarAnimationId = requestAnimationFrame(renderRadar);
+  }
+
+  if (radarAnimationId) cancelAnimationFrame(radarAnimationId);
+  renderRadar();
+}
+
+async function loadSOSTickets() {
+  try {
+    const res = await fetch('/api/v1/sos/tickets?status=OPEN');
+    const json = await res.json();
+    if (json.success) {
+      openSosTicketsCache = json.data;
+      renderSOSTicketsList(openSosTicketsCache);
+    }
+  } catch (err) {
+    console.error('Failed to load SOS tickets:', err);
+  }
+}
+
+function renderSOSTicketsList(tickets) {
+  const container = document.getElementById('sos-tickets-container');
+  const countEl = document.getElementById('sos-open-count');
+  if (countEl) countEl.innerText = tickets.length;
+  if (!container) return;
+
+  if (tickets.length === 0) {
+    container.innerHTML = `
+      <div style="color: var(--text-dim); font-size: 0.8rem; font-style: italic; text-align: center; padding: 25px 0;">
+        No active distress calls. All UIUC venues nominal.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = tickets.map((t) => `
+    <div style="background: rgba(255, 94, 94, 0.08); border: 1px solid rgba(255, 94, 94, 0.35); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: #ff5e5e; font-weight: bold; font-size: 0.85rem;">🚨 ${t.hackerName} @ ${t.tableLocation}</span>
+        <span style="font-size: 0.7rem; background: rgba(255, 94, 94, 0.25); color: #ff5e5e; padding: 2px 6px; border-radius: 4px; font-weight: 700;">
+          ${t.urgency}
+        </span>
+      </div>
+      <div style="font-size: 0.78rem; color: #ddd;">
+        ${t.description}
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.72rem; color: var(--text-dim);">
+        <span>Category: <strong style="color: var(--cyan);">${t.category}</strong></span>
+        <span style="color: var(--amber-surge);">+${t.karmaBounty} Karma Bounty</span>
+      </div>
+      <button class="btn btn-danger" onclick="dispatchNearestVolunteer('${t._id}')" style="margin-top: 6px; font-size: 0.75rem; padding: 6px 10px; font-weight: 700; letter-spacing: 0.05em;">
+        ⚡ DISPATCH NEAREST VOLUNTEER
+      </button>
+    </div>
+  `).join('');
+}
+
+async function simulateHackerSOS() {
+  const samples = [
+    {
+      hackerName: 'Alex (Hardware Hacker)',
+      tableLocation: 'Table 42 (Siebel Basement)',
+      category: 'HARDWARE_MALFUNCTION',
+      description: 'Soldering station shorted out, need backup ESP32 microcontroller!',
+      urgency: 'HIGH',
+      requiredSkill: 'HARDWARE',
+      karmaBounty: 250,
+    },
+    {
+      hackerName: 'Devin (Hacker Team 19)',
+      tableLocation: 'ECEB 2nd Floor Balcony',
+      category: 'POWER_OUTAGE',
+      description: 'Power strip blew a fuse, 4 laptops down with 15% battery!',
+      urgency: 'CRITICAL',
+      requiredSkill: 'EVENT_LOGISTICS',
+      karmaBounty: 200,
+    },
+    {
+      hackerName: 'Maya (Team Quantum)',
+      tableLocation: 'Kenney Gym bleachers',
+      category: 'SPILL_CLEANUP',
+      description: 'Massive Boba tea spill under Table 108 near power cables!',
+      urgency: 'MEDIUM',
+      requiredSkill: 'EVENT_LOGISTICS',
+      karmaBounty: 150,
+    },
+  ];
+
+  const pick = samples[Math.floor(Math.random() * samples.length)];
+
+  try {
+    const res = await fetch('/api/v1/sos/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pick),
+    });
+    const json = await res.json();
+    if (json.success) {
+      logSosTerminal(`🚨 [SIMULATED SOS GENERATED] Ticket ID: ${json.data._id.slice(-6)} created at ${pick.tableLocation}`);
+      loadSOSTickets();
+    }
+  } catch (err) {
+    logSosTerminal(`Error simulating SOS: ${err.message}`);
+  }
+}
+
+async function dispatchNearestVolunteer(ticketId) {
+  logSosTerminal(`🔍 [COMPUTING HAVERSINE DISTANCE] Querying on-duty volunteers for ticket ${ticketId.slice(-6)}...`);
+  try {
+    const res = await fetch(`/api/v1/sos/tickets/${ticketId}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const json = await res.json();
+    if (json.success) {
+      const vol = json.data.dispatchedVolunteer;
+      const dist = json.data.distanceMeters.toFixed(1);
+      const eta = Math.max(1, Math.ceil(json.data.distanceMeters / 80));
+
+      logSosTerminal(`✅ [DISPATCH CONFIRMED] Selected: ${vol.name} (${dist}m away). Estimated walking ETA: ${eta} min.`);
+      if (window.soundEngine) window.soundEngine.playDispatchChime();
+      loadSOSTickets();
+    } else {
+      logSosTerminal(`❌ Dispatch failed: ${json.message}`);
+    }
+  } catch (err) {
+    logSosTerminal(`Dispatch error: ${err.message}`);
+  }
+}
+
+async function triggerAdonixSync() {
+  const btn = document.getElementById('adonix-sync-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '⏳ SYNCING...';
+  }
+
+  logChaosTerminal('🔄 [ADONIX API] Synchronizing official schedule from https://adonix.hackillinois.org/event/...');
+
+  try {
+    const res = await fetch('/api/v1/adonix/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const json = await res.json();
+    if (json.success) {
+      logChaosTerminal(`✅ [ADONIX SYNC SUCCESS] ${json.data.syncedCount} shifts ingested/updated from official HackIllinois API.`);
+      if (window.soundEngine) window.soundEngine.playCascadeChime();
+      fetchShifts();
+      fetchStats();
+    } else {
+      logChaosTerminal(`⚠️ Adonix sync note: ${json.message}`);
+    }
+  } catch (err) {
+    logChaosTerminal(`Adonix sync error: ${err.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '🔄 SYNC ADONIX API';
+    }
+  }
+}
+
+function logSosTerminal(msg) {
+  const term = document.getElementById('sos-terminal');
+  if (!term) return;
+  const time = new Date().toLocaleTimeString();
+  term.innerHTML = `[${time}] ${msg}\n` + term.innerHTML;
+}
+
 // Bootstrap
 window.addEventListener('DOMContentLoaded', init);
+
