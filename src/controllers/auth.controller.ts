@@ -194,6 +194,20 @@ export class AuthController {
     }
   }
 
+  /** Seeded accounts for the demo picker (non-production only; mounted next to dev-login). */
+  public static async devAccounts(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const accounts = await Volunteer.find({}, 'name role kind').sort({ createdAt: 1 }).limit(50).lean();
+      const rows = accounts
+        .map((a) => ({ id: String(a._id), name: a.name, role: a.role, kind: a.kind }))
+        .sort((a, b) => (ROLE_RANK[b.role] ?? 0) - (ROLE_RANK[a.role] ?? 0));
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).json({ success: true, data: rows });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /** Whether dev-login is mounted at all is decided at router construction (see auth.routes). */
   public static devLoginAvailable(): boolean {
     return env.NODE_ENV !== 'production';

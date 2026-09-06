@@ -232,12 +232,28 @@
     try { history.replaceState(null, '', location.pathname + location.search); } catch { /* opaque origin */ }
   }
 
-  /** `npm run demo`: sign in as the first volunteer when the server allows it. */
+  const ROLE_RANK = { HACKER: 0, VOLUNTEER: 0, SHIFT_LEAD: 1, ORGANIZER: 2, ADMIN: 3 };
+
+  /**
+   * `npm run demo`: sign in as the highest-ranked seeded account (the ORGANIZER
+   * "Nexus Ops"), so every war-room tool passes its role gate. Reads the
+   * non-production dev-accounts list; falls back to the volunteer directory.
+   */
+  session.pickDemoAccount = async function pickDemoAccount() {
+    let rows = null;
+    try { rows = (await api(`${API}/auth/dev-accounts`)).data; } catch (err) { if (err.status !== 404) throw err; }
+    if (!Array.isArray(rows)) {
+      const { data } = await api(`${API}/volunteers`);
+      rows = (Array.isArray(data) ? data : []).map((v) => ({ id: v._id, name: v.name, role: v.role, kind: v.kind }));
+    }
+    rows.sort((a, b) => (ROLE_RANK[b.role] ?? 0) - (ROLE_RANK[a.role] ?? 0));
+    return rows[0] || null;
+  };
+
   async function devAutoLogin() {
-    const { data } = await api(`${API}/volunteers`);
-    const first = Array.isArray(data) ? data[0] : null;
-    if (!first?._id) throw new ApiError('No volunteers seeded', { code: 'NO_VOLUNTEERS' });
-    await api(EXCHANGE.dev.path, { method: 'POST', body: { accountId: first._id } });
+    const first = await session.pickDemoAccount();
+    if (!first?.id) throw new ApiError('No volunteers seeded', { code: 'NO_VOLUNTEERS' });
+    await api(EXCHANGE.dev.path, { method: 'POST', body: { accountId: first.id } });
     return session.refresh();
   }
 

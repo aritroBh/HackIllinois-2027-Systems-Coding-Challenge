@@ -21,12 +21,15 @@
  */
 
 import {
-  m4, hexRGB, program, mesh, framebuffer, disposeFramebuffer, mergeStatic,
+  m4, hexRGB, mergeStatic,
   boxGeometry, octahedronGeometry, coneGeometry, ringGeometry, quadGeometry,
   planeGeometry, prismGeometry, domeGeometry, bowlGeometry, spireGeometry,
   extrudePolygon, polygonGeometry, ribbonGeometry, dashedRibbonGeometry,
-} from './glx.js';
+} from './glx-geometry.js';
+import { program, mesh, framebuffer, disposeFramebuffer, instancedMesh, drawInstanced } from './glx-gl.js';
 import { MATERIAL_GLSL, MATERIALS } from './materials.js';
+import { createTileManager } from './tiles.js';
+import { bakeTile, treeTemplate, lampTemplate } from './tile-bake.js';
 
 /* ------------------------------------------------------------------ *
  * Palette — Illini Blue #13294B, Illini Orange #FF5F05
@@ -296,7 +299,7 @@ in vec3 vN, vW, vC;
 in float vE, vTint;
 in vec2 vX;
 flat in int vMat;
-uniform float uTime, uSweep, uWindows;
+uniform float uTime, uSweep, uWindows, uSweepK;
 ${FOG_GLSL}
 ${MATERIAL_GLSL}
 out vec4 frag;
@@ -353,9 +356,35 @@ void main() {
   // The radar sweep grazes the city, briefly lighting whatever it crosses.
   float ang = atan(vW.z, vW.x);
   float delta = mod(uSweep - ang, 6.28318);
-  col += vec3(0.25, 0.55, 0.80) * alb * pow(clamp(1.0 - delta / 0.85, 0.0, 1.0), 3.0) * 2.2;
+  col += vec3(0.25, 0.55, 0.80) * alb * pow(clamp(1.0 - delta / 0.85, 0.0, 1.0), 3.0) * 2.2 * uSweepK;
 
   frag = vec4(mix(col, uFogColor, fogAmount(vW)), 1.0);
+}`;
+
+/**
+ * Instanced variant of STATIC_VS: the template (an elm, a lamp) is placed per
+ * instance from a vec4 row [x, z, scale, tone]. Trees across the whole campus
+ * become one draw call instead of a 19 MB merged mesh.
+ */
+const INST_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec3 aCol;
+layout(location=3) in float aEmis;
+layout(location=4) in vec2 aMatTint;
+layout(location=5) in vec2 aExtra;
+layout(location=6) in vec4 aInst;      // x, z, scale, tone
+uniform mat4 uProj, uView;
+out vec3 vN, vW, vC;
+out float vE, vTint;
+out vec2 vX;
+flat out int vMat;
+void main() {
+  vec3 p = vec3(aPos.x * aInst.z + aInst.x, aPos.y * aInst.z, aPos.z * aInst.z + aInst.y);
+  vW = p; vN = aNrm; vC = aCol * aInst.w; vE = aEmis;
+  vMat = int(aMatTint.x + 0.5); vTint = aMatTint.y * aInst.w; vX = aExtra;
+  gl_Position = uProj * uView * vec4(p, 1.0);
 }`;
 
 const GROUND_VS = `#version 300 es
@@ -570,6 +599,7 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   const progScene = program(gl, SCENE_VS, SCENE_FS);
   const progStatic = program(gl, STATIC_VS, STATIC_FS);
+  const progInst = program(gl, INST_VS, STATIC_FS);
   const progGround = program(gl, GROUND_VS, GROUND_FS);
   const progSky = program(gl, POST_VS, SKY_FS);
   const progBright = program(gl, POST_VS, BRIGHT_FS);
@@ -606,6 +636,24 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   const monumentMeshes = new Map();
   let staticMesh = null, decalMesh = null, greenMesh = null;
+
+  /* ----------------------------- tiles + quality ------------------------ */
+
+  let tiles = null, treeInst = null, lampInst = null, instVersion = -1, instAt = 0;
+  const bakeOpts = { vscale: VSCALE };
+  const LEVEL_NAMES = ['low', 'med', 'high'];
+  const quality = { tier: 'auto', level: 2, dprCap: 2, bloomW: 480, windows: true, treeDist: Infinity, sweepK: 1, ema: 16, lastUp: 0, reduced: false };
+  function applyLevel(level) {
+    quality.level = level;
+    quality.dprCap = level === 0 ? 1 : level === 1 ? 1.5 : 2;
+    quality.windows = level > 0;
+    quality.treeDist = level === 0 ? 150 : level === 1 ? 400 : Infinity;
+    quality.bloomW = level === 0 ? 320 : 480;
+    W = 0; H = 0; // force resize() to rebuild the targets at the new DPR/bloom size
+    instVersion = -1;
+  }
+  const frameStats = { tris: 0, tilesDrawn: 0, draws: 0 };
+  let probeRun = null;
 
   /* -------------------------------- player ------------------------------ */
 
@@ -754,7 +802,7 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   // Metric uniforms for materials.js: set once, never change. World units are
   // 10 m; height carries the renderer's vertical exaggeration.
-  for (const prog of [progStatic, progScene]) {
+  for (const prog of [progStatic, progInst, progScene]) {
     prog.use();
     gl.uniform1f(prog.u.uMetersPerUnit, 10.0);
     gl.uniform1f(prog.u.uVScale, VSCALE);
@@ -767,7 +815,7 @@ export function createCampusRenderer(canvas, opts = {}) {
   let W = 0, H = 0;
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, quality.dprCap);
     const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (w === W && h === H) return;
@@ -778,8 +826,11 @@ export function createCampusRenderer(canvas, opts = {}) {
     disposeFramebuffer(gl, bloomA);
     disposeFramebuffer(gl, bloomB);
     sceneFB = framebuffer(gl, W, H, { depth: true });
-    const bw = Math.max(1, (W / BLOOM_DIV) | 0);
-    const bh = Math.max(1, (H / BLOOM_DIV) | 0);
+    // Bloom is capped at a fixed width (≤ 480 px) so its eight passes cost the
+    // same on a 4K laptop as on a phone.
+    const bScale = Math.min(1 / BLOOM_DIV, quality.bloomW / W);
+    const bw = Math.max(1, (W * bScale) | 0);
+    const bh = Math.max(1, (H * bScale) | 0);
     bloomA = framebuffer(gl, bw, bh);
     bloomB = framebuffer(gl, bw, bh);
   }
@@ -997,6 +1048,134 @@ export function createCampusRenderer(canvas, opts = {}) {
       const hh = mo.kind === 'statue' ? mo.h * VSCALE : Math.max(mo.h * VSCALE, 2.4);
       monumentMeshes.set(mo.id, build(extrudePolygon(mo.poly, hh)));
     }
+  }
+
+  /* ------------------------------ tiled campus -------------------------- */
+
+  const buildStaticRanged = (baked) => ({ ...buildStatic(baked), ranges: baked.ranges });
+
+  function uploadTile(baked) {
+    return {
+      solid: baked.solid ? buildStaticRanged(baked.solid) : null,
+      decal: baked.decal ? buildStatic(baked.decal) : null,
+    };
+  }
+  function disposeTile(meshes) { disposeMesh(meshes.solid); disposeMesh(meshes.decal); }
+
+  /** Minimap frame from the index's core bbox; tiles paint themselves in as they arrive. */
+  function initMinimapFromIndex(index) {
+    const [lat0, lng0] = index.meta.origin;
+    const mpu = index.meta.metersPerUnit || 10;
+    const mLat = 111320, mLng = 111320 * Math.cos((lat0 * Math.PI) / 180);
+    const [s, w, n, e] = index.meta.coreBbox || index.meta.bbox;
+    const x0 = ((w - lng0) * mLng) / mpu, x1 = ((e - lng0) * mLng) / mpu;
+    const z0 = -((n - lat0) * mLat) / mpu, z1 = -((s - lat0) * mLat) / mpu;
+    miniBox = { x0, z0, x1, z1, w: x1 - x0, h: z1 - z0 };
+    const size = 320;
+    const c = document.createElement('canvas'); c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#0b1220'; ctx.fillRect(0, 0, size, size);
+    const sc = size / Math.max(miniBox.w, miniBox.h);
+    Object.assign(miniBox, { s: sc, size, ox: (size - miniBox.w * sc) / 2, oz: (size - miniBox.h * sc) / 2 });
+    miniBase = c;
+  }
+  function paintTileOnMinimap(tile) {
+    if (!miniBase || !miniBox) return;
+    const ctx = miniBase.getContext('2d');
+    const { x0, z0, s: sc, ox, oz } = miniBox;
+    const path = (pts) => { ctx.beginPath(); pts.forEach(([x, z], i) => i ? ctx.lineTo((x - x0) * sc + ox, (z - z0) * sc + oz) : ctx.moveTo((x - x0) * sc + ox, (z - z0) * sc + oz)); };
+    ctx.fillStyle = '#12301e';
+    for (const l of tile.lawns || []) { path(l.p); ctx.fill(); }
+    ctx.strokeStyle = '#1f2d47'; ctx.lineWidth = 1;
+    for (const r of tile.roads || []) { if (!r.m) continue; path(r.p); ctx.stroke(); }
+    ctx.fillStyle = '#3d4d70';
+    for (const b of tile.buildings || []) { path(b.p); ctx.fill(); }
+  }
+
+  function initTiled(index, url) {
+    disposeMesh(staticMesh); disposeMesh(decalMesh); disposeMesh(greenMesh);
+    staticMesh = decalMesh = greenMesh = null;
+    monumentMeshes.forEach(disposeMesh);
+    monumentMeshes.clear();
+    if (tiles) tiles.destroy();
+    const baseUrl = url.replace(/\/index\.json(\?.*)?$/, '');
+    const useWorker = !/[?&]worker=0/.test(location.search) && !opts.noWorker;
+    tiles = createTileManager({
+      index, baseUrl, useWorker,
+      bake: bakeTile, upload: uploadTile, dispose: disposeTile,
+      onTile: (tile) => paintTileOnMinimap(tile),
+    });
+    initMinimapFromIndex(index);
+    // Trees and lamps: one instanced template each, instances rebuilt when the resident set changes.
+    const instAttrs = [{ loc: 6, size: 4 }];
+    const mk = (tpl) => instancedMesh(gl, [
+      { loc: 0, size: 3, data: tpl.positions }, { loc: 1, size: 3, data: tpl.normals }, { loc: 2, size: 3, data: tpl.colors },
+      { loc: 3, size: 1, data: tpl.emissives }, { loc: 4, size: 2, data: tpl.matTint }, { loc: 5, size: 2, data: tpl.extras },
+    ], tpl.indices, instAttrs);
+    if (!treeInst) treeInst = mk(treeTemplate());
+    if (!lampInst) lampInst = mk(lampTemplate());
+    instVersion = -1;
+    for (const mo of index.monuments) {
+      if (mo.poly.length < 3) continue;
+      const hh = mo.kind === 'statue' ? mo.h * VSCALE : Math.max(mo.h * VSCALE, 2.4);
+      monumentMeshes.set(mo.id, build(extrudePolygon(mo.poly, hh)));
+    }
+  }
+
+  function setStaticUniforms(prog, proj, view, t, sweep, fogNear, fogFar) {
+    prog.use();
+    gl.uniformMatrix4fv(prog.u.uProj, false, proj);
+    gl.uniformMatrix4fv(prog.u.uView, false, view);
+    gl.uniform1f(prog.u.uTime, t);
+    gl.uniform1f(prog.u.uSweep, sweep);
+    gl.uniform1f(prog.u.uSweepK, quality.sweepK);
+    setFog(prog, fogNear, fogFar);
+  }
+
+  function drawTiles(proj, view, t, sweep, fogNear, fogFar, now) {
+    tiles.update({ target: [cam.cx, cam.cz], player: player.active ? [player.x, player.z] : null, now, opts: bakeOpts });
+    const selected = tiles.select(viewProj, [cam.cx, cam.cz]);
+    frameStats.tilesDrawn = selected.length;
+    frameStats.tris = tiles.stats.tris;
+    let draws = 0;
+
+    setStaticUniforms(progStatic, proj, view, t, sweep, fogNear, fogFar);
+    gl.disable(gl.CULL_FACE);
+    gl.uniform1f(progStatic.u.uWindows, 0);
+    for (const s of selected) {
+      const d = s.resident.meshes.decal;
+      if (!d) continue;
+      gl.bindVertexArray(d.vao);
+      gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0);
+      draws++;
+    }
+    gl.enable(gl.CULL_FACE);
+    gl.uniform1f(progStatic.u.uWindows, quality.windows ? 1 : 0);
+    for (const s of selected) {
+      const m = s.resident.meshes.solid;
+      if (!m) continue;
+      const range = m.ranges[s.lod];
+      if (!range || !range.count) continue;
+      gl.bindVertexArray(m.vao);
+      gl.drawElements(gl.TRIANGLES, range.count, gl.UNSIGNED_INT, range.first * 4);
+      draws++;
+    }
+
+    // Greenery instances follow the resident set (not the frustum: the GPU culls
+    // cheaply); on the low/med tiers they are re-filtered by distance every 250 ms.
+    const filtered = quality.treeDist < Infinity;
+    if (tiles.version !== instVersion || (filtered && now - instAt > 250)) {
+      const all = [...tiles.resident.values()].map((r) => ({ resident: r, lod: r.lod }));
+      const inst = tiles.instances(all, { treeMaxDist: quality.treeDist, target: [cam.cx, cam.cz] });
+      treeInst.setInstances(inst.trees, inst.trees.length / 4);
+      lampInst.setInstances(inst.lamps.length ? (() => { const rows = new Float32Array((inst.lamps.length / 2) * 4); for (let i = 0, j = 0; i < inst.lamps.length; i += 2, j += 4) { rows[j] = inst.lamps[i]; rows[j + 1] = inst.lamps[i + 1]; rows[j + 2] = 1; rows[j + 3] = 1; } return rows; })() : new Float32Array(0), inst.lamps.length / 2);
+      instVersion = tiles.version; instAt = now;
+    }
+    setStaticUniforms(progInst, proj, view, t, sweep, fogNear, fogFar);
+    gl.uniform1f(progInst.u.uWindows, 0);
+    drawInstanced(gl, treeInst); draws++;
+    drawInstanced(gl, lampInst); draws++;
+    frameStats.draws = draws;
   }
 
   /* ------------------------------ draw utils ---------------------------- */
@@ -1496,6 +1675,7 @@ export function createCampusRenderer(canvas, opts = {}) {
       gl.uniformMatrix4fv(progStatic.u.uView, false, view);
       gl.uniform1f(progStatic.u.uTime, t);
       gl.uniform1f(progStatic.u.uSweep, sweep);
+      gl.uniform1f(progStatic.u.uSweepK, quality.sweepK);
       setFog(progStatic, fogNear, fogFar);
 
       gl.uniform1f(progStatic.u.uWindows, 0);
@@ -1503,7 +1683,7 @@ export function createCampusRenderer(canvas, opts = {}) {
       gl.drawElements(gl.TRIANGLES, decalMesh.count, gl.UNSIGNED_INT, 0);
 
       gl.enable(gl.CULL_FACE);
-      gl.uniform1f(progStatic.u.uWindows, 1);
+      gl.uniform1f(progStatic.u.uWindows, quality.windows ? 1 : 0);
       gl.bindVertexArray(staticMesh.vao);
       gl.drawElements(gl.TRIANGLES, staticMesh.count, gl.UNSIGNED_INT, 0);
 
@@ -1513,6 +1693,8 @@ export function createCampusRenderer(canvas, opts = {}) {
         gl.drawElements(gl.TRIANGLES, greenMesh.count, gl.UNSIGNED_INT, 0);
       }
     }
+
+    if (!staticMesh && tiles) drawTiles(proj, view, t, sweep, fogNear, fogFar, now);
 
     gl.enable(gl.CULL_FACE);
     progScene.use();
@@ -1691,6 +1873,29 @@ export function createCampusRenderer(canvas, opts = {}) {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, null);
 
+    // Frame-time EMA drives the auto tier: step down past 22 ms, up again after
+    // 5 s under 12 ms. A probe run records raw samples for p50/p95.
+    // A hidden tab or a clamped (≥ 100 ms) frame says nothing about the GPU:
+    // rAF is throttled there, and reacting would drop the tier for no reason.
+    const dtMs = dt * 1000;
+    const measurable = !document.hidden && dtMs < 99 && W > 8 && H > 8;
+    if (measurable) quality.ema = quality.ema * 0.95 + dtMs * 0.05;
+    if (measurable && quality.tier === 'auto' && !quality.reduced) {
+      if (quality.ema > 22 && quality.level > 0) { applyLevel(quality.level - 1); quality.lastUp = now; }
+      else if (quality.ema < 12 && quality.level < 2 && now - quality.lastUp > 5000) { applyLevel(quality.level + 1); quality.lastUp = now; }
+    }
+    if (probeRun) {
+      if (measurable) probeRun.samples.push(dtMs);
+      cam.targetYaw += 0.012;
+      cam.targetDist = 60 + 90 * (0.5 + 0.5 * Math.sin((now - probeRun.start) / 1600));
+      if (now - probeRun.start >= probeRun.ms) {
+        const sorted = probeRun.samples.slice(1).sort((a, b) => a - b);
+        const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] || 0;
+        const result = { p50: +pct(0.5).toFixed(2), p95: +pct(0.95).toFixed(2), fps: +(1000 / Math.max(0.1, pct(0.5))).toFixed(1), frames: sorted.length, ...api.getStats() };
+        const { resolve } = probeRun; probeRun = null; resolve(result);
+      }
+    }
+
     if (opts.onFrame) {
       framePayload.time = t; framePayload.dist = cam.dist; framePayload.hovered = hovered;
       framePayload.monuments = monuments; framePayload.cameraMode = cameraMode;
@@ -1756,8 +1961,13 @@ export function createCampusRenderer(canvas, opts = {}) {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`campus model ${res.status}`);
       campus = await res.json();
-      bakeCampus(campus);
-      buildMinimapBase(campus);
+      if (campus.meta && campus.meta.schema === 2) {
+        // Tiled whole-campus bake: streamed by tiles.js, baked in the worker.
+        initTiled(campus, url);
+      } else {
+        bakeCampus(campus);
+        buildMinimapBase(campus);
+      }
 
       monuments = campus.monuments.map((mo, i) => {
         const xs = mo.poly.map((p) => p[0]);
@@ -1964,6 +2174,42 @@ export function createCampusRenderer(canvas, opts = {}) {
       return true;
     },
 
+    /**
+     * Quality tiers (plan §B3). 'low' = DPR 1, windows off, near trees only,
+     * 320 px bloom; 'med' = DPR 1.5; 'high' = DPR 2; 'auto' steps by frame
+     * time. An object form turns individual effects off: { bloom, grain,
+     * scanlines, chroma, targetFps } — used by the reduced-motion path.
+     */
+    setQuality(tier) {
+      if (tier && typeof tier === 'object') {
+        if (tier.scanlines === false) retro.scanlines = false;
+        if (tier.bloom === false || tier.sweep === false) quality.sweepK = 0;
+        if (tier.targetFps && tier.targetFps <= 30) { quality.tier = 'low'; applyLevel(0); }
+        quality.reduced = true;
+        return api.getQuality();
+      }
+      const name = String(tier || 'auto');
+      quality.tier = LEVEL_NAMES.includes(name) ? name : 'auto';
+      quality.reduced = false;
+      if (quality.tier !== 'auto') applyLevel(LEVEL_NAMES.indexOf(quality.tier));
+      else applyLevel(2);
+      return api.getQuality();
+    },
+    getQuality: () => ({ tier: quality.tier, level: LEVEL_NAMES[quality.level], dprCap: quality.dprCap, windows: quality.windows, treeDist: quality.treeDist }),
+    getStats: () => ({
+      fps: +(1000 / Math.max(0.1, quality.ema)).toFixed(1), frameMs: +quality.ema.toFixed(2),
+      tris: Math.round(frameStats.tris), tilesDrawn: frameStats.tilesDrawn, tilesResident: tiles ? tiles.resident.size : 0,
+      draws: frameStats.draws, quality: LEVEL_NAMES[quality.level], tier: quality.tier, worker: tiles ? tiles.stats.worker : false, tiled: !!tiles,
+    }),
+    /** `?probe=1`: a scripted 10 s orbit that resolves with p50/p95 frame ms and the draw stats. */
+    probe(seconds = 10) {
+      return new Promise((resolve) => {
+        markInteraction();
+        cam.autoSpin = false;
+        probeRun = { start: performance.now(), ms: seconds * 1000, samples: [], resolve };
+      });
+    },
+
     destroy() {
       cancelAnimationFrame(raf);
       listeners.abort();
@@ -1976,12 +2222,21 @@ export function createCampusRenderer(canvas, opts = {}) {
       disposeMesh(staticMesh);
       disposeMesh(decalMesh);
       disposeMesh(greenMesh);
+      if (tiles) tiles.destroy();
+      if (treeInst) { disposeMesh(treeInst); gl.deleteBuffer(treeInst.instanceBuffer); }
+      if (lampInst) { disposeMesh(lampInst); gl.deleteBuffer(lampInst.instanceBuffer); }
       gl.deleteTexture(spriteTex);
-      for (const p of [progScene, progStatic, progGround, progSky, progBright, progBlur, progComposite, progSprite]) {
+      for (const p of [progScene, progStatic, progInst, progGround, progSky, progBright, progBlur, progComposite, progSprite]) {
         gl.deleteProgram(p.handle);
       }
     },
   };
+
+  // Reduced motion: a static-friendly tier, no sweep, no scanlines.
+  try {
+    const mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mq && mq.matches) api.setQuality({ bloom: false, grain: false, scanlines: false, chroma: false, targetFps: 30 });
+  } catch { /* no matchMedia */ }
 
   raf = requestAnimationFrame(frame);
   return api;

@@ -98,6 +98,10 @@ lead/organiser powers; the model enforces `kind === HACKER ⇔ role === HACKER`.
   nobody can mint accounts to multiply their per-account rate budget.
 * `POST /api/v1/auth/dev-login {accountId}` exists only outside production (the route is not
   registered there); it is what keeps `npm run demo` zero-setup.
+* The demo signs in as the highest-ranked seeded account (`Nexus Ops`, ORGANIZER) so every
+  organiser tool — Chaos Lab, Adonix sync, roster, revocation — passes its role gate from the
+  first click. The picker reads `GET /api/v1/auth/dev-accounts` (non-production only,
+  anonymous-allowed, returns id/name/role/kind) and falls back to the volunteer directory.
 
 ## Migration
 

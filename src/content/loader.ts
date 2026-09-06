@@ -168,6 +168,10 @@ export function publicContent(): Record<string, unknown> {
     factions: pack.factions,
     monuments: pack.monuments,
     contentBase: '/dashboard/content',
-    files: Object.fromEntries(pack.files.map((f) => [f.replace(/\.json$/, ''), `/dashboard/content/${f}`])),
+    files: {
+      ...Object.fromEntries(pack.files.map((f) => [f.replace(/\.json$/, ''), `/dashboard/content/${f}`])),
+      // The tiled whole-campus bake (schema 2), when the pipeline has produced it.
+      ...(fs.existsSync(path.join(pack.dir, 'campus', 'index.json')) ? { campusIndex: '/dashboard/content/campus/index.json' } : {}),
+    },
   };
 }

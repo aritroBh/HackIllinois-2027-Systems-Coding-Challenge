@@ -288,13 +288,12 @@
   N.registerAction('onboard-demo', async () => {
     if (state.busy) return;
     setBusy(true);
-    status('Borrowing the first volunteer on the roster…');
+    status('Borrowing the organiser account from the roster…');
     try {
-      const { data } = await N.api('/api/v1/volunteers');
-      const first = Array.isArray(data) ? data[0] : null;
-      if (!first?._id) throw new N.ApiError('No volunteers seeded yet.', { code: 'NO_VOLUNTEERS' });
+      const first = await N.session.pickDemoAccount();
+      if (!first?.id) throw new N.ApiError('No volunteers seeded yet.', { code: 'NO_VOLUNTEERS' });
       try {
-        await N.session.exchange('dev', first._id);
+        await N.session.exchange('dev', first.id);
         open(2);
       } catch (err) {
         if (err.status !== 404) throw err;

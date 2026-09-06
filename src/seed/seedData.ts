@@ -67,6 +67,20 @@ export async function seedDatabase(): Promise<void> {
   // 1. Create Volunteers with Certifications & Prestige
   const volunteers = await Volunteer.create([
     {
+      // The demo's own sign-in: `npm run demo` auto-logs the dashboard in as the
+      // highest-ranked seeded account so every organiser tool (Chaos Lab, Adonix
+      // sync, roster, revocation) works from the first click.
+      name: 'Nexus Ops',
+      email: 'ops@illinois.edu',
+      phone: '217-555-0100',
+      role: VolunteerRole.ORGANIZER,
+      certifications: ['DRIVERS_LICENSE', 'FOOD_HANDLING', 'CPR'],
+      karmaPoints: 4200,
+      hoursServed: 42,
+      prestigeTier: PrestigeTier.SIEBEL_GUARDIAN,
+      badges: ['SIEBEL_GUARDIAN', 'SWAG_VANGUARD', 'FIRST_RESPONDER'],
+    },
+    {
       name: 'Alice Chen',
       email: 'alice@illinois.edu',
       phone: '217-555-0101',
@@ -123,7 +137,7 @@ export async function seedDatabase(): Promise<void> {
     },
   ]);
 
-  const [alice, bob, charlie, dana, evan] = volunteers;
+  const [ops, alice, bob, charlie, dana, evan] = volunteers;
 
   // 2. Create Shifts across Siebel Center & ECEB
   const shift1Start = new Date(baseTime.getTime() + 2 * 3600 * 1000); // 14:00 - 16:00
@@ -224,6 +238,17 @@ export async function seedDatabase(): Promise<void> {
   const [pizzaShift, hwShift, shuttleShift] = shifts;
 
   // 3. Create Seed Registrations (Demonstrating Confirmed & Waitlist States)
+  // The demo account holds a confirmed spot on the open shift so the Trainer QR
+  // (attendance token) flow works for the signed-in user without any setup.
+  await Registration.create({
+    shiftId: shifts[3]._id,
+    volunteerId: ops._id,
+    status: RegistrationStatus.CONFIRMED,
+    idempotencyKey: 'seed_reg_ops',
+    confirmedAt: new Date(baseTime.getTime() - 5400000),
+  });
+  await Shift.updateOne({ _id: shifts[3]._id }, { $inc: { filledSlots: 1 } });
+
   await Registration.create([
     {
       shiftId: pizzaShift._id,

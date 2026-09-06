@@ -10,13 +10,32 @@
   "endsAt": "2027-02-28T15:00:00-06:00",
   "hqVenue": "SIEBEL_ATRIUM",
   "campus": {
-    "label": "UIUC campus",
-    "origin": [40.10746, -88.22713],
-    "bbox": [40.095, -88.2405, 40.1175, -88.2195],
-    "coreBbox": [40.102, -88.234, 40.117, -88.221],
+    "label": "UIUC campus, Research Park and South Farms",
+    "origin": [
+      40.10746,
+      -88.22713
+    ],
+    "bbox": [
+      40.078,
+      -88.255,
+      40.123,
+      -88.195
+    ],
+    "coreBbox": [
+      40.095,
+      -88.2405,
+      40.1175,
+      -88.2195
+    ],
     "metersPerUnit": 10,
     "vscale": 2.6,
-    "geofenceMeters": 75
+    "geofenceMeters": 75,
+    "detailBbox": [
+      40.102,
+      -88.234,
+      40.117,
+      -88.221
+    ]
   },
   "branding": {
     "palette": {
@@ -54,7 +73,12 @@
     "QUEST": 500,
     "SOS": 1000
   },
-  "bountyCap": { "LOW": 100, "MEDIUM": 200, "HIGH": 400, "CRITICAL": 800 },
+  "bountyCap": {
+    "LOW": 100,
+    "MEDIUM": 200,
+    "HIGH": 400,
+    "CRITICAL": 800
+  },
   "hackerBountyBudgetPerDay": 600,
   "plugins": []
 }

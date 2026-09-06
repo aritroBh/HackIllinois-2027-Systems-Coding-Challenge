@@ -34,6 +34,8 @@ export const eventSchema = z.object({
     origin: latLng,
     bbox,
     coreBbox: bbox.optional(),
+    /** Where pedestrian-scale detail (footways, lamps) is baked; defaults to coreBbox. */
+    detailBbox: bbox.optional(),
     metersPerUnit: z.number().positive(),
     vscale: z.number().positive().default(2.6),
     geofenceMeters: z.number().positive().default(75),
@@ -99,6 +101,8 @@ export const monumentSchema = z
     match: z.string().optional(),
     at: latLng.optional(),
     synth: z.tuple([z.number(), z.number(), z.number()]).optional(),
+    /** Hand-verified height in metres, overriding OSM/lidar (e.g. a dome OSM tags as one level). */
+    height: z.number().positive().max(200).optional(),
     crown: z.object({ kind: z.string(), ops: z.array(z.record(z.unknown())) }).optional(),
   })
   .refine((m) => !!m.match || !!m.at, { message: 'a monument needs `match` (OSM name) or `at` (centroid)' });

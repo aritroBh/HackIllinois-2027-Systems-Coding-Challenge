@@ -100,3 +100,8 @@ Any redistribution of `campus.json` (or anything derived from it) must keep that
 credit and share the derived database under the same licence. The requirement is
 recorded in `meta.source` and `meta.sources[]` of every built file; keep it
 visible in the UI wherever the map is shown.
+
+
+## Campus pipeline
+
+The bake moved to the `design/pipeline` package (see `design/pipeline/README.md`): whole-campus Overpass fetch in sub-boxes, height/roof/facade classification, and a 500 m tiled output the renderer streams. `design/build-campus.py` remains as a flag-compatible shim.

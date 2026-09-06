@@ -29,7 +29,14 @@ node --check public/fx.js
 node --check public/soundEngine.js
 node --check public/game.js
 node --check public/app.js
+node --check public/gl/glx-geometry.js
+node --check public/gl/glx-gl.js
+node --check public/gl/tiles.js
+node --check public/gl/tile-bake.js
+node --check public/gl/bake-worker.js
 node -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))" 2>/dev/null
+# The bake worker imports only pure modules: importing them under node proves no GL leaked in.
+node -e "import('$ROOT/public/gl/tile-bake.js').then(m=>{const b=m.bakeTile({buildings:[{p:[[0,0],[2,0],[2,2],[0,2]],h:1.5,t:'university',r:'f',m:'brick',ao:0,par:1}],trees:[[1,1,1]],lamps:[[0,0]]},{vscale:2.6});if(!b.solid||b.solid.ranges.length!==3)process.exit(1);console.log('tile-bake.js is worker-safe')})" 2>/dev/null
 
 step "design tokens (public/tokens.css is generated from design/tokens.mjs)"
 if ! diff -u public/tokens.css <(node design/tokens.mjs --css); then
@@ -37,6 +44,21 @@ if ! diff -u public/tokens.css <(node design/tokens.mjs --css); then
   exit 1
 fi
 echo "tokens.css matches design/tokens.mjs"
+
+step "material ids in lockstep (materials.js ⇔ design/pipeline/config.py ⇔ scripts/materialIds.ts)"
+node --input-type=module -e "
+import { MATERIALS } from '$ROOT/public/gl/materials.js';
+import fs from 'fs';
+const js = Object.fromEntries(Object.entries(MATERIALS).map(([k, v]) => [k, v.id]));
+const py = Object.fromEntries([...fs.readFileSync('$ROOT/design/pipeline/config.py', 'utf8').matchAll(/\"([A-Za-z]+)\": (\d+)/g)].map((m) => [m[1], +m[2]]));
+const ts = Object.fromEntries([...fs.readFileSync('$ROOT/scripts/materialIds.ts', 'utf8').matchAll(/([A-Za-z]+): (\d+)/g)].map((m) => [m[1], +m[2]]));
+const pyIds = Object.fromEntries(Object.entries(py).filter(([k]) => k in js || k in ts));
+const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+if (!same(js, pyIds) || !same(js, ts)) { console.error('material id tables differ', { js, py: pyIds, ts }); process.exit(1); }
+const glsl = (await import('$ROOT/public/gl/materials.js')).MATERIAL_GLSL;
+for (const [k, id] of Object.entries(js)) if (!new RegExp('#define MAT_[A-Z_]+ +' + id + '(?![0-9])').test(glsl)) { console.error('no #define for material', k, id); process.exit(1); }
+console.log(Object.keys(js).length + ' material ids agree across JS, Python and TS');
+" 2>/dev/null
 
 step "geometry winding audit"
 node --input-type=module -e "
@@ -79,8 +101,17 @@ if [ "$MODE" = "quick" ]; then
   exit 0
 fi
 
-step "campus model rebuild"
-python3 design/build-campus.py
+step "campus pack check (schema, tile hashes, monument ids)"
+PY=python3; [ -x design/.venv/bin/python ] && PY=design/.venv/bin/python
+$PY -m design.pipeline check --ci --pack content/hackillinois-2027
+npx tsx scripts/checkCampus.ts content/hackillinois-2027
+
+step "campus model rebuild (needs the OSM cache; skipped when absent)"
+if [ -d design/osm/cache ] && $PY -c "import shapely" 2>/dev/null; then
+  $PY -m design.pipeline check --pack content/hackillinois-2027
+else
+  echo "  (no design/osm/cache or no shapely in $PY — run: python3 -m design.pipeline fetch, pip install -r design/pipeline/requirements.txt)"
+fi
 
 step "test suite"
 npm test --silent 2>&1 | grep -E "Tests:|Suites:|✕|FAIL" || true

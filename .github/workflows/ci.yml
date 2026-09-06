@@ -2,7 +2,7 @@ name: WaveShift Nexus CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'hardening/**' ]
   pull_request:
     branches: [ main, master ]
 
@@ -29,5 +29,22 @@ jobs:
     - name: Typecheck TypeScript
       run: npm run lint
 
-    - name: Run Test Suite (Concurrency, Invariants, Swaps, Attendance)
+    - name: Build
+      run: npm run build
+
+    - name: Validate content packs (UIUC + example-campus fixture)
+      run: |
+        npm run content:validate
+        CONTENT_PACK=example-campus npm run content:validate
+
+    - name: CSP audit (no inline scripts, no external origins)
+      run: npm run csp:audit
+
+    - name: Campus pack check (schema, tile hashes, monument ids — offline)
+      run: npm run campus:check
+
+    - name: Frontend verification (syntax, tokens, material lockstep, winding audit)
+      run: scripts/verify.sh quick
+
+    - name: Run Test Suite (Concurrency, Invariants, Swaps, Attendance, Identity, Content, Campus)
       run: npm test

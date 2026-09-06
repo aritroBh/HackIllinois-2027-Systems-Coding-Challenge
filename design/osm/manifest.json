@@ -12,6 +12,262 @@
    "elements": 2578
   },
   {
+   "file": "buildings_0_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.255,
+    40.08925,
+    -88.24
+   ],
+   "query_sha256": "fe5a126eeee4cf20aeda550a72a9cdd0bc0e3b71bd587626ee4243af4bfbb635",
+   "fetched_at": "2026-09-06T06:11:08Z",
+   "bytes": 283170,
+   "sha256": "6cafd6a41e4adb3c705a0e477953010f62f4362cb34e195889d0413bb110a48a",
+   "elements": 343
+  },
+  {
+   "file": "buildings_0_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.24,
+    40.08925,
+    -88.225
+   ],
+   "query_sha256": "564432f185aabeed8ebd50e34d6406b67dd432604006b74b144b8356c7e07ed1",
+   "fetched_at": "2026-09-06T06:11:12Z",
+   "bytes": 40219,
+   "sha256": "ccb60cb436136071e86af6c30b21030bac1558fb37c4536e86a46f490550cb08",
+   "elements": 44
+  },
+  {
+   "file": "buildings_0_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.225,
+    40.08925,
+    -88.21
+   ],
+   "query_sha256": "b02180e43d471351a81afd5d963a0b1a0807f687d4c086e742531e34b6e86b78",
+   "fetched_at": "2026-09-06T06:11:18Z",
+   "bytes": 35464,
+   "sha256": "4f69c0ea334f3b69ba6646cfe4b83bed5e1ab659268fa04666f7d5781fceee0c",
+   "elements": 46
+  },
+  {
+   "file": "buildings_0_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.21,
+    40.08925,
+    -88.195
+   ],
+   "query_sha256": "da15c90897cab1350166db56b1b4f4f17e52a2d294f93f56e8023ad061d3529d",
+   "fetched_at": "2026-09-06T06:12:00Z",
+   "bytes": 439214,
+   "sha256": "bba07b7ee68ed6f2ef403cff51c8adc6e25d15cb2ce50a7c14031ac9c0c892ef",
+   "elements": 513
+  },
+  {
+   "file": "buildings_1_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.255,
+    40.1005,
+    -88.24
+   ],
+   "query_sha256": "e4df6237a87d86d25150ea25a58d1dae33f2f956390d0be701b66722dc9673c8",
+   "fetched_at": "2026-09-06T06:12:09Z",
+   "bytes": 409008,
+   "sha256": "00536af51a1c2c90a1bf00bf966f16a7fdd2786e0c9b3bbcb346777240aff08e",
+   "elements": 526
+  },
+  {
+   "file": "buildings_1_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.24,
+    40.1005,
+    -88.225
+   ],
+   "query_sha256": "1eee9065833c04f001c7f527d5af925ca0b84e5d98a63341157015b4c9bab11d",
+   "fetched_at": "2026-09-06T06:12:14Z",
+   "bytes": 123988,
+   "sha256": "1e2c4d0f067f70d2be3114398b30d1d3eb2126f707b50300e9a21f3cb092447f",
+   "elements": 101
+  },
+  {
+   "file": "buildings_1_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.225,
+    40.1005,
+    -88.21
+   ],
+   "query_sha256": "638e0f4bf515d29b519686a0cee56cae8c7476116298ca92fb0aa42d63b832e8",
+   "fetched_at": "2026-09-06T06:12:54Z",
+   "bytes": 275442,
+   "sha256": "6c474db88f5d80df6f5b62729e0243efce16a7fdc3034ac7e8259250cd394f32",
+   "elements": 335
+  },
+  {
+   "file": "buildings_1_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.21,
+    40.1005,
+    -88.195
+   ],
+   "query_sha256": "733c17b37a0413f9c226e33beb294b51f715f66ac94c8fd501c0de95647b65a5",
+   "fetched_at": "2026-09-06T06:12:58Z",
+   "bytes": 852881,
+   "sha256": "753f4da6485a223ef01260430977ee9f70f2f03897c6da8f4be81e72e914be4b",
+   "elements": 1057
+  },
+  {
+   "file": "buildings_2_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.255,
+    40.11175,
+    -88.24
+   ],
+   "query_sha256": "2d4e8ca6f0fc8daac4c426a2834bfcaa0a9c2eb566af1668d4863782553095f4",
+   "fetched_at": "2026-09-06T06:13:04Z",
+   "bytes": 922648,
+   "sha256": "f64e10ce7fb46f8c5101df2ccaa80b51fc01cc9a95d17a94b1b5d19635eb11a5",
+   "elements": 1271
+  },
+  {
+   "file": "buildings_2_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.24,
+    40.11175,
+    -88.225
+   ],
+   "query_sha256": "ad430e5320a0c1a7a6fd0582fee46c01de5fe3f41546d0ec9302bfab5ebb36be",
+   "fetched_at": "2026-09-06T06:13:08Z",
+   "bytes": 612705,
+   "sha256": "2aa1621e37e893175286c2e071996eceb3e0594e17d46bfeb4c4274907ba5755",
+   "elements": 499
+  },
+  {
+   "file": "buildings_2_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.225,
+    40.11175,
+    -88.21
+   ],
+   "query_sha256": "adbe0f0d5dbae8eade1daa8bdb32f8f785f46fc49b92d6523b2433ccc2d2c4a0",
+   "fetched_at": "2026-09-06T06:13:17Z",
+   "bytes": 868776,
+   "sha256": "79c64b73b4a74529984166eb0afa5e48e658ead6cf5e4b8d2eb328dbc9b28dd7",
+   "elements": 992
+  },
+  {
+   "file": "buildings_2_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.21,
+    40.11175,
+    -88.195
+   ],
+   "query_sha256": "c60f289eab99fe71ec3c307f71cfba27b0b30a6642608a740abdecd598acda34",
+   "fetched_at": "2026-09-06T06:13:22Z",
+   "bytes": 904625,
+   "sha256": "42cb060a13293ffebfba4013baae07cb31f70d26766e2f6f5d7198435c5201ea",
+   "elements": 1203
+  },
+  {
+   "file": "buildings_3_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.255,
+    40.123,
+    -88.24
+   ],
+   "query_sha256": "1a66ed1d0750a37d257821f49eb5219457f16280499a0012b28057d455e99cfc",
+   "fetched_at": "2026-09-06T06:13:26Z",
+   "bytes": 850201,
+   "sha256": "9db96fce08a53730123015a24698d24b6726e1c51ba203bf8d0a7399dcc809d7",
+   "elements": 1136
+  },
+  {
+   "file": "buildings_3_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.24,
+    40.123,
+    -88.225
+   ],
+   "query_sha256": "162af3134457ab643a3516c96d654a03f0763a9c686500a77f2ff233d3c65e87",
+   "fetched_at": "2026-09-06T06:13:32Z",
+   "bytes": 720101,
+   "sha256": "2cd5f8d355d1d15c1db015d33a9b29a56af64939fafa6d876791da4168bfd303",
+   "elements": 764
+  },
+  {
+   "file": "buildings_3_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.225,
+    40.123,
+    -88.21
+   ],
+   "query_sha256": "1904f8cbf09a49c377167396ebbdf4794abfcfc963b7d122a5ada5773243d29f",
+   "fetched_at": "2026-09-06T06:13:39Z",
+   "bytes": 728610,
+   "sha256": "69d1c0f7b1d89698cf0546d13e90f51db6d113de65d4c30aa27f409bee151de9",
+   "elements": 855
+  },
+  {
+   "file": "buildings_3_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.21,
+    40.123,
+    -88.195
+   ],
+   "query_sha256": "e26fa4c09f4591a5d65579c15a873e5764991c76803837ebed2a01548594a2f6",
+   "fetched_at": "2026-09-06T06:13:47Z",
+   "bytes": 390020,
+   "sha256": "0386ba4959fe6344ebb63e284b10b92b7d22aff70f33af036491d4f6906e469b",
+   "elements": 484
+  },
+  {
    "file": "detail.json",
    "url": "https://overpass-api.de/api/interpreter",
    "query": "detail.overpass",
@@ -22,6 +278,262 @@
    "elements": 3088
   },
   {
+   "file": "detail_0_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.255,
+    40.08925,
+    -88.24
+   ],
+   "query_sha256": "6f69cf077f1734398cda758a3feef70cb018166c5b13398ff28b2f9750b29cac",
+   "fetched_at": "2026-09-06T06:15:02Z",
+   "bytes": 89724,
+   "sha256": "a25bc0442b44b4b1725ec2d9b7393b7e7bc0964b6c5f13fbfc106aaeb6c32be2",
+   "elements": 207
+  },
+  {
+   "file": "detail_0_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.24,
+    40.08925,
+    -88.225
+   ],
+   "query_sha256": "da66eb3cdc7b5f1dc951c75d02710a241db33d580227a9d9342bd6442fb8a5f6",
+   "fetched_at": "2026-09-06T06:15:10Z",
+   "bytes": 42347,
+   "sha256": "7000cc4526deff708d0e89cb47ef9b34f8cd2471c8cb67b3c53c21cba3e0fcbe",
+   "elements": 17
+  },
+  {
+   "file": "detail_0_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.225,
+    40.08925,
+    -88.21
+   ],
+   "query_sha256": "47723d725595438f03e557dd517cdc74eb6b6620395adcc6f66be4883c7bacef",
+   "fetched_at": "2026-09-06T06:15:14Z",
+   "bytes": 3173,
+   "sha256": "8ad72743a5abeb96eca584107e2d5327f16171c3821e9f86cc15a8409fd78fb0",
+   "elements": 3
+  },
+  {
+   "file": "detail_0_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.21,
+    40.08925,
+    -88.195
+   ],
+   "query_sha256": "30d2ba0d2137bde995281597a583fed4571069df02ddac054ef6ab7fb2d15d47",
+   "fetched_at": "2026-09-06T06:15:21Z",
+   "bytes": 6520,
+   "sha256": "4aa3c47d5a5b904328b0b15845ef644b91c01149bbea26a9fa3190f9f3dc9588",
+   "elements": 4
+  },
+  {
+   "file": "detail_1_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.255,
+    40.1005,
+    -88.24
+   ],
+   "query_sha256": "8da6648ef6f16ede8c120e08226b939d016914e5083f77a6eea5c65ee5326f02",
+   "fetched_at": "2026-09-06T06:16:01Z",
+   "bytes": 157199,
+   "sha256": "9b4c77fde29029ae27e3dfb6a8583c977e3a00e90c6fe62d016b6116d275f26f",
+   "elements": 590
+  },
+  {
+   "file": "detail_1_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.24,
+    40.1005,
+    -88.225
+   ],
+   "query_sha256": "989ce522aa3b9b713854b6ea61b1fce0ca2d2ff7576a182a1f894866e34c2d8d",
+   "fetched_at": "2026-09-06T06:16:11Z",
+   "bytes": 59605,
+   "sha256": "9a83465d7729bc2ef4001f99a9ba10ec19b69b231e7008e786c855e8585dde7f",
+   "elements": 159
+  },
+  {
+   "file": "detail_1_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.225,
+    40.1005,
+    -88.21
+   ],
+   "query_sha256": "7243f78a8cd0c34e2509d9a85bb9392eab9b369218529dade2bad67727ae598a",
+   "fetched_at": "2026-09-06T06:16:15Z",
+   "bytes": 65458,
+   "sha256": "c1a68a53628653ed04612d38f98e198ac40c77af39b35cc06d627b047890532b",
+   "elements": 259
+  },
+  {
+   "file": "detail_1_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.21,
+    40.1005,
+    -88.195
+   ],
+   "query_sha256": "5106170d778ebff7c2f889142412eb318f77ef378aad88fc03d1bb6a5a5278f3",
+   "fetched_at": "2026-09-06T06:16:22Z",
+   "bytes": 2674,
+   "sha256": "86cca02c766866502b6ead862d0dac0fd91f04e82e5a1ff69e77fcd249a2dc80",
+   "elements": 3
+  },
+  {
+   "file": "detail_2_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.255,
+    40.11175,
+    -88.24
+   ],
+   "query_sha256": "ab9af7f7819bd414ba646331405af19c0a08cf95dd06a58d05b7e8c17e3dca8e",
+   "fetched_at": "2026-09-06T06:17:02Z",
+   "bytes": 305517,
+   "sha256": "69491c7326006bdc39109c2036c09b11763ab87a3b774740e0e03fbf8b2bc567",
+   "elements": 1547
+  },
+  {
+   "file": "detail_2_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.24,
+    40.11175,
+    -88.225
+   ],
+   "query_sha256": "984319e45128cbe9456b84013de23ed27d876932c2587886e1be30ccf91efbcf",
+   "fetched_at": "2026-09-06T06:17:08Z",
+   "bytes": 271371,
+   "sha256": "2e536fd75fe8fb156923d078e261b8dd24988922d42f1578230384145dbfc9fe",
+   "elements": 1064
+  },
+  {
+   "file": "detail_2_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.225,
+    40.11175,
+    -88.21
+   ],
+   "query_sha256": "cdbc610e03ddd416e3f8e86d40d3615f94f286586bc2a1f7ddaefcc3b6e140f2",
+   "fetched_at": "2026-09-06T06:17:20Z",
+   "bytes": 148292,
+   "sha256": "2017d899027ef48a10c36156d38c7fcda4ee6dca2979478ba375c29d29d5f566",
+   "elements": 458
+  },
+  {
+   "file": "detail_2_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.21,
+    40.11175,
+    -88.195
+   ],
+   "query_sha256": "05bc1272a6bf24aa9066b386d610a0c62aab7439fc000575f5ec373c376e08e2",
+   "fetched_at": "2026-09-06T06:17:25Z",
+   "bytes": 52620,
+   "sha256": "48caaa0f4ea3770d34ef594ace3e1d33f96e03534b8daade163606931df28d49",
+   "elements": 109
+  },
+  {
+   "file": "detail_3_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.255,
+    40.123,
+    -88.24
+   ],
+   "query_sha256": "c18929f0e202f8994ae9e61edf5de37fe3b3cdb1bfaee33071733c8e7b817928",
+   "fetched_at": "2026-09-06T06:17:29Z",
+   "bytes": 418444,
+   "sha256": "6c6be5d327c3b278d049cd4c9ceb3a22621aefffd486f0a2fd83bd54ec3893af",
+   "elements": 1868
+  },
+  {
+   "file": "detail_3_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.24,
+    40.123,
+    -88.225
+   ],
+   "query_sha256": "660391a9d66046d64584361289fdfa8c574255ef8bfb94403f1ab58b25ba7c92",
+   "fetched_at": "2026-09-06T06:17:35Z",
+   "bytes": 311450,
+   "sha256": "78d05da725dac5fbd1c3f5ddb1dd77630d24267b88dde3b3800ac512a4945921",
+   "elements": 1310
+  },
+  {
+   "file": "detail_3_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.225,
+    40.123,
+    -88.21
+   ],
+   "query_sha256": "7f64412a314cd6aaaa38256e6862c6be8e95175ef614a3298daea10bcbefee6c",
+   "fetched_at": "2026-09-06T06:17:58Z",
+   "bytes": 175652,
+   "sha256": "ca4970294e7dd4fc67ceea367f46c2d568149d51f7ce474c797099c4dec74018",
+   "elements": 181
+  },
+  {
+   "file": "detail_3_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.21,
+    40.123,
+    -88.195
+   ],
+   "query_sha256": "7d672355b29f9a88d32778133d73a3acffa8a5c358e02b80e8dab91839f7d7ed",
+   "fetched_at": "2026-09-06T06:18:04Z",
+   "bytes": 166259,
+   "sha256": "2d0719ef9c4ee21f60a9a80c11ccd14c8f229cd5fd03080e8624b0e505c7ac30",
+   "elements": 85
+  },
+  {
    "file": "extra.json",
    "url": "https://overpass-api.de/api/interpreter",
    "query": "extra.overpass",
@@ -30,6 +542,262 @@
    "bytes": 4124413,
    "sha256": "7a385c22aed96024c6ea33d8d6f7d3cea413aa41703bb45943d8a54d2c7c287e",
    "elements": 6248
+  },
+  {
+   "file": "extra_0_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.255,
+    40.08925,
+    -88.24
+   ],
+   "query_sha256": "6d38882a5547bd3970092b27f8edb18bd14e1c89363ec230d28300ee96e626a7",
+   "fetched_at": "2026-09-06T06:13:52Z",
+   "bytes": 380917,
+   "sha256": "a792c6ee91cca4c839dd6669c0dcf0bfe576fbe54950da8d9b1e424f1e93d710",
+   "elements": 526
+  },
+  {
+   "file": "extra_0_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.24,
+    40.08925,
+    -88.225
+   ],
+   "query_sha256": "d9e1e7142e3d6c666a76f1c0ec334da5bcb50e7170526d48a997834cef3945c6",
+   "fetched_at": "2026-09-06T06:13:56Z",
+   "bytes": 93141,
+   "sha256": "c582907c39f9b91a29e73a62e4877c7d1b386dfa3ccdc721c801db8d50de27ac",
+   "elements": 122
+  },
+  {
+   "file": "extra_0_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.225,
+    40.08925,
+    -88.21
+   ],
+   "query_sha256": "524333f09bd30116e51d234b0168c599476912a160469156572f0916271618c8",
+   "fetched_at": "2026-09-06T06:14:00Z",
+   "bytes": 57630,
+   "sha256": "48060e6fbd66b3316d02df19b66238ec01b3646349b7ac6596ad42f5351b5cb5",
+   "elements": 53
+  },
+  {
+   "file": "extra_0_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.078,
+    -88.21,
+    40.08925,
+    -88.195
+   ],
+   "query_sha256": "3841daf400fd2a663d475207fb82122186b515b6613b3373bffdce2245b23cf1",
+   "fetched_at": "2026-09-06T06:14:04Z",
+   "bytes": 414287,
+   "sha256": "39a62e47e7e2de1951ab309f9c0c7b48d28cf05a52cfe3c3094ad0e306cbb4c2",
+   "elements": 505
+  },
+  {
+   "file": "extra_1_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.255,
+    40.1005,
+    -88.24
+   ],
+   "query_sha256": "e6cfe3b1abe648e87e15529de5ed3b6e677e3206a5f281aae1e9fe75e1037446",
+   "fetched_at": "2026-09-06T06:14:08Z",
+   "bytes": 603070,
+   "sha256": "a15dd11ac152179b4c68efaf7773c11c43c1d166e885933246be0b46f84f0490",
+   "elements": 842
+  },
+  {
+   "file": "extra_1_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.24,
+    40.1005,
+    -88.225
+   ],
+   "query_sha256": "19b8789a2beae584c99df697f196ffddbf349922cf2400ff43cb60f54ded474b",
+   "fetched_at": "2026-09-06T06:14:13Z",
+   "bytes": 409528,
+   "sha256": "c95f91d97f01955392d2cc5d65926cd5cedb03be87f318df1781a788b3546be9",
+   "elements": 580
+  },
+  {
+   "file": "extra_1_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.225,
+    40.1005,
+    -88.21
+   ],
+   "query_sha256": "0ecf9a58f209907365956ad8ecc74ffd1c0f6acdc98c315d24108e39a2d7cac9",
+   "fetched_at": "2026-09-06T06:14:17Z",
+   "bytes": 527806,
+   "sha256": "659e13314a5f48e3d5f58b47da5f84e59e51650776a967bcbb5283f906f23e3d",
+   "elements": 718
+  },
+  {
+   "file": "extra_1_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.08925,
+    -88.21,
+    40.1005,
+    -88.195
+   ],
+   "query_sha256": "05ed7b3bcc8dde22652ab03d84d879aba665262256319019ef8ebd3abf4c5a3e",
+   "fetched_at": "2026-09-06T06:14:21Z",
+   "bytes": 383576,
+   "sha256": "8bab41ed533b78e5bf9790cf2ee8b841560cfd950297eb99d2429565e4311d85",
+   "elements": 462
+  },
+  {
+   "file": "extra_2_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.255,
+    40.11175,
+    -88.24
+   ],
+   "query_sha256": "8345c67131a74c3db2bf8e39bb5f719abdf8eb1bd50ab13156d07baae31163a8",
+   "fetched_at": "2026-09-06T06:14:25Z",
+   "bytes": 705774,
+   "sha256": "74fb877bdf6a1da3759aef2b293a43f9bc45dac434e94d83f31b5fac1f0b22d5",
+   "elements": 1129
+  },
+  {
+   "file": "extra_2_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.24,
+    40.11175,
+    -88.225
+   ],
+   "query_sha256": "a6a7c01099cfa13dee6ffc65a39c86e2ba4b296eb4380b66d0fae5e7d497a4ef",
+   "fetched_at": "2026-09-06T06:14:29Z",
+   "bytes": 1692059,
+   "sha256": "58831f7c9dbbc17a2c0328e3aa5c7714e4ba79f7b2d06d7a9b8843038a8dbfa4",
+   "elements": 2655
+  },
+  {
+   "file": "extra_2_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.225,
+    40.11175,
+    -88.21
+   ],
+   "query_sha256": "a892fbc678ce754554e546b0dc3dc07cb35bf7a38f3e751d3b31944f4018e4bb",
+   "fetched_at": "2026-09-06T06:14:34Z",
+   "bytes": 1217716,
+   "sha256": "dbd2bfe1493b514b063acc627cf267bae6b3afcd03678bc8842bb23fdc5c6bd0",
+   "elements": 1793
+  },
+  {
+   "file": "extra_2_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.1005,
+    -88.21,
+    40.11175,
+    -88.195
+   ],
+   "query_sha256": "1d56c3205e7124283f7c6807a982cb1b2f0efd6c824b56be9afefb12ae3f1449",
+   "fetched_at": "2026-09-06T06:14:38Z",
+   "bytes": 808129,
+   "sha256": "af0281ae14bd26aa4dda5bfdfe6c0873dbe0efb10d81a74eb359cf3e14837746",
+   "elements": 1174
+  },
+  {
+   "file": "extra_3_0.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.255,
+    40.123,
+    -88.24
+   ],
+   "query_sha256": "565b86dfe5007229364c7a3832a5e43cf8356eb656e097b14caf2b6c681a06ef",
+   "fetched_at": "2026-09-06T06:14:42Z",
+   "bytes": 1024264,
+   "sha256": "3e87280f7a03ee3ddb073654636ae785e593f2a388afc664e8d99dd8f152f0fa",
+   "elements": 1609
+  },
+  {
+   "file": "extra_3_1.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.24,
+    40.123,
+    -88.225
+   ],
+   "query_sha256": "70131b281f4ab528f2f8ab6e056c510cf614086963531aec176aca740cdfe89e",
+   "fetched_at": "2026-09-06T06:14:49Z",
+   "bytes": 1143665,
+   "sha256": "ef03f59c1bec53e96a26eb5707de63b2882ad1841fa623c8609c7d3c4baee2dc",
+   "elements": 1640
+  },
+  {
+   "file": "extra_3_2.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.225,
+    40.123,
+    -88.21
+   ],
+   "query_sha256": "e260a28dbb64de0cb944578e6e80092671ec9366aa5083ce3e69c0a06e072869",
+   "fetched_at": "2026-09-06T06:14:53Z",
+   "bytes": 972747,
+   "sha256": "ba2c06dceb9dc2564ea2cc53e6792e82eaead80a183e383d01ca48df9bce4403",
+   "elements": 1392
+  },
+  {
+   "file": "extra_3_3.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass.tpl",
+   "bbox": [
+    40.11175,
+    -88.21,
+    40.123,
+    -88.195
+   ],
+   "query_sha256": "157346c645677275e4e480e17e8afbddd3d4508160ebfd9a3c1d6434bb1de1c5",
+   "fetched_at": "2026-09-06T06:14:57Z",
+   "bytes": 741484,
+   "sha256": "8cfe50a9fc602ab1981a62c2efeb8cea79f3800c2b66d826a61f65f98bb27c32",
+   "elements": 973
   }
  ]
 }

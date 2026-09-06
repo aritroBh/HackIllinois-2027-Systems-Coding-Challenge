@@ -125,6 +125,7 @@ export async function attachIdentity(req: Request, _res: Response, next: NextFun
 /** Anonymous requests that must work before a session exists. Paths are relative to /api/v1. */
 const ANONYMOUS_ALLOW = new Set<string>([
   'GET /auth/providers',
+  'GET /auth/dev-accounts', // registered only outside production (auth.routes)
   'POST /auth/claim',
   'POST /auth/magic-link',
   'POST /auth/magic',

@@ -1,0 +1,4 @@
+shapely>=2.0
+numpy>=1.26
+# Optional, only for the lidar rasterisation recipe in README.md:
+# laspy[lazrs]>=2.5

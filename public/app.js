@@ -1526,8 +1526,24 @@ async function bootCampus() {
 
     setGlStatus('Baking campus…', 'c-amber');
     const t0 = performance.now();
-    const { meta } = await renderer.loadCampus(Nexus.contentUrl('campus'));
+    // The tiled whole-campus bake (campus/index.json, schema 2) streams in by
+    // tiles; the single-file core bake is the fallback for packs without it.
+    const indexUrl = Nexus.content?.files?.campusIndex;
+    const { meta } = await renderer.loadCampus(indexUrl || Nexus.contentUrl('campus'));
     const ms = Math.round(performance.now() - t0);
+    if (/[?&]probe=1/.test(location.search)) {
+      // `?probe=1`: a 10 s scripted orbit; the numbers land in the console and a toast.
+      // Wait until the Campus tab is actually showing: a hidden canvas has no frames to time.
+      const visible = () => !document.hidden && canvas.getBoundingClientRect().width > 8;
+      const start = async () => {
+        if (!visible()) { setTimeout(start, 500); return; }
+        const r = await renderer.probe(10);
+        console.info('[probe]', JSON.stringify(r));
+        window.game?.toast?.(`probe: p50 ${r.p50} ms · p95 ${r.p95} ms · ${r.tris} tris · ${r.tilesDrawn} tiles · ${r.quality}`);
+        document.getElementById('gl-status')?.setAttribute('data-probe', JSON.stringify(r));
+      };
+      setTimeout(start, 2000);
+    }
 
     campus = renderer;
     campusMeta = meta;

@@ -39,6 +39,8 @@ authRouter.post('/magic', authExchangeLimiter, validate(magicRedeemSchema), Auth
 authRouter.post('/adonix', authExchangeLimiter, validate(adonixSchema), AuthController.adonix);
 if (env.NODE_ENV !== 'production') {
   authRouter.post('/dev-login', authExchangeLimiter, validate(devLoginSchema), AuthController.devLogin);
+  // The demo's account picker: id/name/role/kind of the seeded accounts, highest rank first.
+  authRouter.get('/dev-accounts', AuthController.devAccounts);
 }
 authRouter.post('/logout', AuthController.logout);
 

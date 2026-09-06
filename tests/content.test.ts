@@ -14,6 +14,7 @@ function copyPack(mutate: (dir: string) => void): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-'));
   for (const f of fs.readdirSync(pack.dir)) {
     if (f === 'campus.json') continue; // keep the fixture small; the id cross-check is tested separately
+    if (fs.statSync(path.join(pack.dir, f)).isDirectory()) continue; // the tiled campus/ bake
     fs.copyFileSync(path.join(pack.dir, f), path.join(dir, f));
   }
   mutate(dir);

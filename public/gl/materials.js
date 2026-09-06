@@ -88,6 +88,13 @@ export const MATERIALS = {
   whiteTrim:      { id: 20, albedo: [0.914, 0.902, 0.863], roughness: 0.60, emissive: 0 },
   concreteGrey:   { id: 21, albedo: [0.557, 0.565, 0.588], roughness: 0.90, emissive: 0 },
   field:          { id: 22, albedo: [0.180, 0.490, 0.243], roughness: 1.00, emissive: 0 },
+  // Whole-campus facades (plan §B2): the classifier in design/pipeline/facade.py emits these.
+  clapboard:      { id: 23, albedo: [0.760, 0.720, 0.640], roughness: 0.85, emissive: 0 },
+  precast:        { id: 24, albedo: [0.700, 0.680, 0.640], roughness: 0.80, emissive: 0 },
+  metalPanel:     { id: 25, albedo: [0.520, 0.540, 0.570], roughness: 0.45, emissive: 0 },
+  glassDark:      { id: 26, albedo: [0.300, 0.400, 0.470], roughness: 0.12, emissive: 0.2 },
+  roofMembrane:   { id: 27, albedo: [0.330, 0.340, 0.360], roughness: 0.95, emissive: 0 },
+  standingSeam:   { id: 28, albedo: [0.400, 0.430, 0.470], roughness: 0.40, emissive: 0 },
 };
 
 /**
@@ -169,6 +176,12 @@ export const MATERIAL_GLSL = /* glsl */ `
 #define MAT_WHITE_TRIM      20
 #define MAT_CONCRETE_GREY   21
 #define MAT_FIELD           22
+#define MAT_CLAPBOARD       23
+#define MAT_PRECAST         24
+#define MAT_METAL_PANEL     25
+#define MAT_GLASS_DARK      26
+#define MAT_ROOF_MEMBRANE   27
+#define MAT_STANDING_SEAM   28
 
 uniform float uMetersPerUnit;   // world unit → metres (10)
 uniform float uVScale;          // vertical exaggeration (2.6)
@@ -470,6 +483,61 @@ Surface material(int id, vec3 wp, vec3 n, float t, vec2 extra) {
     s.albedo = vec3(0.557, 0.565, 0.588) * (0.92 + grain);
     s.albedo = mix(s.albedo, s.albedo * 0.75, joint);
     s.rough = 0.9;
+  }
+  else if (id == MAT_CLAPBOARD) {
+    // Horizontal siding: 0.15 m boards with a shadow line under each lap.
+    float f = 1.0 / 0.15;
+    float lod = matLod(duv, f);
+    float lap = smoothstep(0.82, 0.97, fract(wall.y * f)) * lod;
+    float grain = matNoise(uv * vec2(0.8, 12.0)) * 0.06;
+    s.albedo = vec3(0.760, 0.720, 0.640) * (1.0 - grain) * (1.0 - lap * 0.35);
+    s.rough = 0.85;
+  }
+  else if (id == MAT_PRECAST) {
+    // Precast panels, 3 m × 1.5 m, with a soft reveal at every joint.
+    vec2 f = vec2(1.0 / 3.0, 1.0 / 1.5);
+    float lod = matLod(duv, f.y);
+    vec2 c = uv * f;
+    float joint = max(matJoint(c.x, 0.015, duv * f.x), matJoint(c.y, 0.02, duv * f.y)) * lod;
+    float tone = matFbm(uv * 1.2) * 0.10;
+    s.albedo = vec3(0.700, 0.680, 0.640) * (0.94 + tone);
+    s.albedo = mix(s.albedo, s.albedo * 0.7, joint);
+    s.rough = 0.8;
+  }
+  else if (id == MAT_METAL_PANEL) {
+    // Corrugated / ribbed metal: a 0.3 m rib with a lit crest and a dark trough.
+    float f = 1.0 / 0.30;
+    float lod = matLod(duv, f);
+    float rib = 0.5 + 0.5 * cos(wall.x * f * 6.28318);
+    s.albedo = vec3(0.520, 0.540, 0.570) * (0.85 + rib * 0.25 * lod);
+    s.nrm = vec3(0.0, 0.0, (rib - 0.5) * 0.25 * lod);
+    s.rough = 0.45;
+  }
+  else if (id == MAT_GLASS_DARK) {
+    // Curtain wall, unlit tint: 1.5 m mullions, faint sky reflection.
+    vec2 f = vec2(1.0 / 1.5, 1.0 / 3.6);
+    float lod = matLod(duv, f.x);
+    vec2 c = uv * f;
+    float mullion = max(matJoint(c.x, 0.02, duv * f.x), matJoint(c.y, 0.02, duv * f.y)) * lod;
+    s.albedo = mix(vec3(0.300, 0.400, 0.470), vec3(0.18, 0.20, 0.24), mullion);
+    s.rough = 0.12;
+    s.emissive = vec3(0.02, 0.03, 0.05);
+  }
+  else if (id == MAT_ROOF_MEMBRANE) {
+    // Single-ply roofing: matte, mottled, with gravel-ballast speckle when close.
+    float speck = matNoise(uv * 40.0) * 0.5;
+    float lod = 1.0 - smoothstep(0.2, 0.8, duv * 40.0);
+    s.albedo = vec3(0.330, 0.340, 0.360) * (0.9 + speck * lod * 0.3 + matFbm(uv * 0.7) * 0.1);
+    s.rough = 0.95;
+  }
+  else if (id == MAT_STANDING_SEAM) {
+    // Standing-seam metal: 0.45 m pans, a raised seam every pan, low roughness.
+    float f = 1.0 / 0.45;
+    float lod = matLod(duv, f);
+    float seam = matJoint(ground.x * f, 0.03, dGround * f) * lod;
+    s.albedo = vec3(0.400, 0.430, 0.470) * (1.0 + seam * 0.35);
+    s.nrm = vec3(seam * 0.3, 0.0, 0.0);
+    s.rough = 0.4;
   }
 
   return s;
