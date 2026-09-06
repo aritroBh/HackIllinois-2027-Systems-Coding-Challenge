@@ -99,8 +99,24 @@ for (const table of ['BARRIER_KIND', 'FENCE_TYPE']) {
 const unknownProfile = [...emitted].filter((k) => !profiles.has(k));
 if (unknownProfile.length) fail.push(`fence profiles the renderer does not know: ${unknownProfile.join(', ')}`);
 
+// --- 5. The renderer's metres-per-unit against the pack's -------------------------------
+// `tile-bake.js` converts between metres and world units on the fence and rooftop paths and
+// cannot read the content loader, so it states the scale as a constant. A pack whose
+// `metersPerUnit` differs would render every fence and every rooftop unit at the wrong size,
+// silently and uniformly — the kind of wrongness that looks like a style choice.
+const packIndex = path.join(ROOT, 'content', process.env.CONTENT_PACK || 'hackillinois-2027', 'campus', 'index.json');
+if (fs.existsSync(packIndex)) {
+  const meta = JSON.parse(fs.readFileSync(packIndex, 'utf8')).meta ?? {};
+  const bake = read('public/gl/tile-bake.js');
+  const declared = Number((bake.match(/export const MPU = ([0-9.]+);/) ?? [])[1]);
+  if (!Number.isFinite(declared)) fail.push('public/gl/tile-bake.js no longer declares MPU');
+  else if (declared !== meta.metersPerUnit) {
+    fail.push(`tile-bake MPU is ${declared} but the pack's metersPerUnit is ${meta.metersPerUnit}`);
+  }
+}
+
 if (fail.length) {
   for (const f of fail) console.error('props lockstep: ' + f);
   process.exit(1);
 }
-console.log(`props lockstep: ${selectors.size} selectors, ${kinds.length} kinds, ${profiles.size} fence profiles, all paired`);
+console.log(`props lockstep: ${selectors.size} selectors, ${kinds.length} kinds, ${profiles.size} fence profiles, scale agrees — all paired`);

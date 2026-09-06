@@ -43,8 +43,11 @@ Fonts
 -----
 The dashboard uses Silkscreen, Jersey 10, Pixelify Sans and VT323, all
 released under the SIL Open Font License 1.1 (https://openfontlicense.org/).
-They are currently loaded from Google Fonts; when they are vendored under
-public/fonts/ the OFL text for each family must be shipped beside them.
+They are vendored under public/fonts/ and served from this origin. Nothing on the
+dashboard reaches a font CDN, which is what makes the "no external requests"
+gate in scripts/verify.sh mean something and what keeps a visitor's IP address
+off a third party's logs for the sake of a typeface. The OFL text for each
+family ships beside the files in public/fonts/.
 
 Trademarks
 ----------

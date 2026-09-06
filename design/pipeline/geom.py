@@ -1,7 +1,9 @@
 """Pure geometry helpers on world-unit rings (x east, z south)."""
 from __future__ import annotations
 
+import hashlib
 import math
+import struct
 import sys
 
 
@@ -108,8 +110,27 @@ def walk(pts, step: float):
 
 
 def hash01(a: float, b: float) -> float:
-    h = math.sin(a * 12.9898 + b * 78.233) * 43758.5453
-    return h - math.floor(h)
+    """A number in [0, 1) from two coordinates, identical on every machine.
+
+    The shader-style `fract(sin(dot(p, k)) * 43758.5453)` this replaces is the standard
+    one-liner for the job and is wrong for a build artefact. `sin` is not specified to the last
+    bit: libm implementations differ in the final unit in the last place, and multiplying by
+    forty-three thousand amplifies that difference into the leading digits. The same
+    OpenStreetMap extract therefore produced different bench headings, different bin placements
+    and a different pack hash on an ARM laptop and an x86 CI runner — which makes the
+    reproducibility check the pipeline is built around meaningless.
+
+    A hash over the exact bytes of the two floats has no such problem. The quantisation to
+    millimetres before hashing is deliberate: two coordinates that differ only in float noise
+    should agree, because a rebuild that reorders an arithmetic sum by an ulp must not move a
+    bench. `blake2b` because it is in the standard library and fast; the value is decorative,
+    not a credential.
+    """
+    key = struct.pack("<qq", int(round(a * 1000)), int(round(b * 1000)))
+    digest = hashlib.blake2b(key, digest_size=8).digest()
+    # 53 bits is what a float64 can hold exactly, so the division is lossless and the result
+    # is uniform over [0, 1).
+    return (int.from_bytes(digest, "little") >> 11) / float(1 << 53)
 
 
 def assemble_rings(ways: list[list[dict]]) -> list[list[dict]]:

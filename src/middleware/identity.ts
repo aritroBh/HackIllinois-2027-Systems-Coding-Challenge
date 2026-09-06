@@ -159,6 +159,12 @@ const ANONYMOUS_ALLOW = new Set<string>([
   'POST /auth/claim-codes/bulk',
   'GET /content',
   'GET /announcements', // the login screen shows public notices before anyone signs in
+  // The client plugin loader fetches the manifest as the shell boots, which in `required`
+  // mode is before a session exists. A 401 there is silent: the loader treats an unreachable
+  // manifest as "this deployment has no plugins" and carries on, so a plugin would simply
+  // never appear. The manifest is a list of names, versions and digests of files the server
+  // already serves to anyone who asks, so there is nothing in it to protect.
+  'GET /plugins',
 ]);
 
 export function isAnonymousAllowed(method: string, path: string): boolean {

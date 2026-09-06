@@ -1,7 +1,7 @@
 {
-  "name": "hackillinois-waveshift-nexus",
+  "name": "nexus-quest",
   "version": "1.0.0",
-  "description": "High-Performance Volunteer Scheduling & Operations Engine for HackIllinois Systems Team",
+  "description": "A volunteer operations system for a large hackathon, with the campus it runs on rendered as a game world. Point it at your own content pack and it runs your event on your campus.",
   "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -13,7 +13,7 @@
     "lint": "tsc --noEmit",
     "demo": "tsx scripts/devSeeded.ts",
     "campus": "python3 -m design.pipeline build --pack content/${CONTENT_PACK:-hackillinois-2027}",
-    "campus:check": "python3 -m design.pipeline check --ci --pack content/${CONTENT_PACK:-hackillinois-2027} && tsx scripts/checkCampus.ts content/${CONTENT_PACK:-hackillinois-2027} && node scripts/checkProps.mjs",
+    "campus:check": "python3 -m design.pipeline check --ci --pack content/${CONTENT_PACK:-hackillinois-2027} && tsx scripts/checkCampus.ts content/${CONTENT_PACK:-hackillinois-2027} && node scripts/checkProps.mjs && node scripts/checkEvents.mjs",
     "content:validate": "tsx src/content/validate.ts",
     "tokens:build": "node design/tokens.mjs --css > public/tokens.css",
     "migrate": "tsx scripts/migrate.ts",
@@ -23,6 +23,7 @@
     "bench:pipeline": "tsx scripts/benchmarks/pipeline-check.ts",
     "csp:audit": "node scripts/cspAudit.mjs",
     "props:check": "node scripts/checkProps.mjs",
+    "events:check": "node scripts/checkEvents.mjs",
     "campus:fetch": "python3 -m design.pipeline fetch --pack content/${CONTENT_PACK:-hackillinois-2027}",
     "bench:presence": "NODE_ENV=development tsx scripts/loadPresence.ts"
   },
@@ -37,8 +38,10 @@
     "concurrency",
     "scheduling"
   ],
-  "author": "HackIllinois Systems Candidate",
-  "license": "MIT",
+    "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

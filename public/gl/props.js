@@ -3,21 +3,25 @@
  * landmarks that behave like furniture because there are dozens of them and
  * none of them is worth a footprint in the content pack.
  *
- * WHY THIS FILE EXISTS. A campus tile already bakes its buildings, roads and
- * lawns into one static batch (tile-bake.js), and the obvious thing to do with
- * a bench is to bake it there too. That was tried and rejected: a tile holds a
- * few hundred benches, bins and bollards, so baking them costs vertices in
- * proportion to the count, re-runs on every tile rebuild, and makes the merged
- * buffer large enough to stall the upload. Props are instead built ONCE per
- * kind here and drawn instanced, so a thousand bollards cost one mesh plus a
- * transform each. The second rejected alternative was authored meshes loaded as
- * glTF: the dashboard's CSP is 'self'-only, an asset pipeline for a bench is
- * absurd, and a bench is four boxes anyway.
+ * WHY THIS FILE EXISTS. Every generator here returns one mesh for one kind, at
+ * the origin, at real size. What the caller does with it is the caller's
+ * decision, and `tile-bake.js` merges them into the tile's existing static
+ * batch rather than instancing them: a tile holds a couple of dozen props
+ * across a handful of kinds, so an instanced draw per kind per tile would cost
+ * more draw calls than the props have triangles. Instancing is the right answer
+ * for the nine thousand trees, which are nine thousand of ONE shape; it is the
+ * wrong answer for two thousand props of nineteen shapes spread over a hundred
+ * and twenty-four tiles. An earlier version of this comment asserted the
+ * opposite and described a decision the caller had already made differently.
+ *
+ * The rejected alternative was authored meshes loaded as glTF: the dashboard's
+ * CSP is 'self'-only, an asset pipeline for a bench is absurd, and a bench is
+ * four boxes anyway.
  *
  * THE TRIANGLE BUDGET IS THE POINT. Every builder here stays under roughly 120
- * triangles. These are drawn as instances, thousands at a time, so a
+ * triangles. They are merged into the tile batch, thousands at a time, so a
  * 400-triangle bench costs more than the entire building it sits next to — the
- * building is one instance of a few hundred triangles, the bench is nine
+ * building is a few hundred triangles once, the bench is nine
  * hundred instances. Where a piece has faces that can never be seen (the
  * underside of a leg, the top of a post buried in a slab) it is emitted with
  * `postGeometry`, which drops the two end caps and saves four triangles a time.

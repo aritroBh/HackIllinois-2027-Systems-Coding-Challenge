@@ -229,6 +229,46 @@ describe('dispatch search expands rings and still finds the true nearest', () =>
     expect(ring.map((r) => r.e.id)).toEqual(brute.map((b) => b.id));
   });
 
+  it('does not stop at the first full shell, which is how the diagonal beats the axis', () => {
+    // The case the old rule got wrong, and the reason its own comment was not enough.
+    //
+    // Shells are squares; distance is a circle. Ten responders sitting in the far CORNERS of
+    // a ring fill the quota there, but somebody on the near EDGE of a ring several shells
+    // further out is still closer in metres — a corner of ring R is √2·R away while an edge
+    // of ring R+3 is only R+3. Stopping one shell after the quota sent the second-nearest
+    // volunteer to an emergency, and the existing brute-force test never caught it because
+    // its uniform disc fills the quota in the first ring or two, where the mismatch is small.
+    const store = new PresenceStore();
+    const now = Date.now();
+    const cell = 5; // 50 m at 10 m per unit
+    const ids: string[] = [];
+    const put = (id: string, x: number, z: number) => {
+      ids.push(id);
+      const e: PresenceEntry = {
+        id, name: id, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null, avatarHash: null, onDuty: true,
+        x, z, lat: 0, lng: 0, acc: 5, h: 0, fx: x, fz: z, pendingFx: NaN, pendingFz: NaN,
+        cell: '', t: now, version: 1, strikes: 0, muteUntil: 0, lastSampleT: now, optIn: true,
+      };
+      (store as unknown as { entries: Map<string, PresenceEntry> }).entries.set(id, e);
+      (store as unknown as { reindex(e: PresenceEntry): void }).reindex(e);
+    };
+
+    // Ten in the diagonal corners of ring 8: about 56 cells away in a straight line.
+    for (let i = 0; i < 10; i++) put(`corner${i}`, 8 * cell + i * 0.05, 8 * cell);
+    // One on the cardinal axis of ring 10: further in rings, nearer in metres.
+    put('axis', 10 * cell, 0);
+
+    const found = store.nearestVolunteers(0, 0, 60_000, now, 10);
+    const brute = [...store.all()]
+      .map((e) => ({ id: e.id, d: Math.hypot(e.x, e.z) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 10);
+
+    expect(found.map((f) => f.e.id)).toEqual(brute.map((b) => b.id));
+    // And the axis candidate really is in the answer, which is the whole point.
+    expect(found.some((f) => f.e.id === 'axis')).toBe(true);
+  });
+
   it('terminates on an almost empty campus rather than walking the plane', () => {
     const store = new PresenceStore();
     seedStore(store, 2, 5);

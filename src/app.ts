@@ -126,6 +126,30 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // production image while every API route worked perfectly.
 const publicDir = path.join(REPO_ROOT, 'public');
 app.use('/dashboard/content', express.static(pack.dir, { maxAge: '1h', etag: true, index: false }));
+
+/**
+ * Where HackIllinois SSO comes back to.
+ *
+ * `adonixStartUrl()` sends the browser to Adonix with `redirect=<PUBLIC_URL>/dashboard/auth/adonix`,
+ * and nothing served that path: the static handler missed, the request fell through to the
+ * 404, and Adonix sign-in ended on an error page for everybody who used it. It is the
+ * hackers' natural way in, so that is most of the event.
+ *
+ * The shell itself is served here — the same `index.html`, whose asset paths are all absolute
+ * — because `session.js` already knows what to do on this path: it lifts the token out of the
+ * query string into a fragment with `history.replaceState` before anything can log or cache
+ * it, then exchanges it. Serving the shell rather than redirecting keeps that in one place.
+ *
+ * `no-store` matters here and nowhere else under `/dashboard`: this URL carries a credential
+ * in its query string for the few milliseconds before the page rewrites it, and a cached copy
+ * of that is a credential sitting in the browser's disk cache. The morgan configuration
+ * redacts the query for this path for the same reason.
+ */
+app.get('/dashboard/auth/adonix', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
 app.use('/dashboard', express.static(publicDir));
 // Plugin client assets: one explicit route per declared file, each behind the same
 // enabled-guard as the plugin's API routes, so a disabled plugin's JS is a 404 too.

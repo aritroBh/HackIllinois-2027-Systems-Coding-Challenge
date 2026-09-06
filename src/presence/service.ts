@@ -14,6 +14,7 @@ import { Registration, RegistrationStatus } from '../models/registration.model';
 import { Volunteer, AccountKind } from '../models/volunteer.model';
 import { pack } from '../content/loader';
 import { env } from '../config/env';
+import { LEAD_ROLES, AccountRole } from '../common/types/account';
 
 const TICK_MS = 1000;
 const SNAPSHOT_EVERY_MS = 15_000;
@@ -280,6 +281,10 @@ export class PresenceService {
         next.set(String(r.accountId), new Date(r.until).getTime());
       }
       this.mutes = next;
+      // Feed the store too. Its copy is the one the gate consults on a sample, and it is the
+      // one that survives a disconnect, so a mute written by another process (or before a
+      // restart) has to reach it.
+      for (const [id, until] of next) this.store.applyMute(id, until);
     } catch {
       /* a sweep failure leaves the previous map standing; a stale mute errs towards silence */
     }
@@ -371,8 +376,13 @@ export class PresenceService {
         const s = queue[cursor++];
         // A session removed since the queue was taken must not be sent to.
         if (!this.sessions.has(s.client.id)) continue;
-        s.clusterOnly = this.clusterMode;
+          s.clusterOnly = this.clusterMode;
         s.detailBudget = this.detailBudget;
+        // A demotion has to bite now, not at the next reconnect. The facts are already cached
+        // for anybody who has sampled recently, so this costs a map lookup; an account we have
+        // not seen keeps the flag its session cookie arrived with, which is the same answer.
+        const known = this.facts.get(s.accountId);
+        if (known) s.setLead(LEAD_ROLES.has(known.role as AccountRole));
         try {
           let cohort: Cohort | null = null;
           const me = this.store.get(s.accountId);
@@ -464,6 +474,7 @@ export class PresenceService {
   private setRung(next: 0 | 1 | 2 | number): void {
     const rung = Math.max(0, Math.min(2, next)) as 0 | 1 | 2;
     if (rung === this.rung) return;
+    const climbing = rung < this.rung;
     this.rung = rung;
     this.clusterMode = rung === 2;
     this.detailBudget = rung === 0 ? Number.POSITIVE_INFINITY : rung === 1 ? Math.ceil(this.store.cfg.maxDetail / 2) : 0;
@@ -471,9 +482,15 @@ export class PresenceService {
     this.stats.rung = rung;
     const mode = rung === 0 ? 'full' : rung === 1 ? 'reduced' : 'clusters';
     for (const s of this.sessions.values()) {
-      // Climbing back up needs a snapshot: the sessions stopped tracking who they had sent,
-      // so a delta against a half-remembered world would leave gaps on the map.
-      if (rung < 2) s.requestResync();
+      // Only a CLIMB needs a snapshot. Coming back up, the sessions have stopped tracking who
+      // they sent, so a delta against a half-remembered world would leave gaps on the map.
+      //
+      // Stepping DOWN needs nothing, and asking for one was actively harmful: the ladder drops
+      // a rung precisely because the tick is already over budget, and flagging every session
+      // for a full snapshot then made the very next tick send five thousand of them — rows,
+      // joins and clusters for everybody — which is the spike that forced the next rung down.
+      // The mechanism meant to shed load created the largest burst of the event.
+      if (climbing) s.requestResync();
       s.client.send({ t: 'notice', mode });
     }
   }

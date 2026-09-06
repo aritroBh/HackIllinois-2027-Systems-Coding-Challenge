@@ -50,7 +50,16 @@ export class VolunteerController {
 
   public static async listVolunteers(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const volunteers = await Volunteer.find().select(projectionFor(_req)).sort({ createdAt: -1 });
+      // Volunteers only, unless the caller asks for everybody.
+      //
+      // This is the staff directory: it backs the roster pickers, the assignment dropdowns and
+      // the war room's headcount. A thousand hacker accounts in it makes every one of those
+      // unusable and makes the headcount wrong. `kind` is the axis for this — never `role` —
+      // because the model's invariant ties them and `kind` is the one that means "is this
+      // person staff".
+      const includeHackers = String(_req.query.kind ?? '').toUpperCase() === 'ALL';
+      const filter = includeHackers ? {} : { kind: AccountKind.VOLUNTEER };
+      const volunteers = await Volunteer.find(filter).select(projectionFor(_req)).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: volunteers });
     } catch (error) {
       next(error);

@@ -20,9 +20,9 @@ import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
 import { PresenceAudit } from '../src/models/presenceAudit.model';
 import { Avatar, AvatarStatus } from '../src/models/avatar.model';
-import { PresenceStore } from '../src/presence/store';
-import { presenceStore } from '../src/presence/store';
-import { presenceService } from '../src/presence/service';
+import { presenceStore, PresenceStore, PresenceEntry } from '../src/presence/store';
+import { presenceService, PresenceService } from '../src/presence/service';
+import { PresenceSession } from '../src/presence/session';
 import { wsClientCount } from '../src/presence/wsTransport';
 import { encodeRows, decodeRows, IdxTable, IDX_WRAP } from '../src/presence/protocol';
 import { __resetAvatarRate } from '../src/services/avatar.service';
@@ -363,6 +363,90 @@ describe('SOS dispatch prefers a live position', () => {
   });
 });
 
+describe('a player who stops reporting leaves the map', () => {
+  it('sends an expire frame for a timed-out slot rather than leaving the sprite behind', async () => {
+    // The bug this pins: the service releases an expired account's slot at the top of the
+    // tick and used to discard the returned slot number, so by the time the frame was built
+    // the id was already gone from the table and the sweep that would have reported it found
+    // nothing. No `expire` was ever sent for a timeout, the sprite stayed on every map, and
+    // when the slot was later reused the client had two people bound to one number.
+    const store = new PresenceStore();
+    const service = new PresenceService(store);
+    const sent: Array<Record<string, unknown>> = [];
+
+    const watcherId = 'watcher';
+    const leaverId = 'leaver';
+    for (const [id, x] of [[watcherId, 0], [leaverId, 1]] as Array<[string, number]>) {
+      const e: PresenceEntry = {
+        id, name: id, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null, avatarHash: null, onDuty: true,
+        x, z: 0, lat: 0, lng: 0, acc: 5, h: 0, fx: x, fz: 0, pendingFx: NaN, pendingFz: NaN,
+        cell: '', t: Date.now(), version: 1, strikes: 0, muteUntil: 0, lastSampleT: Date.now(), optIn: true,
+      };
+      (store as unknown as { entries: Map<string, PresenceEntry> }).entries.set(id, e);
+      (store as unknown as { reindex(e: PresenceEntry): void }).reindex(e);
+    }
+
+    const client = {
+      id: watcherId,
+      account: { id: watcherId, role: 'VOLUNTEER', kind: 'VOLUNTEER', faction: null, displayName: 'W', sessionVersion: 0, source: 'session' },
+      transport: 'ws' as const, binary: false,
+      send: (m: Record<string, unknown>) => { sent.push(m); return true; },
+      sendBinary: () => true, bufferedBytes: () => 0, close: () => undefined,
+    };
+    const session = new PresenceSession(client as never, store, { snapshotEveryMs: 15_000, jsonDetailCap: 40 });
+    Object.defineProperty(session, 'accountId', { get: () => watcherId });
+    (service as unknown as { sessions: Map<string, PresenceSession> }).sessions.set(watcherId, session);
+
+    // First tick: the watcher is told about the leaver and given a slot for them.
+    service.tickNow();
+    const join = sent.flatMap((m) => (m.j as Array<{ idx: number; id: string }>) ?? []).find((j) => j.id === leaverId);
+    expect(join).toBeDefined();
+
+    // The leaver goes quiet for longer than the expiry window.
+    const stale = store.get(leaverId)!;
+    stale.t = Date.now() - 10 * 60_000;
+    sent.length = 0;
+    service.tickNow();
+
+    const expire = sent.find((m) => m.t === 'expire') as { ids: number[] } | undefined;
+    expect(expire).toBeDefined();
+    expect(expire!.ids).toContain(join!.idx);
+    expect(store.get(leaverId)).toBeUndefined();
+  });
+});
+
+describe('the speed mute', () => {
+  it('a speed mute survives a reconnect, which is the only way anyone would try to escape it', async () => {
+    // Three samples fast enough to be impossible mute the sender for a minute. The mute used
+    // to live on the presence entry, and the entry is deleted when the account's last socket
+    // closes — so dropping the connection and coming back cleared it. Somebody spoofing their
+    // GPS is precisely the person who will try that.
+    const id = String((await makeAccount({ name: 'Sonic' }))._id);
+    const f = facts(id);
+    const home = at(0, 0);
+    presenceStore.update(f, { lat: home.lat, lng: home.lng, acc: 5 }, 1_000);
+    // Each of these is a kilometre in two seconds: about five hundred metres a second.
+    for (let i = 1; i <= 3; i++) {
+      const far = at(i % 2 === 0 ? 0 : 1000, i % 2 === 0 ? 1000 : 0);
+      presenceStore.update(f, { lat: far.lat, lng: far.lng, acc: 5 }, 1_000 + i * 2_100);
+    }
+    expect(presenceStore.isMuted(id, 8_000)).toBe(true);
+
+    // The reconnect: every socket closes, the entry goes.
+    presenceStore.remove(id);
+    expect(presenceStore.get(id)).toBeUndefined();
+
+    // Back again, with a perfectly ordinary sample. Still muted.
+    expect(presenceStore.isMuted(id, 8_000)).toBe(true);
+    const back = presenceStore.update(f, { lat: home.lat, lng: home.lng, acc: 5 }, 9_000);
+    expect(back.ok).toBe(false);
+    expect((back as { reason: string }).reason).toBe('MUTED');
+
+    // And it does expire on its own rather than being permanent.
+    expect(presenceStore.isMuted(id, 8_000 + 120_000)).toBe(false);
+  });
+});
+
 describe('avatars', () => {
   const original = env.AUTH_MODE;
   beforeAll(() => { (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'required'; });
@@ -451,7 +535,9 @@ describe('avatars', () => {
     const queue = await l.get('/api/v1/avatars/queue');
     expect(queue.body.data.some((r: { hash: string }) => r.hash === hash)).toBe(true);
 
-    await l.post(`/api/v1/avatars/${hash}/review`).set('X-CSRF-Token', lCsrf).send({ approve: true });
+    // `ownerId` names the row, because a hash names an image and two people can upload the
+    // same one. The queue above returns it beside every entry for exactly this reason.
+    await l.post(`/api/v1/avatars/${hash}/review`).set('X-CSRF-Token', lCsrf).send({ approve: true, ownerId: String(owner._id) });
     const now = await p.get(`/api/v1/avatars/${hash}`);
     expect(now.status).toBe(200);
     expect(now.headers['content-type']).toContain('image/png');
@@ -470,12 +556,12 @@ describe('avatars', () => {
     for (let i = 0; i < 2; i++) {
       const reporter = await makeAccount();
       const { agent, csrf } = await signIn(reporter.id);
-      const r = await agent.post(`/api/v1/avatars/${hash}/flag`).set('X-CSRF-Token', csrf).send({ reason: 'rude' });
+      const r = await agent.post(`/api/v1/avatars/${hash}/flag`).set('X-CSRF-Token', csrf).send({ reason: 'rude', ownerId: String(owner._id) });
       expect(r.body.data.unpublished).toBe(false);
     }
     const third = await makeAccount();
     const { agent: t, csrf: tCsrf } = await signIn(third.id);
-    const done = await t.post(`/api/v1/avatars/${hash}/flag`).set('X-CSRF-Token', tCsrf).send({ reason: 'rude' });
+    const done = await t.post(`/api/v1/avatars/${hash}/flag`).set('X-CSRF-Token', tCsrf).send({ reason: 'rude', ownerId: String(owner._id) });
     expect(done.body.data.unpublished).toBe(true);
     // The takedown clears the hash off the account, so the presence wire stops carrying it.
     expect((await Volunteer.findById(owner._id))!.avatarHash).toBeNull();
@@ -486,8 +572,39 @@ describe('avatars', () => {
     const up2 = await o2.post('/api/v1/avatars?share=1').set('X-CSRF-Token', o2Csrf).set('Content-Type', 'image/png').send(sheet(128, 48, 33));
     const lead = await makeAccount({ role: VolunteerRole.SHIFT_LEAD });
     const { agent: l, csrf: lCsrf } = await signIn(lead.id);
-    const byLead = await l.post(`/api/v1/avatars/${up2.body.data.hash}/flag`).set('X-CSRF-Token', lCsrf).send({ reason: 'policy' });
+    const byLead = await l.post(`/api/v1/avatars/${up2.body.data.hash}/flag`).set('X-CSRF-Token', lCsrf).send({ reason: 'policy', ownerId: String(owner2._id) });
     expect(byLead.body.data.unpublished).toBe(true);
+  });
+
+  it('a takedown names a row, so the same image uploaded by two people is moderated separately', async () => {
+    // The regression this closes: `Avatar.findOne({ hash })` returns whichever row the
+    // database happens to give first, so rejecting one person's avatar rejected the other's.
+    // Two accounts, the same bytes, one takedown.
+    const alice = await makeAccount();
+    const bob = await makeAccount();
+    const { agent: a, csrf: aCsrf } = await signIn(alice.id);
+    const { agent: b, csrf: bCsrf } = await signIn(bob.id);
+    const bytes = sheet(128, 48, 91);
+
+    const upA = await a.post('/api/v1/avatars?share=1').set('X-CSRF-Token', aCsrf).set('Content-Type', 'image/png').send(bytes);
+    const upB = await b.post('/api/v1/avatars?share=1').set('X-CSRF-Token', bCsrf).set('Content-Type', 'image/png').send(bytes);
+    const hash = upA.body.data.hash;
+    expect(upB.body.data.hash).toBe(hash);
+    expect(await Avatar.countDocuments({ hash })).toBe(2);
+
+    const lead = await makeAccount({ role: VolunteerRole.SHIFT_LEAD });
+    const { agent: l, csrf: lCsrf } = await signIn(lead.id);
+    const rejected = await l.post(`/api/v1/avatars/${hash}/review`)
+      .set('X-CSRF-Token', lCsrf)
+      .send({ approve: false, ownerId: String(alice._id) });
+    expect(rejected.status).toBe(200);
+
+    expect((await Avatar.findOne({ hash, ownerId: alice._id }))!.status).toBe(AvatarStatus.REJECTED);
+    expect((await Avatar.findOne({ hash, ownerId: bob._id }))!.status).toBe(AvatarStatus.PENDING);
+
+    // And a moderation call that names nobody is refused rather than guessing.
+    const guess = await l.post(`/api/v1/avatars/${hash}/review`).set('X-CSRF-Token', lCsrf).send({ approve: false });
+    expect(guess.status).toBe(400);
   });
 });
 

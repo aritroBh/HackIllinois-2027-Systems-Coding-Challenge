@@ -913,11 +913,17 @@ function connectSSE() {
     'ADONIX_EVENTS_SYNCED', 'ANNOUNCEMENT', 'ANNOUNCEMENT_CLEARED', 'AVATAR_UNPUBLISHED',
     'BOOTH_SCANNED', 'CLAIM_BRUTE_FORCE', 'CYCLIC_TRADE_EXECUTED',
     'GYM_ATTACKED', 'GYM_CAPTURED', 'GYM_REINFORCED', 'HACKSTOP_SPUN', 'POWERUP_CONSUMED',
-    'PRESENCE_FRAME', 'QUEST_COMPLETED', 'RAID_CLOSED', 'RAID_JOINED', 'RAID_OPENED',
-    'SHIFT_CREATED', 'SHIFT_DELETED', 'SHIFT_UPDATED',
+    'PLUGIN_DISABLED', 'PRESENCE_FRAME', 'QUEST_COMPLETED',
+    'RAID_CLOSED', 'RAID_JOINED', 'RAID_OPENED',
+    'REGISTRATION_CANCELLED', 'SHIFT_CREATED', 'SHIFT_DELETED', 'SHIFT_UPDATED',
     'SLOT_RESERVED', 'SOS_ESCALATED', 'SOS_ESCALATED_FULL',
     'SOS_TICKET_ACKNOWLEDGED', 'SOS_TICKET_CANCELLED', 'SOS_TICKET_CREATED',
-    'SOS_TICKET_DISPATCHED', 'SOS_TICKET_ON_SCENE', 'SOS_TICKET_REASSIGNED',
+    'SOS_TICKET_DISPATCHED', 'SOS_TICKET_ON_SCENE',
+    // A reassignment puts the ticket back to OPEN, and `transition` names its event after the
+    // status it moved to — so the wire type is SOS_TICKET_OPEN. Subscribing to a plausible
+    // SOS_TICKET_REASSIGNED, which nothing emits, meant the lead's queue did not move when a
+    // ticket was handed to somebody else.
+    'SOS_TICKET_OPEN',
     'SOS_TICKET_RESOLVED', 'STICKER_AWARDED', 'SWAP_EXECUTED', 'SWAP_PROPOSED',
     'VOLUNTEER_CHECKED_IN', 'VOLUNTEER_CHECKED_OUT', 'WAITLIST_JOINED', 'WAITLIST_PROMOTED',
   ];
@@ -965,7 +971,10 @@ function connectSSE() {
    */
   const loggedSos = new Set();
   const firstTimeFor = (p, tag) => {
-    const key = `${tag}:${p.ticketId ?? p._id}:${p.status}`;
+    // `status` is part of the key so a later, genuinely different transition of the same
+    // ticket still logs. When a payload has no status — an older broadcast shape — the tag
+    // carries the transition instead, which is what the tag is for.
+    const key = `${tag}:${p.ticketId ?? p._id}:${p.status ?? tag}`;
     if (loggedSos.has(key)) return false;
     loggedSos.add(key);
     // The set is bounded rather than allowed to grow for the length of a thirty-six hour

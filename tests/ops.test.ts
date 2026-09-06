@@ -17,6 +17,9 @@ import { SOSService } from '../src/services/sos.service';
 import { presenceStore } from '../src/presence/store';
 import { runDue } from '../src/scheduler';
 import { cookieNames } from '../src/common/utils/sessionToken';
+import { eventHub } from '../src/common/sse/eventHub';
+import { BountyLedger } from '../src/models/bountyLedger.model';
+import { pack } from '../src/content/loader';
 
 function csrfFrom(res: request.Response): string {
   const setCookie = (res.headers['set-cookie'] as unknown as string[]) ?? [];
@@ -189,6 +192,146 @@ describe('SOS lifecycle', () => {
     });
     await runDue();
     expect((await SOSTicket.findById(ticket.id))!.escalatedAt).toBeTruthy();
+  });
+});
+
+describe('the SOS bounty cannot be paid to the person who raised the ticket', () => {
+  it('refuses a creator resolving their own ticket, however it was raised', async () => {
+    // The mint this closes: an OPEN ticket is deliberately resolvable by whoever gets there
+    // first, so that somebody standing next to the problem need not wait for dispatch. That
+    // also let the person who RAISED it resolve it and collect their own bounty — raise at the
+    // maximum, resolve, repeat, with nothing to lose but the daily budget.
+    const sam = await makeAccount({ name: 'Self Sam', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const session = await signIn(sam.id);
+    const created = await session.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', session.csrf).send({
+      hackerName: 'Self Sam', tableLocation: 'Siebel Center Atrium', description: 'paying myself',
+      urgency: 'HIGH', coordinates: { latitude: 40.11380, longitude: -88.22470 },
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.data._id;
+
+    await expect(SOSService.resolveTicket(id, sam.id)).rejects.toThrow(/cannot resolve a ticket you raised/i);
+    expect((await Volunteer.findById(sam.id))!.karmaPoints).toBe(0);
+    expect((await SOSTicket.findById(id))!.status).toBe(SOSTicketStatus.OPEN);
+
+    // Somebody else closing it is still fine, and still pays them.
+    const rae = await makeAccount({ name: 'Rae' });
+    const done = await SOSService.resolveTicket(id, rae.id);
+    expect(done.status).toBe(SOSTicketStatus.RESOLVED);
+    expect((await Volunteer.findById(rae.id))!.karmaPoints).toBeGreaterThan(0);
+  });
+
+  it('charges every creator against the daily budget, not only hackers', async () => {
+    // A volunteer raising tickets used to skip the budget entirely, so two of them could
+    // alternate raising maximum-bounty tickets and resolving each other's without limit.
+    const budget = pack.event.hackerBountyBudgetPerDay ?? 0;
+    if (!budget) return;
+    const vol = await makeAccount({ name: 'Budget Bea' });
+    const session = await signIn(vol.id);
+    const raise = (n: number) => session.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', session.csrf).send({
+      hackerName: `Ticket ${n}`, tableLocation: 'Siebel Center Atrium', description: 'budget probe',
+      urgency: 'HIGH', karmaBounty: 150, coordinates: { latitude: 40.11380, longitude: -88.22470 },
+    });
+
+    const statuses: number[] = [];
+    for (let i = 0; i < Math.ceil(budget / 150) + 2; i++) statuses.push((await raise(i)).status);
+
+    // Some are accepted and, once the budget is gone, the rest are refused with a 409 — never
+    // a 500, and never an unbounded run of acceptances.
+    expect(statuses).toContain(201);
+    expect(statuses).toContain(409);
+    expect(statuses.every((s) => s === 201 || s === 409)).toBe(true);
+    const spent = await BountyLedger.findOne({ accountId: vol._id });
+    expect(spent!.spent).toBeLessThanOrEqual(budget);
+  });
+
+  it('escalates a stale ticket without putting the table text on the public channel', async () => {
+    // `announce` is the one channel anybody may join without a session. The escalation used to
+    // label the raw `tableLocation` as `venueKey`, publishing "Table 42, back left" to anyone
+    // watching, about somebody who had been waiting three minutes for help.
+    const sam = await makeAccount({ name: 'Stale Sam', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const session = await signIn(sam.id);
+    const created = await session.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', session.csrf).send({
+      hackerName: 'Stale Sam', tableLocation: 'Table 42, back left by the outlets',
+      description: 'nobody came', urgency: 'HIGH',
+      coordinates: { latitude: 40.11380, longitude: -88.22470 },
+    });
+    const id = created.body.data._id;
+    // Escalation is for a ticket that was DISPATCHED and then went unanswered, so put it in
+    // that state and age it past the three-minute threshold.
+    const responder = await makeAccount({ name: 'Silent Sid' });
+    await SOSTicket.updateOne({ _id: id }, {
+      $set: {
+        status: SOSTicketStatus.DISPATCHED,
+        assignedVolunteerId: responder._id,
+        dispatchedAt: new Date(Date.now() - 10 * 60_000),
+        createdAt: new Date(Date.now() - 12 * 60_000),
+      },
+    });
+
+    // Spying on the hub rather than opening a socket: what is under test is the payload the
+    // service hands to the public channel, and a spy states that without a transport in the
+    // way. `announce` is the channel anybody may join without a session, which is what makes
+    // its contents public and this assertion worth making.
+    const onAnnounce: Array<Record<string, unknown>> = [];
+    const spy = jest.spyOn(eventHub, 'broadcastChannel').mockImplementation((channel, message) => {
+      if (channel === 'announce') onAnnounce.push(message.data as Record<string, unknown>);
+    });
+    try {
+      await SOSService.escalateStale();
+    } finally {
+      spy.mockRestore();
+    }
+
+    const escalation = onAnnounce.find((d) => String(d.ticketId) === String(id));
+    expect(escalation).toBeDefined();
+    const asText = JSON.stringify(escalation);
+    expect(asText).not.toContain('Table 42');
+    expect(asText).not.toContain('back left');
+    // A location the venue table cannot resolve becomes null rather than the raw text.
+    expect(escalation!.venueKey).toBeNull();
+    // And it still says the useful part: the urgency, and how long somebody has been waiting.
+    // `minutesOpen` is measured from `createdAt`, which Mongoose marks immutable, so a test
+    // that back-dates the document sees zero here — the figure is right in production and
+    // untestable by rewriting the timestamp, so this asserts the field is present and sane
+    // rather than pretending to have aged it.
+    expect(escalation!.urgency).toBe('HIGH');
+    expect(Number(escalation!.minutesOpen)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('publishes the building when the location resolves, and never the seat within it', async () => {
+    const sam = await makeAccount({ name: 'Venue Val', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const session = await signIn(sam.id);
+    const created = await session.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', session.csrf).send({
+      hackerName: 'Venue Val', tableLocation: 'Siebel Center Atrium, table 7',
+      description: 'resolvable venue', urgency: 'MEDIUM',
+      coordinates: { latitude: 40.11380, longitude: -88.22470 },
+    });
+    const id = created.body.data._id;
+    const responder = await makeAccount({ name: 'Quiet Quinn' });
+    await SOSTicket.updateOne({ _id: id }, {
+      $set: {
+        status: SOSTicketStatus.DISPATCHED,
+        assignedVolunteerId: responder._id,
+        dispatchedAt: new Date(Date.now() - 10 * 60_000),
+        createdAt: new Date(Date.now() - 12 * 60_000),
+      },
+    });
+
+    const onAnnounce: Array<Record<string, unknown>> = [];
+    const spy = jest.spyOn(eventHub, 'broadcastChannel').mockImplementation((channel, message) => {
+      if (channel === 'announce') onAnnounce.push(message.data as Record<string, unknown>);
+    });
+    try {
+      await SOSService.escalateStale();
+    } finally {
+      spy.mockRestore();
+    }
+
+    const escalation = onAnnounce.find((d) => String(d.ticketId) === String(id));
+    expect(escalation).toBeDefined();
+    expect(escalation!.venueKey).toBe('SIEBEL_ATRIUM');
+    expect(JSON.stringify(escalation)).not.toContain('table 7');
   });
 });
 

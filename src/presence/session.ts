@@ -7,8 +7,10 @@
  * counts, which are sent only when they change. Slots (`idx`) are scoped to this connection
  * via `IdxTable`, so a client never sees an id it was not told about in a join record.
  *
- * Degradation: the service flips every session to cluster-only when two consecutive ticks
- * exceed 30 ms, and back after 10 s under 15 ms.
+ * Degradation: a three-rung ladder in the service, judged on CPU spent per tick. Two ticks
+ * over 200 ms halve `detailBudget`; two over 500 ms set `clusterOnly`; recovery climbs one
+ * rung at a time after 10 s of ticks under 120 ms. The single 30 ms threshold this comment
+ * used to describe was replaced when the tick was sliced, which made wall-clock meaningless.
  */
 import { IdxTable, JoinRecord, WireRow, encodeRows, toJsonRow } from './protocol';
 import type { PresenceClient } from './transport';
@@ -40,6 +42,8 @@ export class PresenceSession {
   private rowPool: WireRow[] = [];
   private rowBuf: WireRow[] = [];
   private joinBuf: JoinRecord[] = [];
+  /** Slots released by `forget` between frames, drained by the next `send`. */
+  private pendingExpire: number[] = [];
   private lastSnapshotAt = 0;
   public helloAt = 0;
   public lastPosAt = 0;
@@ -71,11 +75,15 @@ export class PresenceSession {
   }
 
   /**
-   * Fixed for the life of the connection. A role change takes effect on the client's next
-   * reconnect, which is also when the session cookie carrying it is re-read — computing it
-   * once is what lets the service key its cohort cache on it without a per-tick lookup.
+   * Whether this viewer may see off-shift volunteers.
+   *
+   * Set from the session cookie at connect and refreshed from the account facts on every tick
+   * the service has them. It was `readonly`, fixed for the life of the socket, which failed in
+   * the disclosing direction: a lead demoted mid-event kept lead vision — and any open
+   * `presence:exact` stream — until they happened to reconnect. Losing a privilege has to take
+   * effect immediately even though gaining one can wait.
    */
-  public readonly lead: boolean;
+  public lead: boolean;
 
   /**
    * Everything this client should know about right now, plus the joins it has not seen.
@@ -115,8 +123,38 @@ export class PresenceSession {
     // Whether this viewer has to be subtracted from its own cell's count is decided here and
     // acted on only if the payload is actually sent — the copy that the subtraction needs is
     // the single largest allocation on this path, and most ticks do not send clusters at all.
-    this.pendingAdjust = cohort.ownClusterIndex >= 0 && !cohort.detailIds.has(this.accountId);
+    //
+    // Two conditions, and both were previously wrong in a way that removed somebody else from
+    // the map. The viewer is only in a count at all if it is publishable to its own audience:
+    // an off-duty volunteer looking at the map is absent from the public counts, so subtracting
+    // itself took a neighbour away instead. And once the ladder stops sending rows, the list
+    // being adjusted is the all-inclusive one, whose own-cell entry sits at a different index.
+    const inOwnCount = this.countsSelf();
+    this.pendingAdjust = inOwnCount && this.ownClusterIndexIn(cohort) >= 0;
     return { rows, joins, visible };
+  }
+
+  /**
+   * Whether this viewer appears in the cluster counts it is about to be sent.
+   *
+   * A count is built from the cell members visible to this viewer's audience. A lead sees
+   * everybody, so a lead is always in it. A player sees only publishable people, so an
+   * off-duty volunteer — invisible to players by design — is not, and must not subtract
+   * itself from a tally it was never part of.
+   */
+  private countsSelf(): boolean {
+    if (this.lead) return true;
+    const me = this.store.get(this.accountId);
+    return !!me && this.store.visible(me, false);
+  }
+
+  /** Which list the viewer is being sent, and where its own cell sits in that list. */
+  private usesAllCounts(): boolean {
+    return this.clusterOnly || this.detailBudget <= 0;
+  }
+
+  private ownClusterIndexIn(cohort: Cohort): number {
+    return this.usesAllCounts() ? cohort.ownClusterIndexAll : cohort.ownClusterIndex;
   }
 
   /** Whether the cluster payload just computed had this viewer subtracted from its own cell. */
@@ -128,11 +166,18 @@ export class PresenceSession {
    * itself when no adjustment is needed. Only called when the payload is going out.
    */
   private adjustedClusters(cohort: Cohort): Array<[number, number, number]> {
-    if (!this.pendingAdjust) return cohort.clusters;
-    const out = cohort.clusters.slice();
-    const [cxu, czu, n] = out[cohort.ownClusterIndex];
-    if (n <= 1) out.splice(cohort.ownClusterIndex, 1);
-    else out[cohort.ownClusterIndex] = [cxu, czu, n - 1];
+    // Which list depends on whether this viewer is getting rows. When it is, the counts
+    // exclude the people arriving as rows so nobody is drawn twice; when it is not — the
+    // bottom rungs of the load ladder — the counts have to include them or the crowd in front
+    // of the player disappears at exactly the moment the map is busiest.
+    const base = this.usesAllCounts() ? cohort.clustersAll : cohort.clusters;
+    if (!this.pendingAdjust) return base;
+    const at = this.ownClusterIndexIn(cohort);
+    if (at < 0) return base;
+    const out = base.slice();
+    const [cxu, czu, n] = out[at];
+    if (n <= 1) out.splice(at, 1);
+    else out[at] = [cxu, czu, n - 1];
     return out;
   }
 
@@ -170,7 +215,7 @@ export class PresenceSession {
     // are standing on is well defined for a JavaScript Map, and the copy was a fresh array of
     // up to sixty strings per session per tick — five thousand of those a second is garbage
     // collection pressure bought for nothing.
-    let gone: number[] | null = null;
+    let gone: number[] | null = this.pendingExpire.length ? this.pendingExpire.splice(0) : null;
     for (const id of this.idx.ids()) {
       if (visible.has(id) || id === this.accountId) continue;
       const idx = this.idx.release(id, tick);
@@ -181,13 +226,17 @@ export class PresenceSession {
     // Clusters are sent only when they change, and "changed" is now two integer comparisons
     // against the shared cohort rather than a rebuilt map per session.
     let clusterPayload: Array<[number, number, number]> | undefined;
-    const sig = active ? active.sig : 0;
+    // The rung is part of the comparison: the two count lists differ, so a change of rung
+    // changes the payload even when the world has not moved.
+    const sig = active ? (active.sig ^ (this.usesAllCounts() ? 0x5f5f5f5f : 0)) | 0 : 0;
     if (active && (full || sig !== this.lastClusterSig || this.pendingAdjust !== this.lastClusterAdjusted)) {
       clusterPayload = this.adjustedClusters(active);
       this.lastClusterSig = sig;
       this.lastClusterAdjusted = this.pendingAdjust;
     }
 
+    // `gone` on its own is a reason to send: a frame that says only "these slots are empty" is
+    // the one that removes a departed player from the map.
     if (!full && !rows.length && !joins.length && !gone && !clusterPayload) return 0;
 
     const kind = full ? 'snapshot' : 'delta';
@@ -231,6 +280,19 @@ export class PresenceSession {
     );
   }
 
+  /**
+   * Update the audience this session belongs to.
+   *
+   * A change forces a resync: the cohort the client has been reading from is keyed on this
+   * flag, so the next frame is drawn from a different candidate set and a delta against the
+   * old one would leave people on the map who are no longer visible to it.
+   */
+  setLead(next: boolean): void {
+    if (next === this.lead) return;
+    this.lead = next;
+    this.requestResync();
+  }
+
   /** A client that saw an unknown idx asks for a rebind. */
   requestResync(): void {
     this.idx.needsFullSnapshot = true;
@@ -238,9 +300,23 @@ export class PresenceSession {
     this.lastClusterSig = Number.NaN;
   }
 
+  /**
+   * Drop somebody who has stopped reporting, and remember to tell the client.
+   *
+   * The service calls this for every expired account at the top of the tick, before any frame
+   * is built, and it used to throw the returned slot away. By the time `send` ran its own
+   * expiry sweep the id was already out of the slot table, so the sweep never saw it either
+   * and no `expire` frame was ever sent for anybody who timed out. Their sprite stayed on
+   * every map indefinitely, and when the slot number was eventually handed to somebody else
+   * the client had two people bound to it.
+   *
+   * The released slot is queued instead, and the next frame drains the queue.
+   */
   forget(id: string, tick: number): number | undefined {
     this.sentVersion.delete(id);
-    return this.idx.release(id, tick);
+    const idx = this.idx.release(id, tick);
+    if (idx !== undefined) this.pendingExpire.push(idx);
+    return idx;
   }
 }
 

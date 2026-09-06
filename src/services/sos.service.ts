@@ -14,7 +14,8 @@
  * compare-and-swap, so two simultaneous resolvers produce one payment and one clean
  * conflict rather than two payouts.
  *
- * **Known gap:** the bounty is uncapped and caller-supplied at ticket creation.
+ * The bounty is capped per urgency by the pack and drawn from the creator's daily budget, and
+ * the person who raised a ticket can never be the person paid for closing it.
  */
 import { Types } from 'mongoose';
 import { SOSTicket, ISOSTicket, SOSTicketStatus, SOSTicketCategory, SOSTicketUrgency, canTransition } from '../models/sosTicket.model';
@@ -79,11 +80,17 @@ export class SOSService {
       throw ApiError.badRequest(`A ${urgency} ticket may offer at most ${ceiling} karma.`);
     }
 
-    // A hacker's tickets draw on a per-day budget. The debit and the ticket are one
-    // transaction: a reservation without a ticket would silently eat someone's budget, and
-    // a ticket without a reservation is the hole the budget exists to close.
+    // Every creator draws on a per-day budget, not only hackers.
+    //
+    // The debit and the ticket are one transaction: a reservation without a ticket would
+    // silently eat someone's budget, and a ticket without a reservation is the hole the budget
+    // exists to close. Exempting volunteers left exactly that hole open, and the route lets any
+    // account create a ticket: two volunteers could alternate raising maximum-bounty tickets
+    // and resolving each other's, minting karma without limit and without a ledger row to
+    // show for it. Whether the money is capped cannot depend on which kind of account is
+    // spending it.
     const budget = pack.event.hackerBountyBudgetPerDay ?? 0;
-    const chargesBudget = !!creator?.id && creator.kind === 'HACKER' && budget > 0;
+    const chargesBudget = !!creator?.id && budget > 0;
 
     let ticket: ISOSTicket;
     if (chargesBudget) {
@@ -429,11 +436,18 @@ export class SOSService {
         { new: true }
       );
       if (!claimed) continue; // another instance got there first
+      // `announce` is the one channel anybody may join without a session, so what goes on it
+      // is public. `venueKey` here was the raw `tableLocation` — "Table 42, back left, by the
+      // outlets" — which is precisely the string the redaction elsewhere in this file exists
+      // to withhold, published to anyone who opens the stream, about somebody who has been
+      // waiting three minutes for help. It is resolved to a building key like every other
+      // path, and an unresolvable location becomes null rather than the text.
+      const escalationVenue = resolveVenue(claimed.tableLocation);
       eventHub.broadcastChannel('announce', {
         type: 'SOS_ESCALATED',
         data: {
           ticketId: claimed._id,
-          venueKey: claimed.tableLocation,
+          venueKey: escalationVenue.matched ? escalationVenue.key : null,
           urgency: claimed.urgency,
           minutesOpen: Math.round((now.getTime() - new Date(claimed.createdAt).getTime()) / 60_000),
         },
@@ -475,6 +489,20 @@ export class SOSService {
           : `An SOS ticket cannot go from ${observed} to RESOLVED.`,
         ErrorCode.SCHEDULE_CONFLICT
       );
+    }
+
+    // Nobody collects a bounty on their own ticket.
+    //
+    // Resolving an OPEN ticket is deliberately open to whoever gets there first — somebody
+    // who happens to be standing next to the problem should not have to wait for dispatch.
+    // But that also let the person who RAISED the ticket resolve it and pay themselves,
+    // which is not a race anybody can lose: raise a ticket at the maximum bounty, resolve it,
+    // repeat. The budget above caps the rate; this closes the loop entirely.
+    //
+    // Checked before the assignee rule so that the message is the true reason: a creator who
+    // has somehow also been dispatched to their own ticket is still refused here.
+    if (ticket.createdById && sameId(ticket.createdById, volunteerId)) {
+      throw ApiError.forbidden('You cannot resolve a ticket you raised yourself.');
     }
 
     // Assignee-bound once somebody has been sent: a ticket that is on its way to a named

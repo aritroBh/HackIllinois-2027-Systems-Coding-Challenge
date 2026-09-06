@@ -45,6 +45,7 @@ A pack that does not validate does not start the server. That is deliberate: a t
 
 | Document | What it covers |
 |---|---|
+| [WORKFLOWS.md](docs/WORKFLOWS.md) | The six end-to-end journeys, from first tap to last write |
 | [FORK_GUIDE.md](docs/FORK_GUIDE.md) | Running this for a different event, in order |
 | [CONTENT-PACKS.md](docs/CONTENT-PACKS.md) | Every pack file, field by field |
 | [IDENTITY.md](docs/IDENTITY.md) | The two auth modes, the three adapters, the runbook |

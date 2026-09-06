@@ -85,6 +85,28 @@ export const PROP_GLOW = { shelter: 0.28, busstop: 0.24, sign: 0.14, drinkfounta
 /** The props that are worth drawing even on the lowest tier, because they read from far away. */
 export const LANDMARK_PROPS = new Set(['watertower', 'mast', 'flag', 'chimney', 'artwork', 'shelter', 'busstop']);
 
+/**
+ * Metres per world unit for this pack.
+ *
+ * The pack declares it and the bake worker has no access to the loader, so it is stated here
+ * and asserted against the index by `npm run campus:check`. Every metre-to-unit conversion on
+ * this path goes through it rather than through a literal ten.
+ */
+export const MPU = 10;
+
+/** Which surface each rooftop kind is shaded as. */
+export const ROOFTOP_MAT = {
+  hvac: 'metalPanel', ductRun: 'metalPanel', vent: 'metalPanel', stackPipe: 'metalPanel',
+  dish: 'whiteTrim', skylight: 'glassDark', railing: 'metalPanel', waterTank: 'metalPanel',
+  solarPanel: 'glassDark', stairHead: 'precast',
+};
+
+/** Monument ids whose roofs are hand-written by crowns.js and must not be cluttered. */
+export const CROWNED = new Set([
+  'ALMA', 'UNION', 'FOELLINGER', 'ALTGELD', 'SIEBEL', 'ECEB', 'GRAINGER',
+  'DCL', 'KENNEY', 'STADIUM', 'ASSEMBLY', 'LIBRARY', 'BECKMAN', 'KRANNERT',
+]);
+
 export const MASS = {
   university: hx('#8E3B2C').map((v) => v * 0.62),
   glassy: [0.11, 0.19, 0.30],
@@ -231,13 +253,24 @@ export function bakeTile(tile, opts = {}) {
   // L1 is that a distant building is one extrusion and a cap.
   for (const b of tile.buildings || []) {
     if (detail === 0 || !b.p || b.p.length < 3) continue;
-    for (const c of rooftopClutter(b, { vscale, density: detail === 1 ? 0.4 : 1 })) {
-      const geo = rooftopGeometry(c.kind, c.opts);
+    // `vscale` is not a rooftop option — the generator reads `metersPerUnit` and `heightScale`
+    // — and passing it did nothing while the plant stayed metric on buildings exaggerated by
+    // 2.6. The railing branch also needs the building's own ring, which arrives on the
+    // placement rather than in a shared bag, so each placement carries its own options.
+    const clutter = rooftopClutter(b, {
+      metersPerUnit: MPU,
+      density: detail === 1 ? 0.4 : 1,
+      // Monuments keep their hand-written crowns; generated vents on top of Altgeld's
+      // campanile would be vandalism.
+      hasCrown: !!b.crown || CROWNED.has(b.id),
+    });
+    for (const c of clutter) {
+      const geo = rooftopGeometry(c.kind, { metersPerUnit: MPU, heightScale: vscale, ring: c.ring });
       if (!geo) continue;
       L0.push({
-        geo, x: c.x, z: c.z, y: b.h * vscale + (c.y || 0), rot: c.r,
+        geo, x: c.x, z: c.z, y: b.h * vscale, ry: c.r,
         sx: c.s ?? 1, sy: c.s ?? 1, sz: c.s ?? 1,
-        ...matItem(c.kind === 'solarPanel' ? PAL.slate : PAL.membrane, c.mat || 'metalPanel'),
+        ...matItem(c.kind === 'solarPanel' ? PAL.slate : PAL.membrane, ROOFTOP_MAT[c.kind] || 'metalPanel'),
         emissive: c.kind === 'skylight' ? 0.22 : 0.02,
       });
     }
@@ -253,7 +286,11 @@ export function bakeTile(tile, opts = {}) {
     // it quietly is right: the campus is missing one bench, not broken.
     if (!geo) continue;
     L0.push({
-      geo, x: pr.x, z: pr.z, y: 0, rot: pr.r,
+      // `ry`, in RADIANS. `mergeStatic` reads `ry` and nothing reads `rot`, so every prop was
+      // silently placed at zero rotation: benches sideways to the paths they serve, gates
+      // parallel to the ways they close. The pack stores degrees because that is what a
+      // human reads in a diff, so the conversion belongs here.
+      geo, x: pr.x, z: pr.z, y: 0, ry: ((pr.r ?? 0) * Math.PI) / 180,
       sx: pr.s ?? 1, sy: pr.s ?? 1, sz: pr.s ?? 1,
       color: PROP_TINT[pr.k] || PAL.limestone,
       mat: MID[PROP_MAT[pr.k] || 'metalPanel'],
@@ -262,7 +299,12 @@ export function bakeTile(tile, opts = {}) {
   }
   for (const f of tile.fences || []) {
     if (!f.p || f.p.length < 2) continue;
-    const geo = f.k === 'hedge' ? hedgeRun(f.p, f.h) : fenceRun(f.p, f.k, f.h);
+    // The baked `h` is already in WORLD UNITS — props.py divides by metersPerUnit — and the
+    // run builders take METRES and divide again. Passing the baked value straight through
+    // rendered a 1.2 m railing at 12 cm and a hedge flatter than the grass it edges. Multiply
+    // back so the builder's own conversion lands where it was meant to.
+    const heightM = f.h * MPU;
+    const geo = f.k === 'hedge' ? hedgeRun(f.p, heightM) : fenceRun(f.p, f.k, heightM);
     if (!geo) continue;
     // Fences read as edges from a long way off — they are what stops one lawn bleeding into
     // the next — so unlike the point props they survive into L1.

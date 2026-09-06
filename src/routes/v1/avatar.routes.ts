@@ -18,6 +18,9 @@ import express, { Router, Request, Response, NextFunction } from 'express';
 import { requireAccount, requireRole, requireSession } from '../../middleware/identity';
 import { AvatarService, MAX_UPLOAD_BYTES } from '../../services/avatar.service';
 import { AvatarStatus } from '../../models/avatar.model';
+import { z } from 'zod';
+import { validate } from '../../middleware/validate';
+import { objectId } from '../../schemas/common';
 
 export const avatarRouter = Router();
 
@@ -72,22 +75,51 @@ avatarRouter.get('/:hash', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
-avatarRouter.post('/:hash/review', requireSession, requireRole('SHIFT_LEAD'), async (req: Request, res: Response, next: NextFunction) => {
+/**
+ * `ownerId` is required on both moderation routes, and that is the point of them.
+ *
+ * A hash identifies an IMAGE, not a row: two people who upload the same sheet get one row
+ * each, so that a takedown against one never clears the other's — which is the behaviour the
+ * unique index on `(hash, ownerId)` exists to produce. Addressing a row by hash alone
+ * therefore acts on whichever of them the database returns first. A lead rejecting Alice's
+ * avatar could reject Bob's instead, and neither of them would be told.
+ *
+ * The moderation queue already returns `ownerId` alongside every row, so the caller always
+ * has it. Both bodies go through Zod like every other route in the repository rather than
+ * being read off `req.body` with ad-hoc coercion.
+ */
+const reviewSchema = z.object({
+  params: z.object({ hash: z.string().regex(/^[0-9a-f]{64}$/, 'hash must be a sha256 hex digest') }),
+  body: z.object({
+    ownerId: objectId('ownerId must be the account id the queue listed beside this avatar'),
+    approve: z.boolean().default(true),
+  }),
+});
+
+const flagSchema = z.object({
+  params: z.object({ hash: z.string().regex(/^[0-9a-f]{64}$/, 'hash must be a sha256 hex digest') }),
+  body: z.object({
+    ownerId: objectId('ownerId must be the account id whose avatar is being reported'),
+    reason: z.string().min(1).max(120).default('REPORTED'),
+  }),
+});
+
+avatarRouter.post('/:hash/review', requireSession, requireRole('SHIFT_LEAD'), validate(reviewSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const approve = req.body?.approve !== false;
-    const doc = await AvatarService.review(String(req.params.hash), req.account!.id, approve);
+    const doc = await AvatarService.review(String(req.params.hash), req.account!.id, req.body.approve, String(req.body.ownerId));
     res.status(200).json({ success: true, data: { hash: doc.hash, status: doc.status } });
   } catch (error) {
     next(error);
   }
 });
 
-avatarRouter.post('/:hash/flag', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+avatarRouter.post('/:hash/flag', requireAccount, validate(flagSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const doc = await AvatarService.flag(
       String(req.params.hash),
       { id: req.account!.id, role: req.account!.role },
-      typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 120) : 'REPORTED'
+      String(req.body.reason),
+      String(req.body.ownerId)
     );
     res.status(200).json({
       success: true,

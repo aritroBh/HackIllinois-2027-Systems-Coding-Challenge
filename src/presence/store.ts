@@ -133,6 +133,17 @@ export interface Cohort {
   detailIds: Set<string>;
   /** [cellOriginX, cellOriginZ, count] for cells whose members are not already in `detail`. */
   clusters: Array<[number, number, number]>;
+  /**
+   * The same counts with nobody excluded — what a viewer sees when it is being sent no rows.
+   *
+   * `clusters` deliberately omits the people who are arriving as individual rows, so that a
+   * player is not drawn twice. On the bottom rung of the load ladder nobody is sent as a row,
+   * and the same exclusion then removed the nearest sixty people from the counts as well: a
+   * room with forty people in it reported zero. The map emptied at exactly the moment it was
+   * fullest, which is the opposite of what a degradation mode is for.
+   */
+  clustersAll: Array<[number, number, number]>;
+  ownClusterIndexAll: number;
   /** The cell these were computed for, so a session can adjust its own count. */
   cellKey: string;
   /**
@@ -193,6 +204,20 @@ function jitterFor(id: string, hourIndex: number): [number, number] {
 export class PresenceStore {
   private entries = new Map<string, PresenceEntry>();
   private cells = new Map<string, Set<string>>();
+  /**
+   * accountId → mute expiry, held separately from the entry.
+   *
+   * A mute used to live only on the entry, and `remove()` deletes the entry when the last
+   * socket for an account closes. So the speed gate's sixty-second mute was escapable by
+   * reconnecting: drop the socket, come back, and the entry is rebuilt with no mute on it.
+   * The database row survived, but the service's sweep of it runs on a timer, so there was a
+   * window in which a muted account was simply not muted — and the whole point of a mute is
+   * that it applies to somebody who is deliberately misbehaving and will notice.
+   *
+   * This map outlives entries. It is still only a cache of `presenceMutes`, which is the
+   * durable record across a restart, but it is the one the gate consults.
+   */
+  private mutes = new Map<string, number>();
   public readonly cfg: StoreConfig;
   /** ms since epoch of the last tick that promoted pending positions. */
   public lastTickAt = 0;
@@ -224,13 +249,20 @@ export class PresenceStore {
     return this.entries.values();
   }
 
-  /** Remember a mute read back from the collection (reconnect path). */
+  /** Remember a mute read back from the collection (reconnect path, and the service's sweep). */
   applyMute(id: string, until: number): void {
     const e = this.entries.get(id);
     if (e) e.muteUntil = until;
+    if (until > Date.now()) this.mutes.set(id, until);
+    else this.mutes.delete(id);
   }
 
   isMuted(id: string, nowMs: number = Date.now()): boolean {
+    const held = this.mutes.get(id);
+    if (held !== undefined) {
+      if (held > nowMs) return true;
+      this.mutes.delete(id);
+    }
     const e = this.entries.get(id);
     return !!e && e.muteUntil > nowMs;
   }
@@ -255,7 +287,10 @@ export class PresenceStore {
 
     const { x, z } = toLocal(s.lat, s.lng);
     let e = this.entries.get(who.id);
-    const muteUntil = Math.max(e?.muteUntil ?? 0, who.muteUntil ?? 0);
+    // Three sources, and the longest wins: the live entry, the caller's facts (which carry the
+    // service's swept copy of the collection), and this store's own map — which is the one
+    // that survives a disconnect and therefore the one that makes a mute mean anything.
+    const muteUntil = Math.max(e?.muteUntil ?? 0, who.muteUntil ?? 0, this.mutes.get(who.id) ?? 0);
     if (muteUntil > nowMs) return { ok: false, reason: 'MUTED' };
 
     if (e) {
@@ -268,6 +303,10 @@ export class PresenceStore {
         if (e.strikes >= 3) {
           e.strikes = 0;
           e.muteUntil = nowMs + this.cfg.muteMs;
+          // Into the surviving map first, then the collection. The write is fire-and-forget
+          // because a mute that depends on a database round trip is a mute that does not
+          // apply to the next sample.
+          this.mutes.set(who.id, e.muteUntil);
           void PresenceMute.updateOne({ accountId: who.id }, { $set: { until: new Date(e.muteUntil), reason: 'SPEED' } }, { upsert: true }).catch(() => undefined);
           return { ok: false, reason: 'SPEED_STRIKE' };
         }
@@ -390,7 +429,18 @@ export class PresenceStore {
     const cx = Number(cxRaw), cz = Number(czRaw);
     const centreX = (cx + 0.5) * s, centreZ = (cz + 0.5) * s;
     const r = radiusM / this.cfg.metersPerUnit;
-    const span = Math.ceil(r / s);
+    // One cell of slack on the span, and the radius test is against the centre plus the
+    // furthest a viewer can be from it.
+    //
+    // The cohort is ranked from the cell centre but its members are VIEWED from anywhere in
+    // the cell, and a viewer at a corner is half a diagonal — about thirty-five metres on a
+    // fifty-metre cell — away from where the ranking was done. Sized exactly, the ring cut
+    // half the neighbours that viewer could legitimately see off the far edge. Widening by one
+    // cell and by that half-diagonal costs a few more candidates in the selection and makes
+    // the answer right for every viewer in the cell rather than only for one at its centre.
+    const halfDiagonal = (s * Math.SQRT2) / 2;
+    const reach = r + halfDiagonal;
+    const span = Math.ceil(reach / s);
     // One longer than the cap: the viewer itself is usually the nearest candidate of all, and
     // dropping it must not also drop the sixtieth neighbour.
     const want = maxDetail + 1;
@@ -433,12 +483,21 @@ export class PresenceStore {
     const detail = best.map((b) => b.e);
     const detailIds = new Set(detail.map((e) => e.id));
     const clusters: Array<[number, number, number]> = [];
+    const clustersAll: Array<[number, number, number]> = [];
     let ownClusterIndex = -1;
+    let ownClusterIndexAll = -1;
     let sig = 0;
     for (const m of cellsInSpan) {
       const members = lead ? m.all : m.pub;
       let n = 0;
       for (const e of members) if (!detailIds.has(e.id)) n += 1;
+      const all = members.length;
+      if (all > 0) {
+        if (m.key === cellKey) ownClusterIndexAll = clustersAll.length;
+        clustersAll.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, all]);
+        // The signature covers both lists, so a change in either re-sends.
+        sig = (sig * 31 + m.ci * 7 + m.cj * 13 + all * 19) | 0;
+      }
       if (n === 0) continue;
       if (m.key === cellKey) ownClusterIndex = clusters.length;
       // `| 0` keeps the running value a 32-bit integer, so this stays integer arithmetic
@@ -450,7 +509,7 @@ export class PresenceStore {
       // spread campus, to round a number that was never imprecise.
       clusters.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, n]);
     }
-    return { detail, detailIds, clusters, cellKey, ownClusterIndex, sig };
+    return { detail, detailIds, clusters, clustersAll, cellKey, ownClusterIndex, ownClusterIndexAll, sig };
   }
 
   /**
@@ -525,17 +584,35 @@ export class PresenceStore {
     const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
     const cx = Math.floor(x / s), cz = Math.floor(z / s);
     // Bounded by the campus, not by hope: an event with two on-duty volunteers must terminate,
-    // and the diagonal of a five-kilometre pack is the point past which there is nothing left
-    // to find. Without the bound a sparse night shift would walk the integer plane forever.
-    const maxRing = Math.ceil((6000 / this.cfg.metersPerUnit) / s);
+    // and the corner-to-corner diagonal of the pack is the point past which there is nothing
+    // left to find. Without the bound a sparse night shift would walk the integer plane
+    // forever. Nine kilometres covers the diagonal of a five-by-five kilometre pack (about
+    // 7.1 km) with room for a fork whose campus is larger; the loop leaves long before this
+    // whenever there is anybody to find.
+    const maxRing = Math.ceil((9000 / this.cfg.metersPerUnit) / s);
     const seen = new Set<string>();
 
-    // Ring expansion, one shell at a time. A shell is complete before it is judged, because a
-    // candidate in the far corner of ring two can be nearer than one on the near edge of ring
-    // three, so stopping mid-shell would rank by grid distance rather than by metres. One
-    // extra shell after the quota is met covers exactly that overlap.
-    let extra = -1;
+    // Ring expansion, one shell at a time, continuing until the shell being entered cannot
+    // contain anybody nearer than the worst candidate already held.
+    //
+    // Shells are squares and distances are circles, and the mismatch grows with the ring. A
+    // candidate in the far CORNER of ring R is √2·R cells away while one on the near EDGE of
+    // ring R+k is only R+k, so for any ring past two there are several later shells that can
+    // still hold somebody closer. Stopping one shell after the quota — which is what the
+    // previous version did, and what its comment claimed was sufficient — dispatched the
+    // second-nearest responder whenever the quota filled from a diagonal.
+    //
+    // The correct rule needs no constant: a shell R can only contain points at least
+    // (R - 1)·cellSize from the centre, so once that floor exceeds the furthest candidate
+    // already held, no later shell can improve on it.
+    let worstHeld = Infinity;
     for (let ring = 0; ring <= maxRing; ring++) {
+      if (out.length >= limit) {
+        // The nearest possible point in this shell. One cell of slack because the search
+        // centre sits somewhere inside its own cell rather than at a corner of it.
+        const floorDistance = Math.max(0, ring - 1) * s * this.cfg.metersPerUnit;
+        if (floorDistance > worstHeld) break;
+      }
       for (let i = cx - ring; i <= cx + ring; i++) {
         for (let j = cz - ring; j <= cz + ring; j++) {
           // Only the shell, not the filled square: the interior was walked on earlier rings.
@@ -555,8 +632,11 @@ export class PresenceStore {
           }
         }
       }
-      if (extra >= 0) { extra += 1; if (extra >= 1) break; }
-      else if (out.length >= limit) extra = 0;
+      // The furthest of the best `limit` so far — the bar a later shell has to beat.
+      if (out.length >= limit) {
+        const sorted = out.map((o) => o.distanceM).sort((a, b) => a - b);
+        worstHeld = sorted[limit - 1];
+      }
     }
 
     out.sort((a, b) => a.distanceM - b.distanceM);
@@ -567,6 +647,7 @@ export class PresenceStore {
   clear(): void {
     this.entries.clear();
     this.cells.clear();
+    this.mutes.clear();
   }
 }
 

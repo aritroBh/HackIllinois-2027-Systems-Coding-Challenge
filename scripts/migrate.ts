@@ -60,10 +60,53 @@ async function main(): Promise<void> {
     }
   );
   console.log(`backfilled ${backfill.modifiedCount} volunteer document(s)`);
-  const blankEmails = await volunteers.updateMany({ email: '' }, { $set: { email: null } });
-  if (blankEmails.modifiedCount) console.log(`normalised ${blankEmails.modifiedCount} blank email(s) to null`);
+  // Blank emails are UNSET, not set to null.
+  //
+  // A sparse unique index skips documents where the field is *absent*. `null` is a present
+  // value, so setting two blank emails to null makes them collide on `email_1` — the exact
+  // failure the sparse index exists to avoid, introduced by the migration that was supposed to
+  // prevent it. The model does the same thing on save (`$unset` on a blank), and this is the
+  // path for documents that predate that hook.
+  const blankEmails = await volunteers.updateMany(
+    { $or: [{ email: '' }, { email: null }] },
+    { $unset: { email: '' } }
+  );
+  if (blankEmails.modifiedCount) console.log(`unset ${blankEmails.modifiedCount} blank email(s) so the sparse index skips them`);
 
-  // 3. Indexes, across every registered model.
+  // 3a. Geospatial indexes on the two collections that answer "what is near me".
+  //
+  // Declared here rather than on the schemas because the documents store latitude and
+  // longitude as separate numbers rather than as GeoJSON, so the index is over a computed
+  // `location` field that the migration also backfills. Doing it in the model would mean
+  // every save paying for a field only this index reads.
+  for (const name of ['gyms', 'hackstops']) {
+    const coll = db.collection(name);
+    if (!(await db.listCollections({ name }).hasNext())) continue;
+    const backfilled = await coll.updateMany(
+      { latitude: { $type: 'number' }, longitude: { $type: 'number' }, location: { $exists: false } },
+      [{ $set: { location: { type: 'Point', coordinates: ['$longitude', '$latitude'] } } }]
+    );
+    if (backfilled.modifiedCount) console.log(`backfilled ${backfilled.modifiedCount} ${name} location point(s)`);
+    // The plain {latitude, longitude} compound index the plan calls out: it answers no query
+    // the application makes, because a bounding box on two independent numbers is not a
+    // proximity search, and it costs a write on every capture.
+    for (const idx of await coll.indexes()) {
+      const key = idx.key as Record<string, unknown>;
+      if (key && Object.keys(key).length === 2 && key.latitude === 1 && key.longitude === 1) {
+        console.log(`dropping unused compound index ${idx.name} on ${name}`);
+        await coll.dropIndex(idx.name as string);
+      }
+    }
+    try {
+      await coll.createIndex({ location: '2dsphere' }, { name: 'location_2dsphere' });
+    } catch (err) {
+      console.error(`  could not create the 2dsphere index on ${name}: ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  }
+  console.log('geospatial indexes ensured');
+
+  // 3b. Indexes, across every registered model.
   const models = Object.values(mongoose.models);
   const synced = await Promise.all(
     models.map(async (model) => {

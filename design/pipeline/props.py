@@ -3,16 +3,26 @@ Street furniture and the small surfaces nobody models by hand: benches, bins, bi
 hydrants, bollards, flagpoles, fence runs, sports pitches and flights of steps.
 
 This file exists because the campus reads as a massing study until the ground has things on
-it at human scale. The decision it encodes is that every one of those things comes from the
-survey rather than from a generator. We already scatter trees procedurally in
-`detail.build_greenery`, and that was the obvious alternative here as well: sprinkle a bench
-every forty metres along each footway and be done. It was rejected because furniture is
-recognised, not merely seen. A visitor knows there is no bench outside their hall, and an
-invented one is read as a mistake in a way an invented tree never is, so a prop that OpenStreetMap
-does not vouch for is simply absent. The second decision is that a prop is a point record with a
-kind, a heading and a scale, never baked geometry: the renderer instances one mesh per kind, so
-the whole campus of furniture costs a few draw calls and a bake that stays in the low thousands
-of records rather than the low millions of triangles.
+it at human scale, and it has two halves that disagree with each other on purpose.
+
+The first half takes the survey. Furniture is recognised rather than merely seen — a visitor
+knows there is no bench outside their hall — so wherever OpenStreetMap has an opinion, that
+opinion wins and is reproduced exactly.
+
+The second half, `generate_props` at the bottom of this file, fills the silence. The survey is
+not wrong; it is a survey, and nobody has walked every path in Urbana with a phone. There are
+two hundred benches mapped for the whole city and two hundred and eighty cycle racks for nine
+thousand buildings, so taking only what is surveyed gives beautifully accurate buildings
+standing on empty ground, which reads as unfinished rather than as accurate. Generated
+placements follow the rules a grounds department follows, come from a hash of their own
+position so the pack stays reproducible, and are dropped wherever a surveyed prop already
+stands. An earlier version of this paragraph insisted the opposite — that a prop OpenStreetMap
+does not vouch for is simply absent — and that has not been true since the generator landed.
+
+A prop is a point record with a kind, a heading and a scale rather than baked geometry, so a
+pack stays in the low thousands of records rather than the low millions of triangles. What the
+renderer then does with that record is its own decision, and `tile-bake.js` merges the meshes
+into the tile's static batch rather than instancing them; the reasoning is stated there.
 
 The vocabulary in PROP_KINDS is closed on purpose. OpenStreetMap has a long tail of amenity
 values and the temptation is to pass anything through and let the renderer guess, which produces
