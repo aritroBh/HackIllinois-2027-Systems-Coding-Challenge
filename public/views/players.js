@@ -28,6 +28,8 @@
   const state = {
     ws: null,
     mode: 'off',            // off | ws | sse
+    // The server's current detail rung, from `notice`. full | reduced | clusters.
+    detail: 'full',
     failures: 0,
     backoff: BACKOFF_MIN_MS,
     reconnectTimer: null,
@@ -157,6 +159,11 @@
         pushToMap();
         break;
       case 'notice':
+        // The server's load ladder. Saying so on the chip matters: a player whose neighbours
+        // stop appearing should read "crowd counts only", not conclude the campus emptied.
+        state.detail = msg.mode === 'clusters' ? 'clusters' : msg.mode === 'reduced' ? 'reduced' : 'full';
+        if (state.detail !== 'full') { state.peers.clear(); pushToMap(); }
+        paintChip();
         N.emit('presence:mode', { mode: msg.mode });
         break;
       case 'nack':
@@ -380,7 +387,12 @@
   function paintChip() {
     const el = document.getElementById('presence-chip');
     if (!el) return;
-    el.textContent = state.optIn ? (state.mode === 'off' ? 'Presence connecting…' : `Visible · ${state.mode.toUpperCase()}`) : 'Presence off';
+    const detail = state.detail === 'clusters' ? ' · crowd counts only'
+      : state.detail === 'reduced' ? ' · nearest only'
+      : '';
+    el.textContent = state.optIn
+      ? (state.mode === 'off' ? 'Presence connecting…' : `Visible · ${state.mode.toUpperCase()}${detail}`)
+      : 'Presence off';
     el.dataset.on = state.optIn ? '1' : '0';
     const toggle = document.getElementById('pref-visible');
     if (toggle) toggle.checked = state.optIn;

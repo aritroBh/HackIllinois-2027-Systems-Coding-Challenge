@@ -59,6 +59,104 @@ export type UpdateResult =
   | { ok: true; entry: PresenceEntry }
   | { ok: false; reason: 'OPT_OUT' | 'OFF_CAMPUS' | 'INACCURATE' | 'TOO_FAST' | 'MUTED' | 'RATE' | 'SPEED_STRIKE' };
 
+/**
+ * Everyone visible, bucketed by published cell, computed once per tick.
+ *
+ * Without this, every connected client independently walked the same cells, dereferenced the
+ * same entries out of the id map and re-ran the same visibility test. That is fine at a
+ * hundred clients and quadratic-feeling at five thousand: the work is proportional to
+ * clients × neighbours, and on a dense Quad both factors are large at once.
+ *
+ * `all` is what a lead may see; `pub` is the subset an ordinary player may see, which differs
+ * only by off-duty volunteers. Both are plain arrays because they are built once and then
+ * only iterated.
+ */
+export interface CellMembers {
+  all: PresenceEntry[];
+  pub: PresenceEntry[];
+  /**
+   * The cell's own integer coordinates and key, carried on the bucket rather than recovered
+   * from the key each time it is read.
+   *
+   * The scan used to split the key string and coerce both halves to numbers once per cell per
+   * cohort. On a thinly spread campus that is hundreds of thousands of throwaway arrays and
+   * strings a second, spent re-deriving two integers that were known when the bucket was made.
+   */
+  ci: number;
+  cj: number;
+  key: string;
+}
+
+export interface TickIndex {
+  cells: Map<string, CellMembers>;
+  /**
+   * A coarse occupancy index over the fine cells: block key → the occupied fine cells in it.
+   *
+   * Scanning the interest span cell by cell costs the same whether the ground is crowded or
+   * empty — a 300 m radius over 50 m cells is a hundred and sixty-nine lookups either way.
+   * On a campus where most of the map is car parks and farmland at three in the morning,
+   * nearly all of those lookups find nothing, and they are paid once per occupied cell per
+   * tick. The block index turns the empty case into a handful of lookups by asking a coarser
+   * question first: which blocks have anybody in them at all.
+   *
+   * The block is eight fine cells (400 m) square. Smaller and the block map is nearly as
+   * large as the cell map; larger and a block stops discriminating, because the interest
+   * span is only 650 m across.
+   */
+  blocks: Map<string, CellMembers[]>;
+  /** Cell size in world units, so a consumer need not re-derive it from the config. */
+  cellUnits: number;
+  builtAt: number;
+}
+
+/** Fine cells per block edge. See the note on `TickIndex.blocks` for why eight. */
+const BLOCK_CELLS = 8;
+
+/**
+ * What one *cell* of viewers is shown — not one viewer.
+ *
+ * The interest span is `floor(x / cell)` ± span, so every client standing in the same 50 m
+ * cell scans exactly the same cells and sees exactly the same candidates. Computing that
+ * once per occupied cell instead of once per client is the whole scaling argument: five
+ * thousand clients on a campus occupy a few hundred cells, so the shared work shrinks by
+ * more than an order of magnitude and the per-client work drops to reading a list.
+ *
+ * The price is that `detail` is ranked from the cell *centre* rather than from each viewer's
+ * exact position. Two viewers 50 m apart therefore agree on who is interesting even though
+ * one of them is marginally closer to somebody at the edge of the ring. At a 300 m radius
+ * with a 60-player cut that reorders the tail of the list and changes nothing a player can
+ * perceive, which is a good trade for the cost it removes.
+ */
+export interface Cohort {
+  /** Nearest-first from the cell centre, one longer than the cap so a viewer can drop itself. */
+  detail: PresenceEntry[];
+  detailIds: Set<string>;
+  /** [cellOriginX, cellOriginZ, count] for cells whose members are not already in `detail`. */
+  clusters: Array<[number, number, number]>;
+  /** The cell these were computed for, so a session can adjust its own count. */
+  cellKey: string;
+  /**
+   * Where `cellKey`'s own triple sits in `clusters`, or -1.
+   *
+   * A viewer has to subtract itself from the count for the cell it is standing in, and the
+   * cohort cannot do that for it because a cohort serves everybody in the cell at once.
+   * Finding that triple by rebuilding cell keys and searching cost a template string per
+   * cluster per session, which at five thousand sessions was a quarter of a million string
+   * allocations a second, entirely to answer a question the cohort already knew the answer to.
+   */
+  ownClusterIndex: number;
+  /**
+   * A cheap order-sensitive checksum of `clusters`.
+   *
+   * Cluster counts are sent only when they change, and every session in a cohort is looking at
+   * the same array, so "has it changed" is one number compared against one number rather than
+   * a per-session map of cell keys rebuilt every tick. Collisions would cost a missed update
+   * for one tick, not a wrong position: the next change re-sends, and a snapshot every fifteen
+   * seconds resets the comparison outright.
+   */
+  sig: number;
+}
+
 export interface StoreConfig {
   metersPerUnit: number;
   cellMeters: number;
@@ -244,6 +342,136 @@ export class PresenceStore {
     return !Number.isNaN(e.fx);
   }
 
+  /**
+   * Bucket every publishable entry by its cell. One pass over the store per tick.
+   *
+   * Entries with no published position yet are skipped rather than represented as absent,
+   * because a NaN coordinate would poison a distance comparison rather than sort last.
+   */
+  buildIndex(nowMs: number = Date.now()): TickIndex {
+    const cells = new Map<string, CellMembers>();
+    const blocks = new Map<string, CellMembers[]>();
+    for (const e of this.entries.values()) {
+      if (!e.optIn || Number.isNaN(e.fx)) continue;
+      let m = cells.get(e.cell);
+      if (!m) {
+        const sep = e.cell.indexOf(':');
+        const ci = Number(e.cell.slice(0, sep));
+        const cj = Number(e.cell.slice(sep + 1));
+        m = { all: [], pub: [], ci, cj, key: e.cell };
+        cells.set(e.cell, m);
+        // A cell joins its block the first time anybody stands in it, so the block lists stay
+        // free of the empty cells the whole index exists to skip.
+        const bk = `${Math.floor(ci / BLOCK_CELLS)}:${Math.floor(cj / BLOCK_CELLS)}`;
+        const list = blocks.get(bk);
+        if (list) list.push(m);
+        else blocks.set(bk, [m]);
+      }
+      m.all.push(e);
+      // The one asymmetry between the two views: an off-shift volunteer is hidden from
+      // players and visible to leads. Deciding it here means the per-viewer path never has
+      // to ask again.
+      if (e.kind !== 'VOLUNTEER' || e.onDuty) m.pub.push(e);
+    }
+    return { cells, blocks, cellUnits: this.cfg.cellMeters / this.cfg.metersPerUnit, builtAt: nowMs };
+  }
+
+  /**
+   * The shared view for everyone standing in `cellKey`.
+   *
+   * `maxDetail` candidates are selected by insertion into a small sorted array rather than by
+   * sorting the whole candidate list. On the Quad the candidate list can run to several
+   * hundred and the cut is sixty, so a full sort spends most of its comparisons ordering
+   * people nobody will be told about.
+   */
+  cohort(cellKey: string, radiusM: number, lead: boolean, maxDetail: number, index: TickIndex): Cohort {
+    const s = index.cellUnits;
+    const [cxRaw, czRaw] = cellKey.split(':');
+    const cx = Number(cxRaw), cz = Number(czRaw);
+    const centreX = (cx + 0.5) * s, centreZ = (cz + 0.5) * s;
+    const r = radiusM / this.cfg.metersPerUnit;
+    const span = Math.ceil(r / s);
+    // One longer than the cap: the viewer itself is usually the nearest candidate of all, and
+    // dropping it must not also drop the sixtieth neighbour.
+    const want = maxDetail + 1;
+
+    const best: Array<{ e: PresenceEntry; d: number }> = [];
+    let worst = Infinity;
+    const cellsInSpan: CellMembers[] = [];
+
+    // Blocks first, then the occupied cells inside them, then the members. On an empty stretch
+    // of campus this is a couple of misses instead of a hundred and sixty-nine.
+    const b0i = Math.floor((cx - span) / BLOCK_CELLS), b1i = Math.floor((cx + span) / BLOCK_CELLS);
+    const b0j = Math.floor((cz - span) / BLOCK_CELLS), b1j = Math.floor((cz + span) / BLOCK_CELLS);
+    for (let bi = b0i; bi <= b1i; bi++) {
+      for (let bj = b0j; bj <= b1j; bj++) {
+        const inBlock = index.blocks.get(`${bi}:${bj}`);
+        if (!inBlock) continue;
+        for (const m of inBlock) {
+          // A block overhangs the span at its edges, so the cell still has to be in range.
+          if (m.ci < cx - span || m.ci > cx + span) continue;
+          if (m.cj < cz - span || m.cj > cz + span) continue;
+          const members = lead ? m.all : m.pub;
+          if (!members.length) continue;
+          cellsInSpan.push(m);
+          for (const e of members) {
+            const d = Math.hypot(e.fx - centreX, e.fz - centreZ);
+            if (d > r) continue;
+            if (best.length >= want && d >= worst) continue;
+            // Sorted insertion. `best` is at most sixty-one long, so the shift is cheap and the
+            // list is already in the order the wire wants.
+            let k = best.length;
+            while (k > 0 && best[k - 1].d > d) k -= 1;
+            best.splice(k, 0, { e, d });
+            if (best.length > want) best.pop();
+            worst = best[best.length - 1].d;
+          }
+        }
+      }
+    }
+
+    const detail = best.map((b) => b.e);
+    const detailIds = new Set(detail.map((e) => e.id));
+    const clusters: Array<[number, number, number]> = [];
+    let ownClusterIndex = -1;
+    let sig = 0;
+    for (const m of cellsInSpan) {
+      const members = lead ? m.all : m.pub;
+      let n = 0;
+      for (const e of members) if (!detailIds.has(e.id)) n += 1;
+      if (n === 0) continue;
+      if (m.key === cellKey) ownClusterIndex = clusters.length;
+      // `| 0` keeps the running value a 32-bit integer, so this stays integer arithmetic
+      // rather than drifting into a float that compares by luck.
+      sig = (sig * 31 + m.ci * 7 + m.cj * 13 + n * 17) | 0;
+      // Rounded by arithmetic, not by `toFixed`. Two decimals of a world unit is two
+      // centimetres, which is far finer than a fifty-metre cell needs, and `toFixed` builds a
+      // string and parses it back — hundreds of thousands of times a second on a thinly
+      // spread campus, to round a number that was never imprecise.
+      clusters.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, n]);
+    }
+    return { detail, detailIds, clusters, cellKey, ownClusterIndex, sig };
+  }
+
+  /**
+   * The cell key a cluster triple came from. A cluster carries its cell ORIGIN in world units,
+   * so dividing by the cell size recovers the integer coordinates the key is built from; the
+   * rounding guards against the two-decimal quantisation the triple was emitted with.
+   *
+   * Not on the tick path — `Cohort.ownClusterIndex` answers the only question that used to
+   * need it. This remains for tests and for the lead heat map, which reads clusters outside
+   * the tick and can afford a string.
+   */
+  cellKeyForCluster(c: [number, number, number]): string {
+    const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
+    return `${Math.round(c[0] / s)}:${Math.round(c[1] / s)}`;
+  }
+
+  /** The cell a world position falls in — the key `cohort` and `buildIndex` agree on. */
+  cellKeyFor(x: number, z: number): string {
+    return this.cellOf(x, z);
+  }
+
   /** Entries whose published cell lies within `radiusM` of (x, z), nearest first. */
   near(x: number, z: number, radiusM: number, viewerIsLead = false): Array<{ e: PresenceEntry; d: number }> {
     const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
@@ -294,12 +522,43 @@ export class PresenceStore {
    */
   nearestVolunteers(x: number, z: number, maxAgeMs: number, nowMs: number = Date.now(), limit = 10): Array<{ e: PresenceEntry; distanceM: number; ageMs: number }> {
     const out: Array<{ e: PresenceEntry; distanceM: number; ageMs: number }> = [];
-    for (const e of this.entries.values()) {
-      if (e.kind !== 'VOLUNTEER' || !e.onDuty) continue;
-      const ageMs = nowMs - e.t;
-      if (ageMs > maxAgeMs) continue;
-      out.push({ e, distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit, ageMs });
+    const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
+    const cx = Math.floor(x / s), cz = Math.floor(z / s);
+    // Bounded by the campus, not by hope: an event with two on-duty volunteers must terminate,
+    // and the diagonal of a five-kilometre pack is the point past which there is nothing left
+    // to find. Without the bound a sparse night shift would walk the integer plane forever.
+    const maxRing = Math.ceil((6000 / this.cfg.metersPerUnit) / s);
+    const seen = new Set<string>();
+
+    // Ring expansion, one shell at a time. A shell is complete before it is judged, because a
+    // candidate in the far corner of ring two can be nearer than one on the near edge of ring
+    // three, so stopping mid-shell would rank by grid distance rather than by metres. One
+    // extra shell after the quota is met covers exactly that overlap.
+    let extra = -1;
+    for (let ring = 0; ring <= maxRing; ring++) {
+      for (let i = cx - ring; i <= cx + ring; i++) {
+        for (let j = cz - ring; j <= cz + ring; j++) {
+          // Only the shell, not the filled square: the interior was walked on earlier rings.
+          if (ring > 0 && Math.abs(i - cx) !== ring && Math.abs(j - cz) !== ring) continue;
+          const set = this.cells.get(`${i}:${j}`);
+          if (!set) continue;
+          for (const id of set) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const e = this.entries.get(id);
+            if (!e || e.kind !== 'VOLUNTEER' || !e.onDuty) continue;
+            const ageMs = nowMs - e.t;
+            if (ageMs > maxAgeMs) continue;
+            // Ranking uses the EXACT position, never the fuzzed one the grid indexes by. The
+            // cell is only a search structure; dispatch is one of the two audited exact reads.
+            out.push({ e, distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit, ageMs });
+          }
+        }
+      }
+      if (extra >= 0) { extra += 1; if (extra >= 1) break; }
+      else if (out.length >= limit) extra = 0;
     }
+
     out.sort((a, b) => a.distanceM - b.distanceM);
     return out.slice(0, limit);
   }

@@ -8,7 +8,7 @@
  */
 import { PresenceSession, setFactionOrder } from './session';
 import type { PresenceClient } from './transport';
-import { presenceStore, PresenceStore, Sample } from './store';
+import { Cohort, presenceStore, PresenceStore, Sample } from './store';
 import { PresenceMute } from '../models/presenceMute.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { Volunteer, AccountKind } from '../models/volunteer.model';
@@ -20,9 +20,32 @@ const SNAPSHOT_EVERY_MS = 15_000;
 const JSON_DETAIL_CAP = 40;
 const ROSTER_REFRESH_MS = 30_000;
 const HELLO_TIMEOUT_MS = 5_000;
-const DEGRADE_MS = 30;
-const RECOVER_MS = 15;
+/**
+ * The load ladder's thresholds, in milliseconds of CPU spent building one tick's frames.
+ *
+ * These are budgets against a one-second cadence, not against a frame time. Two hundred
+ * milliseconds is a fifth of the second spent on presence, which is where the process starts
+ * to feel it elsewhere; five hundred is where it is clearly the bottleneck and cluster counts
+ * are better than a map that stutters. Recovery is deliberately far below the first rung so
+ * the ladder does not oscillate around a threshold.
+ */
+const HALVE_MS = 200;
+const CLUSTER_MS = 500;
+const RECOVER_MS = 120;
 const RECOVER_HOLD_MS = 10_000;
+/**
+ * How long one slice may run before yielding to the event loop.
+ *
+ * Eight milliseconds is about half a display frame and well under the latency anyone notices
+ * on an HTTP request. Smaller slices would yield more often and spend more of the tick in
+ * scheduling overhead than in work.
+ */
+const SLICE_BUDGET_MS = 8;
+/** How long an account's facts stay usable before a re-read. */
+const FACT_TTL_MS = 30_000;
+/** The coalescing window for batched fact reads: one macrotask, not a real delay. */
+const FACT_BATCH_MS = 0;
+const MUTE_SWEEP_MS = 5_000;
 
 export interface AccountFacts {
   id: string;
@@ -38,18 +61,55 @@ export interface AccountFacts {
 
 export class PresenceService {
   private sessions = new Map<string, PresenceSession>();
+  /**
+   * accountId → the client ids it holds. Without it, deciding whether a disconnecting client
+   * was the account's last one meant walking every session, which is a linear scan on a path
+   * that runs once per disconnect. At five thousand clients a reconnect storm turns that into
+   * millions of comparisons for an answer two set operations already have.
+   */
+  private byAccount = new Map<string, Set<string>>();
   private timer: NodeJS.Timeout | null = null;
   private tickNo = 0;
   private slowTicks = 0;
   private fastSince = 0;
   private clusterMode = false;
+  /** 0 = full detail, 1 = half the ring, 2 = cluster counts only. See `setRung`. */
+  private rung: 0 | 1 | 2 = 0;
+  private detailBudget = Number.POSITIVE_INFINITY;
+  /** True while a tick is still slicing, so the next timer fire skips rather than overlaps. */
+  private inFlight = false;
   /** accountId → on duty, refreshed every 30 s from the roster. */
   private onDuty = new Map<string, boolean>();
   private rosterAt = 0;
   private facts = new Map<string, AccountFacts>();
   public readonly startedAt = Date.now();
-  public stats = { ticks: 0, lastTickMs: 0, p95TickMs: 0, rowsLastTick: 0, sessions: 0, clusterMode: false, bytesLastTick: 0 };
+  public stats = {
+    ticks: 0, lastTickMs: 0, p95TickMs: 0, rowsLastTick: 0, sessions: 0, clusterMode: false,
+    bytesLastTick: 0,
+    /** Distinct cohorts computed this tick. The ratio of sessions to cohorts is the win. */
+    cohortsLastTick: 0,
+    /** Accounts whose facts were fetched in the last coalesced batch. */
+    factBatchLast: 0,
+    /** Ticks skipped because the previous one was still slicing. The overload signal. */
+    skippedTicks: 0,
+    /** Current rung of the load ladder: 0 full, 1 reduced, 2 clusters only. */
+    rung: 0 as 0 | 1 | 2,
+  };
   private tickSamples: number[] = [];
+
+  /**
+   * Accounts whose facts are being fetched right now, and the promise each caller is waiting
+   * on. Five thousand phones sampling every five seconds miss the thirty-second cache at a
+   * steady thousand accounts a second; issuing a `findById` per miss turns presence into the
+   * database's busiest client for no reason, because the misses arrive in bursts of hundreds
+   * that one `$in` answers. `inFlight` also collapses the duplicate lookups a single account's
+   * two devices would otherwise both make.
+   */
+  private pendingFacts = new Map<string, Array<(f: AccountFacts | null) => void>>();
+  private factFlushTimer: NodeJS.Timeout | null = null;
+  /** accountId → mute expiry, swept from the (small) collection rather than read per account. */
+  private mutes = new Map<string, number>();
+  private mutesAt = 0;
 
   constructor(private readonly store: PresenceStore = presenceStore) {
     setFactionOrder(pack.factions.map((f) => f.id));
@@ -66,6 +126,11 @@ export class PresenceService {
     this.timer = null;
     for (const s of this.sessions.values()) s.client.close(1001, 'server shutting down');
     this.sessions.clear();
+    this.byAccount.clear();
+    // Any slice still queued will find an empty session map and an empty queue filter, so it
+    // finishes harmlessly; clearing the flag is what lets a restarted service tick again.
+    this.inFlight = false;
+    if (this.factFlushTimer) { clearTimeout(this.factFlushTimer); this.factFlushTimer = null; }
   }
 
   sessionCount(): number {
@@ -76,6 +141,9 @@ export class PresenceService {
   add(client: PresenceClient): PresenceSession {
     const session = new PresenceSession(client, this.store, { snapshotEveryMs: SNAPSHOT_EVERY_MS, jsonDetailCap: JSON_DETAIL_CAP });
     this.sessions.set(client.id, session);
+    const held = this.byAccount.get(session.accountId);
+    if (held) held.add(client.id);
+    else this.byAccount.set(session.accountId, new Set([client.id]));
     this.stats.sessions = this.sessions.size;
     // A client that never says hello is closed: it is either a probe or a broken client.
     setTimeout(() => {
@@ -92,38 +160,129 @@ export class PresenceService {
     this.stats.sessions = this.sessions.size;
     // The entry survives a reconnect (positions are ephemeral and re-sent within 5 s); it is
     // dropped only when no other session for that account remains.
-    const stillHere = [...this.sessions.values()].some((o) => o.accountId === s.accountId);
-    if (!stillHere) this.store.remove(s.accountId);
+    const held = this.byAccount.get(s.accountId);
+    held?.delete(clientId);
+    if (!held || held.size === 0) {
+      this.byAccount.delete(s.accountId);
+      this.store.remove(s.accountId);
+    }
   }
 
   sessionsFor(accountId: string): PresenceSession[] {
-    return [...this.sessions.values()].filter((s) => s.accountId === accountId);
+    const ids = this.byAccount.get(accountId);
+    if (!ids) return [];
+    const out: PresenceSession[] = [];
+    for (const id of ids) {
+      const s = this.sessions.get(id);
+      if (s) out.push(s);
+    }
+    return out;
   }
 
   /** Account facts for a sample: opt-in, faction, avatar, and whether the volunteer is on shift. */
   async factsFor(accountId: string, nowMs = Date.now()): Promise<AccountFacts | null> {
     await this.refreshRoster(nowMs);
+    await this.refreshMutes(nowMs);
     const cached = this.facts.get(accountId);
-    if (cached && nowMs - (cached as AccountFacts & { at?: number }).at! < 30_000) {
-      return { ...cached, onDuty: this.onDuty.get(accountId) ?? cached.onDuty };
+    if (cached && nowMs - (cached as AccountFacts & { at?: number }).at! < FACT_TTL_MS) {
+      return {
+        ...cached,
+        onDuty: this.onDuty.get(accountId) ?? cached.onDuty,
+        // The mute sweep is fresher than the cached fact and is the authority on silence, so
+        // a cache hit must not resurrect somebody the speed gate muted a moment ago.
+        muteUntil: this.mutes.get(accountId) ?? 0,
+      };
     }
-    const doc = await Volunteer.findById(accountId).select('name kind role faction avatarHash presenceOptIn').lean();
-    if (!doc) return null;
-    const mute = await PresenceMute.findOne({ accountId }).select('until').lean();
-    const facts: AccountFacts & { at: number } = {
-      id: accountId,
-      name: doc.name,
-      kind: (doc.kind ?? AccountKind.VOLUNTEER) as 'VOLUNTEER' | 'HACKER',
-      role: String(doc.role),
-      faction: doc.faction ?? null,
-      avatarHash: doc.avatarHash ?? null,
-      optIn: !!doc.presenceOptIn,
-      onDuty: this.onDuty.get(accountId) ?? false,
-      muteUntil: mute?.until ? new Date(mute.until).getTime() : 0,
-      at: nowMs,
-    };
-    this.facts.set(accountId, facts);
-    return facts;
+    return this.loadFacts(accountId, nowMs);
+  }
+
+  /**
+   * Queue one account for the next batched read and hand back a promise for it.
+   *
+   * The window is deliberately one macrotask rather than a fixed delay: everything that missed
+   * the cache in this tick's burst of samples joins the same `$in`, and nothing waits longer
+   * than the event loop already makes it wait. A per-account `findById` would be correct and
+   * would also be a thousand round trips a second at full attendance.
+   */
+  private loadFacts(accountId: string, nowMs: number): Promise<AccountFacts | null> {
+    return new Promise((resolve) => {
+      const waiting = this.pendingFacts.get(accountId);
+      if (waiting) { waiting.push(resolve); return; }
+      this.pendingFacts.set(accountId, [resolve]);
+      if (!this.factFlushTimer) {
+        this.factFlushTimer = setTimeout(() => { void this.flushFacts(nowMs); }, FACT_BATCH_MS);
+        this.factFlushTimer.unref?.();
+      }
+    });
+  }
+
+  private async flushFacts(nowMs: number): Promise<void> {
+    this.factFlushTimer = null;
+    const batch = this.pendingFacts;
+    this.pendingFacts = new Map();
+    if (batch.size === 0) return;
+    const ids = [...batch.keys()];
+    this.stats.factBatchLast = ids.length;
+    let docs: Array<{ _id: unknown; name: string; kind?: string; role?: unknown; faction?: string | null; avatarHash?: string | null; presenceOptIn?: boolean }> = [];
+    try {
+      docs = await Volunteer.find({ _id: { $in: ids } })
+        .select('name kind role faction avatarHash presenceOptIn')
+        .lean();
+    } catch {
+      // A read failure resolves every waiter as unknown rather than leaving them pending. An
+      // unknown account is treated as opted out, which is the safe direction: nobody is
+      // published because the database blinked.
+      for (const resolvers of batch.values()) for (const r of resolvers) r(null);
+      return;
+    }
+    const found = new Map<string, (typeof docs)[number]>();
+    for (const d of docs) found.set(String(d._id), d);
+    const at = Date.now();
+    for (const [id, resolvers] of batch) {
+      const doc = found.get(id);
+      let facts: AccountFacts | null = null;
+      if (doc) {
+        const built: AccountFacts & { at: number } = {
+          id,
+          name: doc.name,
+          kind: (doc.kind ?? AccountKind.VOLUNTEER) as 'VOLUNTEER' | 'HACKER',
+          role: String(doc.role),
+          faction: doc.faction ?? null,
+          avatarHash: doc.avatarHash ?? null,
+          optIn: !!doc.presenceOptIn,
+          onDuty: this.onDuty.get(id) ?? false,
+          muteUntil: this.mutes.get(id) ?? 0,
+          at,
+        };
+        this.facts.set(id, built);
+        facts = built;
+      }
+      for (const r of resolvers) r(facts);
+    }
+    void nowMs;
+  }
+
+  /**
+   * Sweep the whole mute collection into a map every few seconds.
+   *
+   * Mutes are rare — only the speed gate writes one, and it expires in a minute — so the
+   * collection is tens of documents even at full attendance. Reading it whole on a timer is
+   * strictly cheaper than the per-account `findOne` this replaces, which ran on every cache
+   * miss for every account whether or not it had ever been muted.
+   */
+  private async refreshMutes(nowMs: number): Promise<void> {
+    if (nowMs - this.mutesAt < MUTE_SWEEP_MS) return;
+    this.mutesAt = nowMs;
+    try {
+      const rows = await PresenceMute.find({ until: { $gt: new Date(nowMs) } }).select('accountId until').lean();
+      const next = new Map<string, number>();
+      for (const r of rows as Array<{ accountId: unknown; until: Date }>) {
+        next.set(String(r.accountId), new Date(r.until).getTime());
+      }
+      this.mutes = next;
+    } catch {
+      /* a sweep failure leaves the previous map standing; a stale mute errs towards silence */
+    }
   }
 
   /** Drop a cached fact (opt-in toggled, avatar changed, faction changed). */
@@ -160,61 +319,174 @@ export class PresenceService {
     return this.store.update(facts, sample, nowMs);
   }
 
-  private tick(): void {
+  /**
+   * One tick, sliced across the second rather than run as a single block.
+   *
+   * At five thousand watchers the frame-building work is tens of milliseconds. That is a small
+   * fraction of a one-second cadence, but done in one go it is also tens of milliseconds during
+   * which no HTTP request, no WebSocket message and no database callback runs — once a second,
+   * for the whole event. Slicing keeps the same total work and the same cadence while capping
+   * any single block at `SLICE_BUDGET_MS`, so the worst latency presence adds to an unrelated
+   * request is a slice rather than a tick.
+   *
+   * The shared index and the cohort cache are built once, at the top, and reused by every
+   * slice. That is safe because positions are promoted exactly once per tick (`store.tick`
+   * above) and nothing else moves them: a slice running twenty milliseconds later sees the
+   * same world the first slice did, which is also what keeps every client's frame consistent
+   * with every other client's.
+   */
+  private tick(sync = false): void {
+    if (this.inFlight) {
+      // The previous tick has not finished slicing. Skipping is the honest response: doubling
+      // up would interleave two worlds, and queueing would grow without bound. This counter is
+      // the overload signal the soak watches, because it means the second was genuinely full.
+      this.stats.skippedTicks += 1;
+      return;
+    }
     const t0 = Date.now();
     this.tickNo += 1;
     const { expired } = this.store.tick(t0);
     if (expired.length) {
       for (const s of this.sessions.values()) for (const id of expired) s.forget(id, this.tickNo);
     }
-    let rows = 0;
+
+    // One pass over the store, then one cohort per occupied cell per audience, reused by every
+    // client standing in it. This is the change that makes five thousand clients a linear cost
+    // rather than a quadratic one: the expensive part (walking the interest span, ranking
+    // candidates, counting clusters) no longer happens per connection.
+    const index = this.store.buildIndex(t0);
+    const cohorts = new Map<string, Cohort>();
     const mpu = this.store.cfg.metersPerUnit;
-    for (const s of this.sessions.values()) {
-      s.clusterOnly = this.clusterMode;
-      try {
-        rows += s.send(this.tickNo, t0, mpu);
-      } catch {
-        this.remove(s.client.id);
+    const radius = this.store.cfg.interestRadiusMeters;
+    const queue = [...this.sessions.values()];
+
+    this.inFlight = true;
+    let cursor = 0;
+    let rows = 0;
+    let workMs = 0;
+
+    const runSlice = (): void => {
+      const sliceStart = process.hrtime.bigint();
+      while (cursor < queue.length) {
+        const s = queue[cursor++];
+        // A session removed since the queue was taken must not be sent to.
+        if (!this.sessions.has(s.client.id)) continue;
+        s.clusterOnly = this.clusterMode;
+        s.detailBudget = this.detailBudget;
+        try {
+          let cohort: Cohort | null = null;
+          const me = this.store.get(s.accountId);
+          if (me && !Number.isNaN(me.fx)) {
+            // Three things decide what a cohort contains: where you stand, whether you may see
+            // off-duty volunteers, and how many rows your transport can carry. Everything else
+            // about a client is per-connection bookkeeping the session still does itself.
+            const key = `${me.cell}|${s.lead ? 1 : 0}|${s.detailCap}`;
+            cohort = cohorts.get(key) ?? null;
+            if (!cohort) {
+              cohort = this.store.cohort(me.cell, radius, s.lead, s.detailCap, index);
+              cohorts.set(key, cohort);
+            }
+          }
+          rows += s.send(this.tickNo, t0, mpu, cohort);
+        } catch {
+          this.remove(s.client.id);
+        }
+        // Check the clock every thirty-two sessions rather than every one: `hrtime` is a
+        // syscall-shaped cost, and at five thousand sessions reading it each time would be a
+        // measurable share of the very budget it is policing.
+        if (!sync && (cursor & 31) === 0 && Number(process.hrtime.bigint() - sliceStart) / 1e6 >= SLICE_BUDGET_MS) break;
       }
-    }
-    const dt = Date.now() - t0;
+      workMs += Number(process.hrtime.bigint() - sliceStart) / 1e6;
+
+      if (cursor < queue.length) {
+        setImmediate(runSlice);
+        return;
+      }
+      this.inFlight = false;
+      this.stats.cohortsLastTick = cohorts.size;
+      this.finishTick(t0, workMs, rows);
+    };
+
+    runSlice();
+  }
+
+  /**
+   * Book-keeping and the load ladder, once every slice of a tick has run.
+   *
+   * `workMs` is the CPU actually spent building frames, not the wall-clock span the slices were
+   * spread over. Judging load by wall clock would punish presence for whatever else the process
+   * was doing between slices, which is exactly backwards: the point of slicing is to let that
+   * other work through.
+   */
+  private finishTick(t0: number, workMs: number, rows: number): void {
     this.stats.ticks = this.tickNo;
-    this.stats.lastTickMs = dt;
+    this.stats.lastTickMs = workMs;
     this.stats.rowsLastTick = rows;
     this.stats.sessions = this.sessions.size;
-    this.tickSamples.push(dt);
+    this.tickSamples.push(workMs);
     if (this.tickSamples.length > 120) this.tickSamples.shift();
     const sorted = [...this.tickSamples].sort((a, b) => a - b);
-    this.stats.p95TickMs = sorted[Math.floor(sorted.length * 0.95)] ?? dt;
+    this.stats.p95TickMs = sorted[Math.floor(sorted.length * 0.95)] ?? workMs;
 
-    // Degradation: two consecutive ticks over 30 ms → cluster-only for everyone; back to
-    // full detail after 10 s of ticks under 15 ms.
-    if (dt > DEGRADE_MS) {
+    // The load ladder. Two consecutive ticks over the halve threshold cut the detail budget;
+    // two more over the cluster threshold drop to counts only. Recovery climbs back one rung
+    // at a time after ten seconds of comfortable ticks, so a single busy moment does not strand
+    // the event on the bottom rung for the rest of the night.
+    if (workMs > CLUSTER_MS) {
       this.slowTicks += 1;
       this.fastSince = 0;
-      if (this.slowTicks >= 2 && !this.clusterMode) {
-        this.clusterMode = true;
-        this.stats.clusterMode = true;
-        for (const s of this.sessions.values()) s.client.send({ t: 'notice', mode: 'clusters' });
-      }
+      if (this.slowTicks >= 2) this.setRung(2);
+    } else if (workMs > HALVE_MS) {
+      this.slowTicks += 1;
+      this.fastSince = 0;
+      if (this.slowTicks >= 2 && this.rung < 1) this.setRung(1);
     } else {
       this.slowTicks = 0;
-      if (dt < RECOVER_MS) {
+      if (workMs < RECOVER_MS) {
         if (!this.fastSince) this.fastSince = t0;
-        if (this.clusterMode && t0 - this.fastSince >= RECOVER_HOLD_MS) {
-          this.clusterMode = false;
-          this.stats.clusterMode = false;
-          for (const s of this.sessions.values()) { s.requestResync(); s.client.send({ t: 'notice', mode: 'full' }); }
+        if (this.rung > 0 && t0 - this.fastSince >= RECOVER_HOLD_MS) {
+          this.setRung(this.rung - 1);
+          this.fastSince = t0;
         }
       } else {
         this.fastSince = 0;
       }
     }
+    void this.stats.bytesLastTick;
   }
 
-  /** Force one tick (tests). */
+  /**
+   * Move to a rung of the load ladder and tell every client what changed.
+   *
+   * Clients are told because the map has to say so. A player whose neighbours have silently
+   * stopped appearing should see "showing crowd counts only", not conclude the campus emptied.
+   */
+  private setRung(next: 0 | 1 | 2 | number): void {
+    const rung = Math.max(0, Math.min(2, next)) as 0 | 1 | 2;
+    if (rung === this.rung) return;
+    this.rung = rung;
+    this.clusterMode = rung === 2;
+    this.detailBudget = rung === 0 ? Number.POSITIVE_INFINITY : rung === 1 ? Math.ceil(this.store.cfg.maxDetail / 2) : 0;
+    this.stats.clusterMode = this.clusterMode;
+    this.stats.rung = rung;
+    const mode = rung === 0 ? 'full' : rung === 1 ? 'reduced' : 'clusters';
+    for (const s of this.sessions.values()) {
+      // Climbing back up needs a snapshot: the sessions stopped tracking who they had sent,
+      // so a delta against a half-remembered world would leave gaps on the map.
+      if (rung < 2) s.requestResync();
+      s.client.send({ t: 'notice', mode });
+    }
+  }
+
+  /**
+   * Run one whole tick synchronously.
+   *
+   * Tests and the benchmark need the tick to be finished when the call returns; slicing exists
+   * for the production event loop, not for a harness that has nothing else to do. Passing the
+   * flag rather than exposing two code paths keeps the thing under test the thing that ships.
+   */
   tickNow(): void {
-    this.tick();
+    this.tick(true);
   }
 }
 

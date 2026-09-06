@@ -1,30 +1,41 @@
 /**
- * M4b — the presence soak (plan Part D, gate M4b).
+ * The presence soak (plan Part D, gate M4b), sized for a five-thousand-attendee event.
  *
- * Jest keeps the protocol and unit tests; the 1,200-socket run lives here because the
- * shared replica set and the 60 s test timeout make anything that size infeasible in the
- * suite. This opens real WebSockets against a real server, walks each client along a random
- * path, and reports the two things the gate is about: how long a tick takes at the far end
- * of the distribution, and how many bytes we push per second.
+ * Jest keeps the protocol and unit tests; a run this size lives here because the shared
+ * replica set and the sixty-second test timeout make it infeasible in the suite. This opens
+ * real WebSockets against a real server, walks each client along a random path, and reports
+ * what the gate is about: how much CPU a tick costs at the far end of the distribution, how
+ * long the event loop is ever blocked, and how many bytes go out per second.
  *
- *   npm run bench:presence -- --clients 1200 --devices 2 --seconds 120
- *   npm run bench:presence -- --clients 1200 --storm 10        # 10 % reconnect within 60 s
+ *   npm run bench:presence -- --clients 5000 --devices 2 --seconds 120
+ *   npm run bench:presence -- --clients 5000 --storm 10        # 10 % reconnect within 60 s
  *
- * Phase 1 (steady state) must show: tick p95 < 30 ms, measured outbound < 1 MB/s, the
- * cluster-only fallback never triggered, zero cross-transport evictions, and no 1013 close
- * for an account inside its slot budget. Phase 2 (reconnect storm) must additionally show
- * that a reconnecting account never evicts its own other transport and that every client is
- * back at full detail within 60 s.
+ * **What the numbers have to say.** Phase one, steady state: tick CPU p95 under 200 ms (the
+ * first rung of the load ladder), the longest event-loop block under about 15 ms, the ladder
+ * never leaving rung 0, zero cross-transport evictions, and no 1013 close for an account
+ * inside its slot budget. Phase two, reconnect storm: a reconnecting account never evicts its
+ * own other transport, and every client is back at full detail within sixty seconds.
+ *
+ * The tick budget is stated as CPU rather than wall clock on purpose. The tick is sliced
+ * across the second (see `PresenceService.tick`), so its wall-clock span is meaningless and
+ * its blocking behaviour is a separate measurement. A CPU figure of two hundred milliseconds
+ * is a fifth of the one-second cadence: past that, presence is a large enough share of the
+ * process to start showing up in unrelated request latency, which is exactly when the ladder
+ * should be trimming the ring rather than the operator finding out from a complaint.
+ *
+ * For a quick answer while editing the tick itself, `scripts/benchmarks/presenceTick.ts`
+ * measures the same loop in process with no network and no database. It is not the gate; it
+ * is the thing you run twenty times an hour so the gate has a chance of passing.
  *
  * The server must be running with PRESENCE_ENABLED=true and reachable at --url.
  *
- * **Source addresses.** The untrusted leg of the gate (800 streams per IP against 2,400
- * streams) cannot be exercised from one address: a single host would be refused at 800 and
+ * **Source addresses.** The untrusted leg of the gate (3,000 streams per IP against 10,000
+ * streams) cannot be exercised from one address: a single host would be refused at 3,000 and
  * the run would prove only that the cap works. Either give this process several local
  * addresses and pass them with `--from 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4` (each socket is
- * bound round-robin), or run four copies with `--clients 300` on four hosts. With one
- * address, pass those addresses in the server's TRUSTED_EGRESS_CIDRS — that is the trusted
- * leg, and the harness says which leg it ran.
+ * bound round-robin), or run four copies with `--clients 1250` on four hosts. With one
+ * address, pass that address in the server's TRUSTED_EGRESS_CIDRS — that is the trusted leg,
+ * and the harness says which leg it ran.
  */
 import { WebSocket } from 'ws';
 
@@ -49,7 +60,7 @@ function parseArgs(argv: string[]): Args {
   return {
     api,
     url: get('url', api.replace(/^http/, 'ws') + '/ws/presence'),
-    clients: Number(get('clients', '1200')),
+    clients: Number(get('clients', '5000')),
     devices: Number(get('devices', '2')),
     seconds: Number(get('seconds', '120')),
     stormPercent: Number(get('storm', '0')),
@@ -123,7 +134,7 @@ async function makeClient(api: string, i: number, desk: { cookie: string; csrf: 
   const csrf = csrfCookie ? decodeURIComponent(csrfCookie.split(';')[0].split('=')[1]) : '';
   // Presence is opt-in; the soak represents people who turned it on.
   await json(`${api}/api/v1/me/presence`, { method: 'PATCH', cookie, headers: { 'x-csrf-token': csrf }, body: JSON.stringify({ optIn: true }) });
-  const angle = (i / 1200) * Math.PI * 2;
+  const angle = (i / 5000) * Math.PI * 2;
   return {
     accountId, cookie, csrf, sockets: [],
     lat: QUAD[0] + (Math.sin(angle) * 250) / M_PER_LAT,

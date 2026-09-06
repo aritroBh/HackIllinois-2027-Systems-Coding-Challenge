@@ -237,6 +237,20 @@ function formatFrame(version: 1 | 2, seq: number, ts: number, type: string, chan
 class SSEBroadcastHub {
   private clients = new Map<string, IClient>();
   private byAccount = new Map<string, Set<IClient>>();
+  /**
+   * channel → the clients subscribed to it, and slot id → its client.
+   *
+   * Publishing used to copy the whole client map into an array and then ask each entry
+   * whether it cared. At a few hundred streams that is invisible; at eleven thousand it is a
+   * fresh eleven-thousand-element array on every ops event, most of whose entries are
+   * immediately discarded. A per-channel set makes the cost proportional to the audience,
+   * which is what a fan-out should cost, and lets `stats()` answer without a scan.
+   *
+   * The slot index replaces the linear search `evictBySlot` used to run on every eviction,
+   * which is the one path that runs *more* often as the table fills up.
+   */
+  private byChannel = new Map<Channel, Set<IClient>>();
+  private bySlot = new Map<number, IClient>();
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private seq = 0;
   private buffers = new Map<Channel, BufferedEvent[]>();
@@ -333,6 +347,12 @@ class SSEBroadcastHub {
     res.flushHeaders();
 
     this.clients.set(id, client);
+    this.bySlot.set(client.slot.id, client);
+    for (const ch of client.channels) {
+      const set = this.byChannel.get(ch);
+      if (set) set.add(client);
+      else this.byChannel.set(ch, new Set([client]));
+    }
     if (account) {
       const set = this.byAccount.get(account.id);
       if (set) set.add(client);
@@ -372,6 +392,13 @@ class SSEBroadcastHub {
   private removeClient(client: IClient): void {
     if (!this.clients.delete(client.id)) return;
     streamLimits.release(client.slot);
+    this.bySlot.delete(client.slot.id);
+    for (const ch of client.channels) {
+      const set = this.byChannel.get(ch);
+      if (!set) continue;
+      set.delete(client);
+      if (set.size === 0) this.byChannel.delete(ch);
+    }
     if (client.account) {
       const set = this.byAccount.get(client.account.id);
       if (set) {
@@ -395,12 +422,8 @@ class SSEBroadcastHub {
   }
 
   private evictBySlot(slot: SlotHandle, reason: string): void {
-    for (const client of this.clients.values()) {
-      if (client.slot.id === slot.id) {
-        this.evict(client, reason);
-        return;
-      }
-    }
+    const client = this.bySlot.get(slot.id);
+    if (client) this.evict(client, reason);
   }
 
   // -------------------------------------------------------------------------
@@ -467,8 +490,14 @@ class SSEBroadcastHub {
     // hacker's stream has already leaked, however carefully the UI hides it.
     const audience = channel === 'announce' ? audienceOf(message.data) : null;
 
-    for (const client of [...this.clients.values()]) {
-      if (!client.channels.has(channel)) continue;
+    // Only the channel's own subscribers, and iterated directly rather than through a copy.
+    // `write` can remove the client it is writing to (a half-open socket, or backpressure past
+    // the ceiling), and deleting from a Set while iterating it is well defined in JavaScript:
+    // an entry removed before it is reached is simply not visited, which is exactly the
+    // behaviour wanted for a client that has just gone away.
+    const subscribers = this.byChannel.get(channel);
+    if (!subscribers) return;
+    for (const client of subscribers) {
       // A lagging client gets no presence frames: the next tick supersedes them, and
       // buffering positions for a peer that is not reading is how a socket hits 512 KiB.
       if (isPresence && client.lagging) continue;
@@ -600,10 +629,7 @@ class SSEBroadcastHub {
 
   public stats(): { clients: number; byChannel: Record<Channel, number>; slots: ReturnType<typeof streamLimits.stats> } {
     const byChannel = {} as Record<Channel, number>;
-    for (const ch of CHANNELS) byChannel[ch] = 0;
-    for (const client of this.clients.values()) {
-      for (const ch of client.channels) byChannel[ch] += 1;
-    }
+    for (const ch of CHANNELS) byChannel[ch] = this.byChannel.get(ch)?.size ?? 0;
     return { clients: this.clients.size, byChannel, slots: streamLimits.stats() };
   }
 
@@ -619,6 +645,8 @@ class SSEBroadcastHub {
     for (const client of this.clients.values()) streamLimits.release(client.slot);
     this.clients.clear();
     this.byAccount.clear();
+    this.byChannel.clear();
+    this.bySlot.clear();
   }
 }
 

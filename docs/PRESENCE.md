@@ -56,19 +56,44 @@ Sharing is opt-in and reviewed. An avatar is visible to its owner and to leads w
 
 The presence wire carries only the hash.
 
+## How five thousand clients stay affordable
+
+Three things carry the tick, and each of them replaced a per-client cost with a shared one.
+
+**One index per tick, not one scan per client.** Every publishable position is bucketed by 50 m cell once, at the top of the tick. Off-shift volunteers are separated from the public view in the same pass, so the per-viewer path never re-asks who is allowed to see whom.
+
+**One interest pass per cell, not per client.** The interest span is `floor(x / cell) ± span`, so everybody standing in the same cell scans the same cells and sees the same candidates. That computation is done once and shared. Twelve venues' worth of a five-thousand-person event is about a hundred and seventy shared passes against five thousand clients. The price is that the nearest-sixty cut is ranked from the cell centre rather than from each viewer's exact position, which reorders the tail of a three-hundred-metre ring and changes nothing anybody can see.
+
+**A coarse block index over the cells.** A 300 m radius over 50 m cells is 169 lookups whether or not anybody is there, and at three in the morning most of a 25 km² campus is car parks. Cells are grouped into 400 m blocks, and the scan asks which blocks are occupied before it asks which cells are. On a thinly spread campus that turns a hundred and sixty-nine misses into a handful.
+
+The tick is also **sliced**. The work is the same, but it yields to the event loop every 8 ms, so the worst latency presence adds to an unrelated HTTP request is a slice rather than a whole tick. Measured on a laptop with five thousand sessions and five thousand publishers, all moving every second: about 50 ms of CPU per tick in the venue-clustered layout, about 115 ms in an artificially scattered one, and never more than about 11 ms of contiguous blocking in either.
+
+```
+npx tsx scripts/benchmarks/presenceTick.ts               # in-process, no network
+npx tsx scripts/benchmarks/presenceTick.ts --spread scatter
+```
+
 ## Degradation
 
-If two consecutive ticks exceed 30 ms the service drops every client to cluster-only rows and sends `notice{mode:"clusters"}`; it returns to full detail after 10 s of ticks under 15 ms. The M4b soak exists to prove this never fires at the event's real size.
+The old behaviour was a cliff: one threshold, and past it every sprite on every map vanished at once. It is now a ladder with three rungs, judged on CPU spent per tick rather than on wall clock, because a sliced tick's wall-clock span says more about what else the process was doing than about presence.
+
+| Rung | Trips at | What a player sees |
+|---|---|---|
+| 0 full | — | the nearest sixty players, individually |
+| 1 reduced | two ticks over 200 ms | the nearest thirty, plus counts for the rest |
+| 2 clusters | two ticks over 500 ms | counts only, no individual positions |
+
+Every change sends `notice{mode}` so the interface can say "showing crowd counts only" rather than letting a player conclude the campus emptied. Recovery climbs one rung at a time after 10 s of ticks under 120 ms, so one busy moment does not strand the event on the bottom rung. The soak exists to show that rung 0 holds at the event's real size.
 
 ## Running the soak
 
 ```
 npm run demo                                    # a server with seeded accounts
-npm run bench:presence -- --clients 1200 --devices 2 --seconds 120
-npm run bench:presence -- --clients 1200 --storm 10
+npm run bench:presence -- --clients 5000 --devices 2 --seconds 120
+npm run bench:presence -- --clients 5000 --storm 10
 ```
 
-The harness provisions hacker accounts through a desk session, opens real sockets, walks each client, and reports the gate: tick p95 under 30 ms, outbound under 1 MB/s, the cluster fallback never triggered, and no 1013 close for an account inside its slot budget. Run it once with the generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without, to exercise both the trusted path and the 800-streams-per-IP ceiling.
+The harness provisions hacker accounts through a desk session, opens real sockets, walks each client, and reports the gate: tick CPU p95 under 200 ms, the longest event-loop block under about 15 ms, the ladder never leaving rung 0, and no 1013 close for an account inside its slot budget. Run it once with the generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without, to exercise both the trusted path and the 3,000-streams-per-IP ceiling.
 
 It provisions hackers rather than volunteers on purpose: an off-shift volunteer is invisible to their peers, so a crowd of them would measure an empty map.
 

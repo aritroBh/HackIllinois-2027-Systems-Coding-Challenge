@@ -104,10 +104,30 @@ In the `/health` body:
 * **`streams.slots.anonymous` against `anonSlots`.** Anonymous streams have their own small
   budget on purpose. Saturation here usually means a client is reconnecting without a
   session rather than that the event grew.
-* **`presence.p95TickMs`.** The presence tick budget is 30 ms. Two consecutive ticks over
-  it drop every client to cluster-only rows.
-* **`presence.clusterMode`.** If this is `true` during the event, the map has degraded to
-  counts. It should never fire at the size the soak measured.
+* **`presence.p95TickMs`.** CPU spent building one tick's frames, against a one-second
+  cadence. Two hundred milliseconds is the first rung of the load ladder; five hundred is the
+  second. The figure is CPU, not wall clock, because the tick yields to the event loop every
+  8 ms and its span therefore says more about what else the process is doing.
+* **`presence.rung`.** 0 is full detail, 1 is half the ring plus counts, 2 is counts only. If
+  this is not 0 during the event, presence is the busiest thing in the process. It should
+  never leave 0 at the size the soak measured.
+* **`presence.skippedTicks`.** A tick that fired while the previous one was still slicing.
+  This is the honest overload signal: it means a whole second was not enough. A number that
+  climbs during the event is the one presence metric worth waking somebody for.
+* **`presence.cohortsLastTick` against `presence.sessions`.** The ratio is how much sharing
+  the interest pass is getting. A ratio near one to one at a crowded moment means the cohort
+  cache has been broken by a change and the tick is doing five thousand passes where it
+  should be doing two hundred.
+
+### Sizing the stream table
+
+`STREAM_TOTAL_SLOTS` (default 11,000) is attendance times devices plus headroom.
+`STREAM_PER_IP` (default 3,000) is an anti-abuse ceiling, not a capacity control: five
+thousand people on venue Wi-Fi arrive from a handful of NAT addresses, so a figure low enough
+to matter against one attacker would lock out the venue. List the venue's egress ranges in
+`TRUSTED_EGRESS_CIDRS` and this stops being a number you have to think about.
+`STREAM_ANON_SLOTS` (default 800) is deliberately small, because a stream without an account
+has nothing else to cap it by.
 * **`jobs[].lastError`.** Background jobs report their last failure here rather than only in
   the log.
 

@@ -4,9 +4,14 @@
  *
  * Three ceilings, each sized against a different failure:
  *
- *  - **`TOTAL_SLOTS` = 2,600** is capacity: 1,200 accounts × 2 devices plus headroom. An
- *    unbounded map of live sockets is a memory-DoS with no authentication required, so the
- *    table refuses (`reason: 'TOTAL'`) rather than growing.
+ *  - **`TOTAL_SLOTS` = 11,000** is capacity: 5,000 accounts × 2 devices plus a thousand slots
+ *    of headroom for the overlap while a reconnecting client's old socket is still closing.
+ *    An unbounded map of live sockets is a memory-DoS with no authentication required, so the
+ *    table refuses (`reason: 'TOTAL'`) rather than growing. A slot is a few hundred bytes of
+ *    bookkeeping here plus whatever the socket itself costs, so eleven thousand of them is a
+ *    ceiling that protects the process without ever being the thing that turns anyone away.
+ *    Every ceiling in this file is an environment variable, because the right number is a
+ *    property of the venue rather than of the software.
  *  - **`PER_ACCOUNT` = 2, across transports.** Phone + laptop both work. A third connection
  *    replaces the *oldest connection of the same transport* and never touches the other
  *    transport — a WebSocket reconnect must not tear down the SSE leg that is still
@@ -15,15 +20,19 @@
  *    cap is enforced by replacement, never by a hard error to a client under its device
  *    quota (M4b counts cross-transport evictions and refusals as failures, not
  *    same-transport replacement). Worst case is therefore two per transport.
- *  - **`PER_IP` = 800** is an anti-abuse ceiling, not a capacity control. 1,200 people on
- *    venue Wi-Fi arrive from a handful of NAT egress addresses, so a per-IP figure low
- *    enough to matter against one attacker would lock out the venue. Addresses inside
- *    `TRUSTED_EGRESS_CIDRS` are exempt from PER_IP; everyone else gets 800, which still lets
- *    four egress IPs carry the whole event.
- *  - **Anonymous streams are boxed in separately** (`ANON_SLOTS` = 400 total,
+ *  - **`PER_IP` = 3,000** is an anti-abuse ceiling, not a capacity control. Five thousand
+ *    people on venue Wi-Fi arrive from a handful of NAT egress addresses, so a per-IP figure
+ *    low enough to matter against one attacker would lock out the venue. Addresses inside
+ *    `TRUSTED_EGRESS_CIDRS` are exempt from PER_IP; everyone else gets 3,000, so the ten
+ *    thousand streams of a full event fit across four egress addresses with room to spare
+ *    even if the load lands unevenly. An operator who knows their egress ranges should list
+ *    them and stop thinking about this number.
+ *  - **Anonymous streams are boxed in separately** (`ANON_SLOTS` = 800 total,
  *    `ANON_PER_IP` = 20, applied even on trusted egress). Without an account there is
  *    nothing else to cap them by, and a single venue address could otherwise hold every
- *    slot and lock out signed-in users.
+ *    slot and lock out signed-in users. The anonymous pool grew with the total but the
+ *    per-IP figure deliberately did not: one address has no more legitimate reason to hold
+ *    twenty anonymous streams at five thousand attendees than it did at twelve hundred.
  *
  * Only IPv4 CIDRs are parsed (plus IPv4-mapped IPv6 `::ffff:a.b.c.d`, which is how Node
  * reports a v4 peer on a dual-stack listener). The venue's egress ranges are v4; an IPv6
@@ -150,11 +159,11 @@ export function isTrustedEgress(ip: string | undefined, cidrs: readonly Cidr[] =
 // ---------------------------------------------------------------------------
 
 export class StreamLimits {
-  public static readonly TOTAL_SLOTS = 2600;
+  public static readonly TOTAL_SLOTS = env.STREAM_TOTAL_SLOTS;
   public static readonly PER_ACCOUNT = 2;
-  public static readonly PER_IP = 800;
+  public static readonly PER_IP = env.STREAM_PER_IP;
   /** Anonymous streams (no account to cap them) share this small pool… */
-  public static readonly ANON_SLOTS = 400;
+  public static readonly ANON_SLOTS = env.STREAM_ANON_SLOTS;
   /** …and this per-IP cap, which applies even on trusted egress. */
   public static readonly ANON_PER_IP = 20;
 

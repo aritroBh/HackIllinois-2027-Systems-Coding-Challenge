@@ -88,6 +88,19 @@ const envSchema = z.object({
   // could ever raise it. For an event expecting thousands of concurrent users
   // behind shared campus NAT, that ceiling is the binding constraint.
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  /**
+   * The stream table's three ceilings, sized for the event you are actually running.
+   *
+   * The defaults carry five thousand attendees on two devices each with a thousand slots of
+   * headroom, which is the attendance this system is now built for. They are configuration
+   * rather than constants because the numbers that matter are a property of the venue: how
+   * many people, behind how many egress addresses. An operator running a two-hundred-person
+   * hackathon on one uplink wants smaller numbers, and one running a conference behind a
+   * single carrier-grade NAT wants a larger per-IP ceiling, not a smaller one.
+   */
+  STREAM_TOTAL_SLOTS: z.coerce.number().int().positive().default(11_000),
+  STREAM_PER_IP: z.coerce.number().int().positive().default(3_000),
+  STREAM_ANON_SLOTS: z.coerce.number().int().positive().default(800),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   // Number of proxy hops to trust for client-IP resolution (0 = trust none).
   // Without this, every client behind a load balancer resolves to the proxy's

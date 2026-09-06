@@ -61,7 +61,7 @@ With the presence soak running, restart the server. Expect clients to reconnect 
 The M4b gate, run twice: once with the load generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without.
 
 ```sh
-npm run bench:presence -- --clients 1200 --devices 2 --seconds 120 --storm 10
+npm run bench:presence -- --clients 5000 --devices 2 --seconds 120 --storm 10
 ```
 
 Expect a tick p95 under thirty milliseconds, outbound under one megabyte a second, the cluster-only fallback never triggered, and every reconnecting account keeping its other connection.
