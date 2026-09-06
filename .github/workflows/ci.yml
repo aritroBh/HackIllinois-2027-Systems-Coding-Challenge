@@ -46,5 +46,8 @@ jobs:
     - name: Frontend verification (syntax, tokens, material lockstep, winding audit)
       run: scripts/verify.sh quick
 
-    - name: Run Test Suite (Concurrency, Invariants, Swaps, Attendance, Identity, Content, Campus)
+    - name: Run Test Suite (Concurrency, Invariants, Swaps, Attendance, Identity, Content, Campus, Presence, Ops, Economy)
       run: npm test
+
+    - name: Dependency audit (advisory)
+      run: npm audit --audit-level=high || true
