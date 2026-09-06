@@ -145,10 +145,10 @@ export class ShiftService {
 
     const [confirmedRegs, waitlistedRegs] = await Promise.all([
       Registration.find({ shiftId: new Types.ObjectId(id), status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } })
-        .populate('volunteerId', 'name email certifications karmaPoints prestigeTier')
+        .populate('volunteerId', 'name certifications karmaPoints prestigeTier')
         .sort({ confirmedAt: 1 }),
       Registration.find({ shiftId: new Types.ObjectId(id), status: RegistrationStatus.WAITLISTED })
-        .populate('volunteerId', 'name email certifications karmaPoints prestigeTier')
+        .populate('volunteerId', 'name certifications karmaPoints prestigeTier')
         .sort({ waitlistPosition: 1 }),
     ]);
 
