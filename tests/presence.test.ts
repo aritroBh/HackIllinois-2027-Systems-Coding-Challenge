@@ -6,6 +6,7 @@
  * upgrade's cookie and CSRF checks — do not exist at all in a mocked socket.
  */
 import http from 'http';
+import { uniqueKey } from './helpers/uniqueKey';
 import crypto from 'crypto';
 import { AddressInfo } from 'net';
 import request from 'supertest';
@@ -295,8 +296,8 @@ describe('SOS dispatch prefers a live position', () => {
       startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000), capacity: 5, baseKarma: 10,
     });
     await Registration.create([
-      { shiftId: shift._id, volunteerId: near._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: `d1_${Date.now()}` },
-      { shiftId: shift._id, volunteerId: far._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: `d2_${Date.now()}` },
+      { shiftId: shift._id, volunteerId: near._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('d1') },
+      { shiftId: shift._id, volunteerId: far._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('d2') },
     ]);
 
     // The ticket is at the Quad; "Near Nan" is standing 20 m away, "Far Fay" has no fix.
@@ -341,7 +342,7 @@ describe('SOS dispatch prefers a live position', () => {
       title: 'Oracle pool', description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
       startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000), capacity: 5, baseKarma: 10,
     });
-    await Registration.create({ shiftId: shift._id, volunteerId: responder._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: `o1_${Date.now()}` });
+    await Registration.create({ shiftId: shift._id, volunteerId: responder._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('o1') });
     const ticketAt = at(0, 0);
     const raeAt = at(37, 0); // a distance that is obviously not a multiple of ten
     presenceStore.update(facts(String(responder._id)), { lat: raeAt.lat, lng: raeAt.lng, acc: 6 });
@@ -510,7 +511,7 @@ describe('act-on-behalf is narrow', () => {
 
     const { agent: l, csrf: lCsrf } = await signIn(lead.id);
     const asLead = await l.post('/api/v1/registrations').set('X-CSRF-Token', lCsrf)
-      .set('Idempotency-Key', `deleg_${Date.now()}`)
+      .set('Idempotency-Key', uniqueKey('deleg'))
       .send({ shiftId: shift.id, onBehalfVolunteerId: subject.id });
     if (asLead.status !== 201) console.log('DELEG FAIL', asLead.status, JSON.stringify(asLead.body));
     expect(asLead.status).toBe(201);
@@ -518,7 +519,7 @@ describe('act-on-behalf is narrow', () => {
 
     const { agent: s, csrf: sCsrf } = await signIn(sneak.id);
     const asVolunteer = await s.post('/api/v1/registrations').set('X-CSRF-Token', sCsrf)
-      .set('Idempotency-Key', `sneak_${Date.now()}`)
+      .set('Idempotency-Key', uniqueKey('sneak'))
       .send({ shiftId: shift.id, onBehalfVolunteerId: subject.id });
     expect(asVolunteer.status).toBe(201);
     // The delegation field is ignored for a non-lead: they registered themselves.
@@ -526,7 +527,7 @@ describe('act-on-behalf is narrow', () => {
 
     // And the ordinary `volunteerId` slot is still refused outright for a non-lead session.
     const named = await s.post('/api/v1/registrations').set('X-CSRF-Token', sCsrf)
-      .set('Idempotency-Key', `named_${Date.now()}`)
+      .set('Idempotency-Key', uniqueKey('named'))
       .send({ shiftId: shift.id, volunteerId: subject.id });
     expect(named.status).toBe(403);
     expect(named.body.error).toBe('IDENTITY_MISMATCH');
@@ -552,7 +553,7 @@ describe('act-on-behalf is narrow', () => {
     });
     const victimReg = await Registration.create({
       shiftId: shift._id, volunteerId: victim._id, status: RegistrationStatus.CHECKED_IN,
-      idempotencyKey: `victim_${Date.now()}`, checkInTime: new Date(Date.now() - 1800_000),
+      idempotencyKey: uniqueKey('victim'), checkInTime: new Date(Date.now() - 1800_000),
     });
     const before = (await Volunteer.findById(victim._id))!.karmaPoints;
     const checkout = await agent.post(`/api/v1/attendance/${victimReg.id}/checkout`).set('X-CSRF-Token', csrf)

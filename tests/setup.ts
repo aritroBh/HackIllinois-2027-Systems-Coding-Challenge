@@ -3,6 +3,9 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registers every model, so the index build below covers all of them rather than only the
 // ones a given suite happens to import.
 import '../src/models';
+import { __clearAccountCache } from '../src/middleware/identity';
+import { __resetAvatarRate } from '../src/services/avatar.service';
+import { presenceStore } from '../src/presence/store';
 
 let replSet: MongoMemoryReplSet;
 
@@ -34,6 +37,15 @@ afterEach(async () => {
       await collection.deleteMany({});
     }
   }
+
+  // In-process state outlives the database, and that asymmetry is where cross-suite flakes
+  // come from. The identity middleware caches accounts for sixty seconds, which is far longer
+  // than a suite: an entry cached before this hook ran describes a document that no longer
+  // exists, and the request that hits it is answered from a memory of deleted data. Clearing
+  // caches here rather than in each suite means a new suite cannot forget to.
+  __clearAccountCache();
+  __resetAvatarRate();
+  presenceStore.clear();
 });
 
 afterAll(async () => {

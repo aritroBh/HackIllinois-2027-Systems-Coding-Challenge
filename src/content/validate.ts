@@ -5,6 +5,7 @@
  * list otherwise. CI runs it for the active pack and for every directory under content/.
  */
 import path from 'path';
+import { REPO_ROOT } from '../common/utils/repoRoot';
 import fs from 'fs';
 import { loadPack, ContentPackError } from './loader';
 
@@ -12,9 +13,9 @@ const target = process.argv[2];
 const dirs = target
   ? [path.resolve(target)]
   : fs
-      .readdirSync(path.resolve(__dirname, '../../content'), { withFileTypes: true })
+      .readdirSync(path.join(REPO_ROOT, 'content'), { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => path.resolve(__dirname, '../../content', d.name));
+      .map((d) => path.join(REPO_ROOT, 'content', d.name));
 
 let failed = false;
 for (const dir of dirs) {

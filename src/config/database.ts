@@ -17,10 +17,25 @@
  * document-level concurrency control makes the atomic `$expr` capacity guard meaningful.
  */
 import mongoose from 'mongoose';
-import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { env } from './env';
 
-let replSet: MongoMemoryReplSet | null = null;
+/**
+ * `mongodb-memory-server` is a development dependency and is imported lazily, at the point
+ * the in-memory path is actually taken.
+ *
+ * A top-level import would be evaluated on every boot, including in a production image that
+ * installs `--omit=dev` and therefore does not have the package. The failure is
+ * `Cannot find module 'mongodb-memory-server'` from a file that was only ever going to
+ * connect to the configured URI — a module-resolution error standing in for a database that
+ * was reachable all along. The production boot guard already refuses to start without
+ * `MONGODB_URI`, so this branch cannot run there.
+ *
+ * The type is imported separately: `import type` is erased at compile time and pulls nothing
+ * into the runtime graph.
+ */
+type MemoryReplSet = import('mongodb-memory-server').MongoMemoryReplSet;
+
+let replSet: MemoryReplSet | null = null;
 
 /**
  * Connect to MongoDB.
@@ -38,6 +53,7 @@ export async function connectDatabase(): Promise<string> {
   console.log('⚡ [ZERO-CONFIG] Initializing In-Memory MongoDB Replica Set for ACID Transactions...');
   const start = Date.now();
 
+  const { MongoMemoryReplSet } = await import('mongodb-memory-server');
   replSet = await MongoMemoryReplSet.create({
     replSet: { count: 1, storageEngine: 'wiredTiger' },
   });

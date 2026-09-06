@@ -13,6 +13,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { REPO_ROOT } from '../common/utils/repoRoot';
 import { ZodError, ZodTypeAny } from 'zod';
 import { env } from '../config/env';
 import {
@@ -121,7 +122,7 @@ export function loadPack(dir: string): ContentPack {
   return { ...partial, factionIds: new Set(partial.factions.map((f) => f.id)), files };
 }
 
-export const CONTENT_DIR = path.resolve(env.CONTENT_DIR ?? path.resolve(__dirname, '../../content'));
+export const CONTENT_DIR = path.resolve(env.CONTENT_DIR ?? path.join(REPO_ROOT, 'content'));
 export const CONTENT_PACK = env.CONTENT_PACK;
 
 function loadActivePack(): ContentPack {

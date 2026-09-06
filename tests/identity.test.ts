@@ -481,9 +481,25 @@ describe('AUTH_MODE=required — review round 2 pins', () => {
     const vol = await makeVolunteer();
     const { agent: h } = await signIn(hacker.id);
     const { agent: v } = await signIn(vol.id);
-    expect((await request(app).get('/api/v1/stats/events?v=2&channels=sos')).status).toBe(403);
-    expect((await h.get('/api/v1/stats/events?v=2&channels=presence:exact')).status).toBe(403);
-    expect((await v.get('/api/v1/stats/events?v=2&channels=presence:exact')).status).toBe(403);
+    // The whole point of this test is what `required` mode refuses, so say so out loud. Several
+    // suites flip this global, and a silent restore in the wrong order would turn every
+    // assertion below into a test of legacy mode wearing this test's name.
+    expect(env.AUTH_MODE).toBe('required');
+
+    // A refusal is a normal JSON response; an ACCEPTANCE is an endless event-stream, and
+    // supertest tries to parse it as a body. When one of these assertions failed it therefore
+    // surfaced as `Parse Error: Expected HTTP/` from the parser rather than as "expected 403,
+    // received 200", which named the wrong thing entirely. Destroying the socket instead makes
+    // the failure say what actually went wrong.
+    const asStream = (t: request.Test) =>
+      t.buffer(false).parse((res, cb) => {
+        (res as unknown as { destroy(): void }).destroy();
+        cb(null, '');
+      });
+
+    expect((await asStream(request(app).get('/api/v1/stats/events?v=2&channels=sos'))).status).toBe(403);
+    expect((await asStream(h.get('/api/v1/stats/events?v=2&channels=presence:exact'))).status).toBe(403);
+    expect((await asStream(v.get('/api/v1/stats/events?v=2&channels=presence:exact'))).status).toBe(403);
   });
 
   it('a signed-in Adonix exchange without explicit link intent is 409 ACCOUNT_LINK_CONFIRM (account-tying guard)', async () => {

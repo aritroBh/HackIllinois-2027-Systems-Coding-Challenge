@@ -4,6 +4,7 @@
  * what stops a ticket being dragged sideways into a state nobody can act on.
  */
 import request from 'supertest';
+import { uniqueKey } from './helpers/uniqueKey';
 import { app } from '../src/app';
 import { env } from '../src/config/env';
 import { Volunteer, VolunteerRole, AccountKind } from '../src/models/volunteer.model';
@@ -246,8 +247,8 @@ describe('me and roster', () => {
     const later = await openShift('Tomorrow');
     await Shift.updateOne({ _id: later._id }, { $set: { startTime: new Date(Date.now() + 90_000_000), endTime: new Date(Date.now() + 93_600_000) } });
     await Registration.create([
-      { shiftId: later._id, volunteerId: vol._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: `r1_${Date.now()}` },
-      { shiftId: soon._id, volunteerId: vol._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: `r2_${Date.now()}` },
+      { shiftId: later._id, volunteerId: vol._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('r1') },
+      { shiftId: soon._id, volunteerId: vol._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('r2') },
     ]);
 
     const { agent } = await signIn(vol.id);
@@ -273,8 +274,8 @@ describe('me and roster', () => {
     const away = await makeAccount({ name: 'Away Ada' });
     const shift = await openShift('Roster shift');
     await Registration.create([
-      { shiftId: shift._id, volunteerId: here._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: `k1_${Date.now()}` },
-      { shiftId: shift._id, volunteerId: away._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: `k2_${Date.now()}` },
+      { shiftId: shift._id, volunteerId: here._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('k1') },
+      { shiftId: shift._id, volunteerId: away._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('k2') },
     ]);
     // "Here Hana" is publishing from the venue itself.
     presenceStore.update(

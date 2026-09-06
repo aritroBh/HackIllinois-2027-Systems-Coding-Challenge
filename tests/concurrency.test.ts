@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { uniqueKey } from './helpers/uniqueKey';
 import { app } from '../src/app';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Volunteer } from '../src/models/volunteer.model';
@@ -41,7 +42,7 @@ describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
     const promises = volunteers.map((vol, idx) =>
       request(app)
         .post('/api/v1/registrations')
-        .set('idempotency-key', `stress_test_worker_${idx}_${Date.now()}`)
+        .set('idempotency-key', uniqueKey(`stress_test_worker_${idx}`))
         .send({
           shiftId: shift._id.toString(),
           volunteerId: vol._id.toString(),
@@ -117,7 +118,7 @@ describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
     for (let i = 0; i < 10; i++) {
       const res = await request(app)
         .post('/api/v1/registrations')
-        .set('idempotency-key', `cascade_seed_${i}_${Date.now()}`)
+        .set('idempotency-key', uniqueKey(`cascade_seed_${i}`))
         .send({ shiftId: shift._id.toString(), volunteerId: vols[i]._id.toString() });
       reservations.push(res);
     }
@@ -150,7 +151,7 @@ describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
       ...latecomers.map((v, i) =>
         request(app)
           .post('/api/v1/registrations')
-          .set('idempotency-key', `cascade_racer_${i}_${Date.now()}`)
+          .set('idempotency-key', uniqueKey(`cascade_racer_${i}`))
           .send({ shiftId: shift._id.toString(), volunteerId: v._id.toString() })
       ),
     ]);

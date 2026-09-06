@@ -31,6 +31,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
+import { REPO_ROOT } from './common/utils/repoRoot';
 import swaggerUi from 'swagger-ui-express';
 import { v1Router } from './routes/v1';
 import { errorHandler } from './middleware/errorHandler';
@@ -119,7 +120,11 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // 3. Static Assets for Live War-Room Dashboard at /dashboard, and the active content pack
 // (campus model, memorabilia, monument dossiers) at /dashboard/content. The pack is
 // served from its own directory so a fork only changes CONTENT_PACK, never a client path.
-const publicDir = path.join(__dirname, '../public');
+// Resolved by walking up to the repository root, not by counting `..` from this file. In the
+// compiled build this module lives one level deeper (`dist/src/app.js`), so `../public`
+// pointed at `dist/public`, which does not exist — and the whole dashboard was a 404 in the
+// production image while every API route worked perfectly.
+const publicDir = path.join(REPO_ROOT, 'public');
 app.use('/dashboard/content', express.static(pack.dir, { maxAge: '1h', etag: true, index: false }));
 app.use('/dashboard', express.static(publicDir));
 // Plugin client assets: one explicit route per declared file, each behind the same

@@ -22,6 +22,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { REPO_ROOT } from '../common/utils/repoRoot';
 import { Router, Request, Response } from 'express';
 import { pluginGuard, pluginRegistry } from './registry';
 import { PluginAssetEntry, PluginManifestEntry, ServerPlugin } from './types';
@@ -29,24 +30,6 @@ import { PluginAssetEntry, PluginManifestEntry, ServerPlugin } from './types';
 /** Where plugin directories live, relative to the repository root. */
 const PLUGIN_DIR_NAME = 'plugins';
 const ASSET_URL_PREFIX = '/dashboard/plugins';
-
-/**
- * The repository root, found by walking up to the nearest `package.json`.
- *
- * A fixed `../..` would be wrong in one of the two layouts this file runs in (`src/plugins`
- * under tsx, `dist/plugins` after a build), and the compiled tree has no `package.json` of
- * its own, so the walk lands on the repository root either way.
- */
-function repoRoot(): string {
-  let dir = __dirname;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return path.resolve(__dirname, '../..');
-}
 
 interface ResolvedAsset extends PluginAssetEntry {
   /** Absolute path on disk, resolved and confirmed to be inside the plugin's public dir. */
@@ -92,7 +75,7 @@ function resolveAssets(plugin: ServerPlugin, root: string): { assets: ResolvedAs
  * than silently redefining what the manifest promised.
  */
 const assetTable: Map<string, ResolvedAsset[]> = (() => {
-  const root = repoRoot();
+  const root = REPO_ROOT;
   const table = new Map<string, ResolvedAsset[]>();
   for (const plugin of pluginRegistry.activated()) {
     const result = resolveAssets(plugin, root);

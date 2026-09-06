@@ -2,10 +2,10 @@
   "name": "hackillinois-waveshift-nexus",
   "version": "1.0.0",
   "description": "High-Performance Volunteer Scheduling & Operations Engine for HackIllinois Systems Team",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "dev": "tsx watch src/index.ts",
     "seed": "tsx src/seed/seedData.ts",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
