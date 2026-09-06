@@ -22,4 +22,7 @@ export const registrationRouter = Router();
 // Shifts are staff work: a signed-in hacker is refused (legacy anonymous callers pass).
 registrationRouter.post('/', requireVolunteerKind, validate(reserveShiftSchema), RegistrationController.reserveShift);
 registrationRouter.delete('/:id', requireVolunteerKind, validate(cancelRegistrationSchema), RegistrationController.cancelRegistration);
-registrationRouter.get('/', validate(listRegistrationsQuerySchema), RegistrationController.listRegistrations);
+// requireVolunteerKind: the roster of who is on which shift is staff information. Anonymous
+// is already 401'd in required mode; this additionally keeps a signed-in hacker from
+// enumerating every volunteer↔shift assignment. Passes anonymous through in legacy mode.
+registrationRouter.get('/', requireVolunteerKind, validate(listRegistrationsQuerySchema), RegistrationController.listRegistrations);

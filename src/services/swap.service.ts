@@ -393,8 +393,9 @@ export class SwapService {
   public static async listSwaps(status?: SwapStatus): Promise<IShiftSwap[]> {
     const query = status ? { status } : {};
     return ShiftSwap.find(query)
-      .populate('proposerVolunteerId', 'name email')
-      .populate('targetVolunteerId', 'name email')
+      // Names only — email is PII and this list is readable by any volunteer-kind caller.
+      .populate('proposerVolunteerId', 'name')
+      .populate('targetVolunteerId', 'name')
       .populate('proposerShiftId', 'title startTime endTime')
       .populate('targetShiftId', 'title startTime endTime')
       .sort({ createdAt: -1 });

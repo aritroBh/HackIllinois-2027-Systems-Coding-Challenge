@@ -890,9 +890,12 @@ export class RegistrationService {
 
     return Registration.find(query)
       .populate("shiftId", "title location startTime endTime category")
+      // `email` is deliberately not projected: this roster read is visible to any
+      // volunteer-kind caller, and a volunteer has no need for another volunteer's email.
+      // Leaking it here was the /volunteers PII class living on a second path.
       .populate(
         "volunteerId",
-        "name email role certifications karmaPoints prestigeTier",
+        "name role certifications karmaPoints prestigeTier",
       )
       .sort({ createdAt: -1 });
   }

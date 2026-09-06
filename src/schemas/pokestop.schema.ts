@@ -44,7 +44,7 @@ export const spinBeaconSchema = z.object({
 
 export const getInventorySchema = z.object({
   params: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
+    volunteerId: objectId('Invalid Volunteer ObjectId'), // path segment, always present — required so a malformed id is a clean 400
   }),
 });
 
