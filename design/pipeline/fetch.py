@@ -26,7 +26,7 @@ from .config import CACHE_DIR, OSM_DIR, QUERY_DIR, ROOT
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 MANIFEST = OSM_DIR / "manifest.json"
-QUERIES = ("buildings", "extra", "detail")
+QUERIES = ("buildings", "extra", "detail", "props")
 
 FETCH_HINT = """Refresh the cache with:
 

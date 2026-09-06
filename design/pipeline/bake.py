@@ -34,6 +34,7 @@ from .geom import clip_polyline_box, clip_ring_box
 from .heights import resolve as resolve_height
 from .lidar import Lidar
 from .monuments import attach_monuments
+from . import props as PR
 from .roofs import ridge_for, roof_for
 
 
@@ -122,6 +123,24 @@ def assemble(pack: Pack, strict: bool = True, legacy_cache: bool = False, use_li
         print("  (no detail extract — using generated greenery only)", file=sys.stderr)
         trees, lamps, fountains, water, rail, parking = gen_trees, gen_lamps, [], [], [], []
 
+    # Street furniture. Loaded from its own extract so a pack that predates the props pass
+    # still bakes: an older cache has no props file and the layers come back empty rather than
+    # taking the whole build down, which is the same courtesy the detail extract gets above.
+    try:
+        prop_elements = load("props")
+    except SystemExit:
+        prop_elements = None
+    if prop_elements is not None:
+        props = PR.build_props(frame, prop_elements + extra, buildings)
+    else:
+        print("  (no props extract — the campus will have no surveyed street furniture)", file=sys.stderr)
+        props = {"props": [], "fences": [], "pitches": [], "steps": []}
+    # And the furniture nobody surveyed, on the same footway network the trees came from. The
+    # survey wins wherever it has something to say; the generator only fills the silence.
+    props["props"] = PR.merge_props(
+        props["props"], PR.generate_props(frame, roads, lawns, buildings), frame.meters_per_unit
+    )
+
     hsrc_counts: dict[str, int] = {}
     for rec in records:
         hsrc_counts[rec["hsrc"]] = hsrc_counts.get(rec["hsrc"], 0) + 1
@@ -139,6 +158,10 @@ def assemble(pack: Pack, strict: bool = True, legacy_cache: bool = False, use_li
         "water": [{"k": w["k"], "p": qr(w["p"])} for w in water],
         "rail": [qr(r) for r in rail],
         "parking": [qr(r) for r in parking],
+        "props": [{**pr, "x": q(pr["x"]), "z": q(pr["z"])} for pr in props["props"]],
+        "fences": [{**f, "p": qr(f["p"])} for f in props["fences"]],
+        "pitches": [{**pt, "p": qr(pt["p"])} for pt in props["pitches"]],
+        "steps": [{**st, "p": qr(st["p"])} for st in props["steps"]],
         "hsrc": hsrc_counts,
         "lidar": lidar is not None,
     }
@@ -182,7 +205,8 @@ def tile_model(model: dict, frame) -> dict[tuple[int, int], dict]:
         key = (tx, tz)
         if key not in tiles:
             tiles[key] = {"x": tx, "z": tz, "buildings": [], "roads": [], "lawns": [], "trees": [], "lamps": [],
-                          "fountains": [], "water": [], "rail": [], "parking": []}
+                          "fountains": [], "water": [], "rail": [], "parking": [],
+                          "props": [], "fences": [], "pitches": [], "steps": []}
         return tiles[key]
 
     for b in model["buildings"]:
@@ -224,6 +248,24 @@ def tile_model(model: dict, frame) -> dict[tuple[int, int], dict]:
         tile(*_tile_key(l[0], l[1]))["lamps"].append(l)
     for f in model["fountains"]:
         tile(*_tile_key(f[0], f[1]))["fountains"].append(f)
+    # Point props go to the tile they stand in. Linear and area props are clipped like the
+    # roads and lawns above, so a fence that crosses a tile boundary is drawn by both tiles
+    # rather than only by whichever one happens to hold its first vertex.
+    for pr in model["props"]:
+        tile(*_tile_key(pr["x"], pr["z"]))["props"].append(pr)
+    for f in model["fences"]:
+        for tx, tz in _tiles_touching(*_ring_bbox(f["p"])):
+            for run in clip_polyline_box(f["p"], *_tile_box(tx, tz)):
+                tile(tx, tz)["fences"].append({**f, "p": qr(run)})
+    for st in model["steps"]:
+        for tx, tz in _tiles_touching(*_ring_bbox(st["p"])):
+            for run in clip_polyline_box(st["p"], *_tile_box(tx, tz)):
+                tile(tx, tz)["steps"].append({**st, "p": qr(run)})
+    for pt in model["pitches"]:
+        for tx, tz in _tiles_touching(*_ring_bbox(pt["p"])):
+            clipped = clip_ring_box(pt["p"], *_tile_box(tx, tz))
+            if clipped:
+                tile(tx, tz)["pitches"].append({**pt, "p": qr(clipped)})
     return tiles
 
 
@@ -272,7 +314,7 @@ def write_tiled(model: dict, out_dir: Path, core_only: bool) -> dict:
         x0, z0, x1, z1 = _tile_box(tx, tz)
         table.append({
             "x": tx, "z": tz, "bbox": [x0, z0, x1, z1], "maxH": round(max_h, 3),
-            "counts": {k: len(t[k]) for k in ("buildings", "roads", "lawns", "trees", "lamps")},
+            "counts": {k: len(t[k]) for k in ("buildings", "roads", "lawns", "trees", "lamps", "props", "fences", "pitches", "steps")},
             "bytes": len(body), "sha256": sha, "file": f"tiles/{name}", "core": 1 if in_core(tx, tz) else 0,
         })
 
@@ -292,7 +334,10 @@ def write_tiled(model: dict, out_dir: Path, core_only: bool) -> dict:
             "buildings": len(model["buildings"]), "monuments": len(model["monuments"]), "roads": len(model["roads"]),
             "lawns": len(model["lawns"]), "trees": len(model["trees"]), "lamps": len(model["lamps"]),
             "water": len(model["water"]), "rail": len(model["rail"]), "parking": len(model["parking"]),
-            "fountains": len(model["fountains"]), "tiles": len(table),
+            "fountains": len(model["fountains"]),
+            "props": len(model["props"]), "fences": len(model["fences"]),
+            "pitches": len(model["pitches"]), "steps": len(model["steps"]),
+            "tiles": len(table),
         },
     }
     index = {"meta": frame_meta, "monuments": model["monuments"], "tiles": table}

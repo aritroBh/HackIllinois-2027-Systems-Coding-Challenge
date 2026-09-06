@@ -11,6 +11,19 @@
  *   trees  Float32Array rows [x, z, scale, tone]  → one instanced draw
  *   lamps  Float32Array rows [x, z]               → one instanced draw
  *
+ * Street furniture rides in `solid` rather than in an instanced buffer of its own. That is a
+ * deliberate reversal of the argument that made trees instanced: there are nine thousand trees
+ * of one shape, and two thousand props of nineteen shapes spread over a hundred and twenty-four
+ * tiles, so a tile holds a couple of dozen props across a handful of kinds. Instancing that
+ * would mean a draw call per kind per tile — more calls than the props have triangles — while
+ * merging them into the tile's existing batch costs no calls at all. The meshes are small
+ * enough (twenty to a hundred and twenty triangles) that the vertex duplication is a rounding
+ * error against the buildings they stand beside.
+ *
+ * Rooftop clutter is generated here, on the client, from the building record and a hash of its
+ * id. It is deterministic, so every player sees the same roofs, and it costs the pack nothing:
+ * a flat roof described by its footprint is the only input the generator needs.
+ *
  * Colours are the tuned night palette; the procedural material id comes from
  * the pipeline's facade classification (`m`), so a clapboard house and a
  * limestone hall differ in pattern as well as tone.
@@ -21,6 +34,9 @@ import {
   gableRoofGeometry, hipRoofGeometry, mansardRoofGeometry, ribbonGeometry, dashedRibbonGeometry,
 } from './glx-geometry.js';
 import { MATERIALS } from './materials.js';
+import { buildProp, fenceRun, hedgeRun } from './props.js';
+import { crosswalkDecal, parkingStalls, pitchMarkings, pathEdging, manholes } from './decals.js';
+import { rooftopClutter, rooftopGeometry } from './rooftops.js';
 
 const hx = (h) => hexRGB(h);
 const MID = Object.fromEntries(Object.entries(MATERIALS).map(([k, v]) => [k, v.id]));
@@ -43,6 +59,32 @@ export const PAL = {
   leafDark: [0.07, 0.20, 0.11],
   pole: [0.10, 0.11, 0.13],
 };
+/**
+ * How each prop kind is coloured and shaded.
+ *
+ * A prop carries no material of its own in the pack — that would be four more bytes per
+ * record for a value that is a property of the kind, not of the instance — so the mapping
+ * lives here, beside the rest of the palette, where the night look is tuned as a whole.
+ */
+export const PROP_TINT = {
+  bench: [0.28, 0.20, 0.13], picnic: [0.30, 0.22, 0.14],
+  bin: [0.16, 0.17, 0.19], bikerack: [0.20, 0.22, 0.25], bollard: [0.18, 0.19, 0.21],
+  hydrant: [0.62, 0.10, 0.09], postbox: [0.24, 0.12, 0.12],
+  flag: [0.72, 0.72, 0.70], mast: [0.24, 0.25, 0.28], watertower: [0.42, 0.44, 0.46],
+  chimney: [0.34, 0.26, 0.22], shelter: [0.20, 0.23, 0.27], busstop: [0.22, 0.25, 0.29],
+  artwork: [0.46, 0.42, 0.32], sign: [0.30, 0.32, 0.34], planter: [0.26, 0.22, 0.18],
+  drinkfountain: [0.28, 0.30, 0.32], playground: [0.36, 0.26, 0.18], gate: [0.20, 0.21, 0.23],
+};
+export const PROP_MAT = {
+  bench: 'clapboard', picnic: 'clapboard', planter: 'precast', playground: 'clapboard',
+  artwork: 'limestoneBuff', watertower: 'metalPanel', chimney: 'brick',
+  shelter: 'glassDark', busstop: 'glassDark', sign: 'whiteTrim',
+};
+/** The few props that carry their own light at night: a shelter, a stop, a lit sign. */
+export const PROP_GLOW = { shelter: 0.28, busstop: 0.24, sign: 0.14, drinkfountain: 0.06 };
+/** The props that are worth drawing even on the lowest tier, because they read from far away. */
+export const LANDMARK_PROPS = new Set(['watertower', 'mast', 'flag', 'chimney', 'artwork', 'shelter', 'busstop']);
+
 export const MASS = {
   university: hx('#8E3B2C').map((v) => v * 0.62),
   glassy: [0.11, 0.19, 0.30],
@@ -142,6 +184,21 @@ function roofItems(b, ring, h, holes, vscale) {
  */
 export function bakeTile(tile, opts = {}) {
   const vscale = opts.vscale ?? 2.6;
+  /**
+   * How much small detail this bake includes: 2 all of it, 1 half the rooftop plant, 0 none of
+   * it and no ground furniture either.
+   *
+   * Rooftop clutter is forty per cent of the vertices on the densest core tile — two hundred
+   * and eighty-eight units over eighty-two buildings — which is worth every byte on a laptop
+   * and is the first thing that should go on a phone. Making it a bake option rather than a
+   * draw-time range means the vertices are never uploaded at all on the low tier, which is the
+   * budget that actually binds there: a 2020 phone runs out of resident memory long before it
+   * runs out of triangles to rasterise.
+   *
+   * The cost is that changing tier has to re-bake the resident ring. That happens in the
+   * worker, off the main thread, and only when the tier actually moves.
+   */
+  const detail = opts.detail ?? 2;
   const L0 = [], L1 = [], L2 = [];
   for (const b of tile.buildings || []) {
     const ring = b.p;
@@ -169,6 +226,55 @@ export function bakeTile(tile, opts = {}) {
       { geo: GEO.octa, x, z, y: 0.35, sx: 0.18 * sc, sy: 0.6 * sc, sz: 0.18 * sc, color: [0.6, 0.85, 1.0], emissive: 0.9 },
     );
   }
+  // --- rooftop clutter -----------------------------------------------------------------
+  // L0 only: at a hundred units out a plant unit is a couple of pixels, and the whole point of
+  // L1 is that a distant building is one extrusion and a cap.
+  for (const b of tile.buildings || []) {
+    if (detail === 0 || !b.p || b.p.length < 3) continue;
+    for (const c of rooftopClutter(b, { vscale, density: detail === 1 ? 0.4 : 1 })) {
+      const geo = rooftopGeometry(c.kind, c.opts);
+      if (!geo) continue;
+      L0.push({
+        geo, x: c.x, z: c.z, y: b.h * vscale + (c.y || 0), rot: c.r,
+        sx: c.s ?? 1, sy: c.s ?? 1, sz: c.s ?? 1,
+        ...matItem(c.kind === 'solarPanel' ? PAL.slate : PAL.membrane, c.mat || 'metalPanel'),
+        emissive: c.kind === 'skylight' ? 0.22 : 0.02,
+      });
+    }
+  }
+
+  // --- surveyed and generated street furniture ------------------------------------------
+  for (const pr of tile.props || []) {
+    // On the low tier only the tall silhouettes survive: a flagpole or a water tower is a
+    // landmark you navigate by, a bin is four hundred vertices nobody will look at.
+    if (detail === 0 && !LANDMARK_PROPS.has(pr.k)) continue;
+    const geo = buildProp(pr.k, { scale: pr.s });
+    // A kind with no mesh is a pack built against a newer pipeline than this client. Skipping
+    // it quietly is right: the campus is missing one bench, not broken.
+    if (!geo) continue;
+    L0.push({
+      geo, x: pr.x, z: pr.z, y: 0, rot: pr.r,
+      sx: pr.s ?? 1, sy: pr.s ?? 1, sz: pr.s ?? 1,
+      color: PROP_TINT[pr.k] || PAL.limestone,
+      mat: MID[PROP_MAT[pr.k] || 'metalPanel'],
+      emissive: PROP_GLOW[pr.k] || 0.02,
+    });
+  }
+  for (const f of tile.fences || []) {
+    if (!f.p || f.p.length < 2) continue;
+    const geo = f.k === 'hedge' ? hedgeRun(f.p, f.h) : fenceRun(f.p, f.k, f.h);
+    if (!geo) continue;
+    // Fences read as edges from a long way off — they are what stops one lawn bleeding into
+    // the next — so unlike the point props they survive into L1.
+    const item = { geo, ...matItem(f.k === 'hedge' ? PAL.leafDark : f.k === 'wall' ? PAL.limestone : PAL.rail, f.k === 'hedge' ? 'canopy' : f.k === 'wall' ? 'limestoneGrey' : f.k === 'wood' ? 'clapboard' : 'metalPanel'), emissive: 0.01 };
+    L0.push(item);
+    L1.push(item);
+  }
+  for (const st of tile.steps || []) {
+    if (!st.p || st.p.length < 2) continue;
+    L0.push({ geo: ribbonGeometry(st.p, st.w, 0.06), ...matItem(PAL.limestone, 'limestoneGrey'), emissive: 0.02 });
+  }
+
   const solid = (L0.length || L1.length || L2.length) ? mergeStaticRanges([L0, L1, L2]) : null;
 
   const decals = [];
@@ -197,6 +303,37 @@ export function bakeTile(tile, opts = {}) {
     decals.push({ geo: ribbonGeometry(r, 0.34, 0.036), ...matItem(PAL.rail, 'ballast'), emissive: 0.03 });
     decals.push({ geo: dashedRibbonGeometry(r, 0.42, 0.22, 0.32, 0.046), color: PAL.tie, emissive: 0 });
   }
+  // --- painted ground ------------------------------------------------------------------
+  // Empty asphalt is the largest featureless surface on the map after the lawns, and paint is
+  // the cheapest thing that fixes it: a stall grid or a zebra is a handful of flat quads and
+  // it is what makes a car park read as a car park rather than as a grey polygon.
+  for (const ring of tile.parking || []) {
+    if (ring.length < 3) continue;
+    const stalls = parkingStalls(ring);
+    if (stalls) decals.push({ geo: stalls, color: MASS.walk, mat: MID.asphalt, emissive: 0.06 });
+    const covers = manholes(ring);
+    if (covers) decals.push({ geo: covers, color: PAL.rail, mat: MID.metalPanel, emissive: 0 });
+  }
+  for (const pt of tile.pitches || []) {
+    if (!pt.p || pt.p.length < 3) continue;
+    const lines = pitchMarkings(pt.p, pt.sport);
+    if (lines) decals.push({ geo: lines, color: [0.82, 0.84, 0.80], mat: MID.asphalt, emissive: 0.10 });
+  }
+  for (const r of tile.roads || []) {
+    if (!r.p || r.p.length < 2) continue;
+    if (r.f) {
+      // A kerb either side of a footway. Paths are the thing players actually walk along, so
+      // the edge is worth more here than anywhere else on the ground plane.
+      const edge = pathEdging(r.p, r.w);
+      if (edge) decals.push({ geo: edge, color: MASS.walk, mat: MID.limestoneGrey, emissive: 0.04 });
+    } else if (r.m) {
+      // Zebra crossings at the ends of a major road run, where it meets the next one.
+      const a = r.p[0], b = r.p[1];
+      const zebra = crosswalkDecal(a, b, r.w);
+      if (zebra) decals.push({ geo: zebra, color: [0.86, 0.87, 0.84], mat: MID.asphalt, emissive: 0.12 });
+    }
+  }
+
   const decal = decals.length ? mergeStatic(decals) : null;
 
   const tr = tile.trees || [];
@@ -212,6 +349,11 @@ export function bakeTile(tile, opts = {}) {
 
   return {
     solid, decal, trees, lamps,
-    counts: { buildings: (tile.buildings || []).length, trees: tr.length, lamps: la.length, verts: solid ? solid.positions.length / 3 : 0 },
+    counts: {
+      buildings: (tile.buildings || []).length, trees: tr.length, lamps: la.length,
+      props: (tile.props || []).length, fences: (tile.fences || []).length,
+      pitches: (tile.pitches || []).length, steps: (tile.steps || []).length,
+      verts: solid ? solid.positions.length / 3 : 0,
+    },
   };
 }

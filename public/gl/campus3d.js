@@ -1,23 +1,29 @@
 /**
  * campus3d — a live WebGL2 model of the UIUC campus at night.
  *
- * The city comes from real OpenStreetMap footprints (design/build-campus.py →
- * the content pack's campus.json, served at /dashboard/content/): ~900 building outlines with OSM height/level tags, the
- * street network, the Quad lawns, and — derived from the footways and lawns —
- * the elm rows and street lamps. Fourteen landmarks are promoted to territory
- * gyms and drawn with their real materials and silhouettes: the Union's brick
- * and twin cupolas, Altgeld's sandstone campanile, Foellinger's copper dome
- * over a limestone rotunda, Alma Mater in patinated bronze, Memorial Stadium's
- * colonnades. Faction control shows as *light on* the building — a tinted rim,
- * the aura, the crown crystal, the beacon column — never as plastic paint.
+ * The city is real: OpenStreetMap footprints with lidar-fused heights, roof
+ * shapes and facade materials, baked by design/pipeline into the content pack
+ * and served from /dashboard/content/. Two pack shapes arrive here and
+ * loadCampus branches on `meta.schema`:
+ *
+ *   schema 2  campus/index.json + 500 m tiles, streamed and LOD'd by tiles.js
+ *             and baked by tile-bake.js. This is the whole campus and the path
+ *             every shipped pack takes.
+ *   schema 1  a single campus.json covering the core bbox, baked here by
+ *             bakeCampus(). Kept so a fork with an old pack still renders.
+ *
+ * Fourteen landmarks are promoted to territory gyms. Each carries a crown
+ * recipe in the pack, which crowns.js bakes once into three static meshes;
+ * drawMonumentCrown() below is the hand-written fallback for a pack that ships
+ * none. Faction control shows as light on the building (rim, aura, crown
+ * crystal, beacon column), never as paint, so the real material still reads.
  *
  * Palette is Illini: the night is Illini Blue, and every warm source (sodium
  * lamps, windows, the statue) leans Illini Orange.
  *
- * Passes: sky → ground → three static batches (decals, buildings, greenery)
- * → monuments → actors → additive light → bloom → ACES composite. Everything
- * static is merged into a single draw per batch; only the fourteen monuments
- * and the live actors are drawn individually.
+ * Passes: sky → ground → tiles (decals, then solid at its LOD range, then
+ * instanced greenery) → monuments → remote players → local player → additive
+ * light → bloom → ACES composite.
  */
 
 import {
@@ -254,8 +260,8 @@ void main() {
   float df = max(dot(N, F), 0.0) * (1.0 - 0.6 * max(N.y, 0.0));
   lit += vec3(1.0, 0.78, 0.50) * df * uFlood;
 
-  // Fresnel rim in the faction colour — the light the territory casts.
-  // Faction rim light. On textured architecture it is cut hard: at grazing
+  // Fresnel rim in the faction colour, the light the territory casts.
+  // On textured architecture it is cut hard: at grazing
   // angles a neutral (slate-blue) faction's rim washed every roof and the
   // bronze of Alma Mater to pale grey, hiding the material it sits on.
   // Crystals, beacons and light columns (uMat == 0) keep the full rim.
@@ -275,7 +281,8 @@ void main() {
   frag = vec4(col, uAlpha);
 }`;
 
-/* The baked campus: per-vertex colour and emissive, one draw call per batch. */
+/* Baked tiles and crowns: everything a piece needs travels per vertex, so a
+   whole tile draws with no uniform changes between its pieces. */
 const STATIC_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -336,26 +343,43 @@ void main() {
   float rim = pow(1.0 - max(dot(N, V), 0.0), 3.2) * 0.30 * (1.0 - s.rough * 0.5 * hasMat);
   vec3 col = alb * lit + alb * rim + alb * vE * 2.6 + s.emissive * hasMat * 0.9;
 
-  // Every derivative below is evaluated unconditionally: fwidth() inside
-  // divergent control flow is undefined, and facade edges do diverge.
+  // Lit windows, straight from world position. Every derivative is evaluated
+  // unconditionally: fwidth() inside divergent control flow is undefined, and
+  // facade edges do diverge.
+  //
+  // x*Nz - z*Nx is the 2-D cross product of the world point with the wall
+  // normal, which is the signed distance along the wall's tangent. It runs
+  // continuously across a facade and it is the same value on every wall in the
+  // same plane, so the grid never breaks at a corner. y is the height.
   vec2 wall = vec2(vW.x * N.z - vW.z * N.x, vW.y);
   vec2 cell = vec2(wall.x * 1.15, wall.y * 1.7);
   vec2 cellF = fract(cell);
+  // Fade the whole grid out once one cell covers most of a pixel. Without it
+  // the campus-wide view aliases into a shimmering moire.
   float footprint = max(fwidth(cell.x), fwidth(cell.y));
   float lod = 1.0 - smoothstep(0.22, 0.75, footprint);
+  // Analytic anti-aliasing width for the pane edges, one pixel either side.
   vec2 e = fwidth(cell) * 1.5 + 0.02;
 
+  // Walls only (near-vertical normal), and never on the ground storey.
   float onFacade = uWindows * step(abs(N.y), 0.4) * step(0.35, vW.y);
   vec2 id = floor(cell);
   float h = hash21(id);
+  // Roughly 40 % of windows are lit, stable per cell because the hash keys on
+  // the cell index rather than on time.
   float occupied = step(0.60, h);
   float flick = 0.78 + 0.22 * sin(uTime * 0.7 + hash21(id + 7.1) * 30.0);
+  // Pane inset 0.22 either side of the cell: two opposing smoothsteps leave a
+  // lit rectangle with a dark mullion around it.
   vec2 pane = smoothstep(0.22 - e, 0.22 + e, cellF) * (1.0 - smoothstep(0.78 - e, 0.78 + e, cellF));
   // Mostly warm incandescent, a few cool fluorescent labs.
   vec3 glow = mix(vec3(1.0, 0.62, 0.28), vec3(0.72, 0.84, 1.0), step(0.86, hash21(id + 2.3)));
   col += glow * onFacade * occupied * pane.x * pane.y * flick * lod * 0.75;
 
   // The radar sweep grazes the city, briefly lighting whatever it crosses.
+  // delta is how far this fragment sits behind the sweep line, wrapped into
+  // [0, 2pi) by the mod so the trail is continuous across the seam; it decays
+  // over the trailing 0.85 rad.
   float ang = atan(vW.z, vW.x);
   float delta = mod(uSweep - ang, 6.28318);
   col += vec3(0.25, 0.55, 0.80) * alb * pow(clamp(1.0 - delta / 0.85, 0.0, 1.0), 3.0) * 2.2 * uSweepK;
@@ -404,6 +428,10 @@ uniform vec3 uGrid, uAccent, uBase, uHorizon;
 ${FOG_GLSL}
 out vec4 frag;
 
+// Screen-constant grid line. abs(fract(c - 0.5) - 0.5) is the distance to the
+// nearest cell boundary in cell units; dividing by fwidth converts that to
+// pixels, so the thickness argument is a pixel width and the line neither thins
+// out when you zoom in nor aliases into a solid sheet when you zoom out.
 float gridLine(vec2 p, float scale, float thickness) {
   vec2 c = p * scale;
   vec2 g = abs(fract(c - 0.5) - 0.5) / max(fwidth(c), vec2(1e-5));
@@ -416,13 +444,18 @@ void main() {
 
   float fine  = gridLine(p, uGridScale, 1.5) * 0.22;
   float major = gridLine(p, uGridScale * 0.2, 1.2) * 0.42;
+  // Radar furniture, both keyed off the radius: static range rings every 50
+  // units, and one bright band crawling outward for the live sweep.
   float rings = (1.0 - smoothstep(0.0, 0.05, abs(fract(r * 0.02) - 0.5) - 0.47)) * 0.18;
   float pulse = smoothstep(0.92, 1.0, 1.0 - abs(fract(r * 0.008 - uTime * 0.05) - 0.5) * 2.0) * 0.30;
 
+  // Same trailing-arc construction as the building sweep in STATIC_FS.
   float ang = atan(p.y, p.x);
   float delta = mod(uSweep - ang, 6.28318);
   float sweep = pow(clamp(1.0 - delta / 1.0, 0.0, 1.0), 2.6) * 0.22;
 
+  // Squared so the grid dies off well before the plane's edge, leaving the
+  // horizon mix below nothing to fight with.
   float falloff = clamp(1.0 - r / 300.0, 0.0, 1.0);
   falloff *= falloff;
 
@@ -453,6 +486,9 @@ float hash21(vec2 p) {
   return fract(p.x * p.y);
 }
 
+// One candidate star per cell of a scale-sized grid: density is the fraction of
+// cells that keep theirs, and the jitter pushes it off the cell centre so the
+// field reads as scattered rather than as the lattice it is.
 float stars(vec2 uv, float scale, float density, float size) {
   vec2 sp = uv * scale;
   vec2 id = floor(sp);
@@ -470,9 +506,14 @@ void main() {
   // Sky slides with the camera so the stars parallax as you orbit.
   vec2 sky = vec2(uv.x * aspect + uYaw * 0.55, uv.y * 0.9 + uPitch * 0.35);
 
+  // Slightly sub-linear so the gradient spends more of the frame near the
+  // zenith blue and the horizon band stays tight.
   float t = pow(uv.y, 0.85);
   vec3 col = mix(uHorizon, uZenith, t);
 
+  // Three octaves: a few bright stars, more mid ones, a dense faint dust. The
+  // offsets decorrelate the grids so the octaves do not stack on one cell.
+  // Scaling by t fades the field into the horizon glow, as real skyglow does.
   float s = stars(sky, 60.0, 0.07, 0.07) * 1.4
           + stars(sky + 11.3, 130.0, 0.12, 0.05) * 0.8
           + stars(sky + 5.7, 260.0, 0.20, 0.035) * 0.35;
@@ -493,9 +534,13 @@ uniform vec2 uSize;                       // half width, full height (world unit
 uniform float uFrame, uFrames, uFlip;
 out vec2 vUV;
 void main() {
+  // aPos is the shared clip quad, so y runs -1..1. Remapping it to 0..1 stands
+  // the sprite on uCenter rather than straddling it, which is what keeps the
+  // feet on the ground when the camera pitches.
   vec3 w = uCenter + uRight * (aPos.x * uSize.x) + vec3(0.0, (aPos.y + 1.0) * 0.5 * uSize.y, 0.0);
   float u = aPos.x * 0.5 + 0.5;
   u = mix(u, 1.0 - u, uFlip);
+  // v is inverted because the sheet is uploaded with UNPACK_FLIP_Y off.
   vUV = vec2((uFrame + u) / uFrames, 1.0 - (aPos.y * 0.5 + 0.5));
   gl_Position = uProj * uView * vec4(w, 1.0);
 }`;
@@ -522,6 +567,9 @@ out vec4 frag;
 void main() {
   vec3 c = texture(uTex, vUV).rgb;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  // Fraction of this pixel's luminance that sits above the threshold, squared
+  // for a soft knee. A hard step made every lamp pop into bloom the instant it
+  // crossed the line, which flickered as the camera moved.
   float k = clamp((l - uThreshold) / max(l, 1e-4), 0.0, 1.0);
   frag = vec4(c * k * k, 1.0);
 }`;
@@ -532,6 +580,9 @@ in vec2 vUV;
 uniform sampler2D uTex;
 uniform vec2 uDir;
 out vec4 frag;
+// Normalised Gaussian, nine taps. Separable, so the caller runs it once
+// horizontally and once vertically: two 9-tap passes instead of one 81-tap.
+// uDir is the step between taps in UV, which is where the texel size lives.
 const float W[5] = float[](0.227027, 0.194594, 0.121621, 0.054054, 0.016216);
 void main() {
   vec3 sum = texture(uTex, vUV).rgb * W[0];
@@ -554,6 +605,9 @@ uniform vec2 uRes;
 uniform float uPixel, uPosterize, uScanlines;
 out vec4 frag;
 
+// Narkowicz's rational fit to the ACES filmic curve. It is what lets the HDR
+// target hold lamps and crystals well above 1.0 without them clipping to flat
+// white when they land on screen.
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
@@ -563,6 +617,9 @@ void main() {
   vec2 uv = vUV;
   // Pixelation: snap the sample to the centre of a block of uPixel device px.
   if (uPixel > 1.0) uv = (floor(vUV * uRes / uPixel) + 0.5) * uPixel / uRes;
+  // Squared distance from the frame centre, shared by the chromatic split and
+  // the vignette below. Both scale with r2, so the middle of the frame stays
+  // sharp and full-brightness and only the corners get the lens treatment.
   vec2 d = uv - 0.5;
   float r2 = dot(d, d);
   float ca = r2 * 0.0028 * step(uPixel, 1.0);   // no chromatic split on a pixelated frame
@@ -584,6 +641,8 @@ void main() {
   }
   col *= 1.0 - 0.04 * uScanlines * step(1.0, mod(gl_FragCoord.y, 2.0));
   col *= 1.0 - smoothstep(0.20, 0.82, r2) * 0.62;
+  // Grain is off while posterizing: dithering across a banded image undoes the
+  // banding, which is the whole point of the posterize.
   col += (hash(uv * uRes + fract(uTime)) - 0.5) * 0.018 * (1.0 - step(0.5, uPosterize));
   frag = vec4(col, 1.0);
 }`;
@@ -653,7 +712,10 @@ export function createCampusRenderer(canvas, opts = {}) {
    */
   const crownMeshes = new Map();
   let factionColours = {};
-  const bakeOpts = { vscale: VSCALE };
+  // `detail` rides along with vscale so a tile baked on the low tier is genuinely smaller in
+  // memory rather than merely drawn with fewer of its ranges. `applyLevel` bumps it and drops
+  // the resident set, which the tile manager then refills at the new tier.
+  const bakeOpts = { vscale: VSCALE, detail: 2 };
   const LEVEL_NAMES = ['low', 'med', 'high'];
   const quality = { tier: 'auto', level: 2, dprCap: 2, bloomW: 480, windows: true, treeDist: Infinity, sweepK: 1, ema: 16, lastUp: 0, reduced: false };
   function applyLevel(level) {
@@ -662,6 +724,13 @@ export function createCampusRenderer(canvas, opts = {}) {
     quality.windows = level > 0;
     quality.treeDist = level === 0 ? 150 : level === 1 ? 400 : Infinity;
     quality.bloomW = level === 0 ? 320 : 480;
+    // Rooftop plant and small ground furniture are baked, not culled, so a tier change has to
+    // re-bake. Only when it actually moves: dropping the resident set on every frame that
+    // touched applyLevel would thrash the worker.
+    if (bakeOpts.detail !== level) {
+      bakeOpts.detail = level;
+      tiles?.evictAll?.();
+    }
     W = 0; H = 0; // force resize() to rebuild the targets at the new DPR/bloom size
     instVersion = -1;
   }
@@ -930,10 +999,20 @@ export function createCampusRenderer(canvas, opts = {}) {
   const shockwaves = [];
   let hovered = null;
   const BLACK3 = [0, 0, 0];
-  // Retro post-process state; see setRetro().
+  // Retro post-process state; see setRetro(). The composite pass reads
+  // `blockCss` and multiplies by the live DPR, so it follows a window dragged
+  // between displays. `pixelBlock` is the DPR-baked value setRetro computed,
+  // reported by getRetro() and not used for drawing.
   const retro = { pixelBlock: 1, levels: 0, scanlines: true };
 
-  /* ---------------------------- model assembly -------------------------- */
+  /* ------------------------ legacy schema-1 assembly --------------------- */
+  /*
+   * Everything down to initTiled() is the single-file campus.json path. The
+   * shipped pack is schema 2 and never reaches it; tile-bake.js is the live
+   * equivalent and is the file to change when the bake changes. This stays so
+   * a fork whose pack predates tiling still gets a campus, and it is the only
+   * reason mergeStatic is still called from this file.
+   */
 
   /** A low-poly elm: dark trunk and a two-lobe canopy. */
   function treeParts(x, z, s) {
@@ -1181,6 +1260,8 @@ export function createCampusRenderer(canvas, opts = {}) {
       const all = [...tiles.resident.values()].map((r) => ({ resident: r, lod: r.lod }));
       const inst = tiles.instances(all, { treeMaxDist: quality.treeDist, target: [cam.cx, cam.cz] });
       treeInst.setInstances(inst.trees, inst.trees.length / 4);
+      // Lamps are stored as [x, z] but share INST_VS's vec4 row, so scale and
+      // tone are padded to 1 here rather than carried in every tile file.
       lampInst.setInstances(inst.lamps.length ? (() => { const rows = new Float32Array((inst.lamps.length / 2) * 4); for (let i = 0, j = 0; i < inst.lamps.length; i += 2, j += 4) { rows[j] = inst.lamps[i]; rows[j + 1] = inst.lamps[i + 1]; rows[j + 2] = 1; rows[j + 3] = 1; } return rows; })() : new Float32Array(0), inst.lamps.length / 2);
       instVersion = tiles.version; instAt = now;
     }
@@ -1336,9 +1417,19 @@ export function createCampusRenderer(canvas, opts = {}) {
       }
     }
     progScene.use();
+    // A baked crown carries its lighting in the vertex data, so hover cannot
+    // brighten it the way the dynamic path does. Kept in the signature because
+    // the call site cannot tell the two paths apart.
     void hot;
   }
 
+  /**
+   * Fallback crown: the landmark-specific mass on top of the extruded footprint,
+   * one drawMesh per piece. Every monument in the shipped pack has a recipe, so
+   * nothing here runs; it exists for a pack that ships none, and it is the
+   * reference the recipes in design/hand/crowns were written against. Each piece
+   * uses the building's real material and the faction shows as light on it.
+   */
   function drawMonumentCrown(mo, t, hot) {
     const { cx, cz } = mo;
     const base = mo.h;
@@ -1348,11 +1439,9 @@ export function createCampusRenderer(canvas, opts = {}) {
       case 'alma-mater': {
         // Polished granite base, then the bronze group: Alma standing before
         // her throne with arms outstretched, Learning and Labor behind the
-        // throne clasping hands over its back. Restored to bare bronze in
-        // 2014, so no green patina.
-        // Warm bronze, lifted for the floodlights. Deliberately no green: the
-        // 2014 restoration stripped the patina, and the faction aura already
-        // throws a cool cast the eye would read as verdigris.
+        // throne clasping hands over its back. Deliberately no green: the 2014
+        // restoration stripped the patina, and the faction aura already throws
+        // a cool cast the eye would otherwise read as verdigris.
         const B = MAT.bronzeFlood;
         const K = 1.5; // the group is 13 ft; at map scale it needs presence
         drawMesh(MESH.box, { x: cx, y: 0, z: cz, sx: 2.1, sy: 0.6, sz: 1.5, ...stone(MAT.granite, mo, hot) });
@@ -1732,6 +1821,9 @@ export function createCampusRenderer(canvas, opts = {}) {
     gl.bindVertexArray(MESH.plane.vao);
     gl.drawElements(gl.TRIANGLES, MESH.plane.count, gl.UNSIGNED_INT, 0);
 
+    // The two campus paths are exclusive: initTiled() frees the merged meshes
+    // and bakeCampus() is only reached when there is no tile index, so at most
+    // one of staticMesh / tiles is ever live.
     if (staticMesh) {
       progStatic.use();
       gl.uniformMatrix4fv(progStatic.u.uProj, false, proj);
@@ -1767,6 +1859,9 @@ export function createCampusRenderer(canvas, opts = {}) {
     gl.uniform1f(progScene.u.uFogMode, 0);
     setFog(progScene, fogNear, fogFar);
 
+    // Picking is a screen-space nearest-label test against each crown top, not a
+    // ray cast: there are fourteen candidates, the gyms are what anyone aims at,
+    // and 52 px is a comfortable target on a phone.
     hovered = null;
     if (pointer.x >= 0) {
       let best = 52;
@@ -2028,10 +2123,12 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   const api = {
     /**
-     * Loads and bakes a campus model. The default is the active content pack's
-     * bake as served by the server (`/dashboard/content/`); app.js passes
-     * `Nexus.contentUrl('campus')`, which reads the same path from the pack
-     * descriptor when it is available.
+     * Loads and bakes a campus model, branching on `meta.schema`: 2 hands the
+     * document to tiles.js as a tile index, 1 bakes it here in one go.
+     *
+     * app.js passes the pack descriptor's `files.campusIndex` when it has one and
+     * falls back to `Nexus.contentUrl('campus')`, so the default below is only
+     * reached by a direct caller (the probe harness, a fork's own page).
      */
     async loadCampus(url = '/dashboard/content/campus.json') {
       const res = await fetch(url);
@@ -2171,9 +2268,11 @@ export function createCampusRenderer(canvas, opts = {}) {
     },
 
     /**
-     * Drive the player from GPS. Same frame as build-campus.py: origin at the
-     * Main Quad, +x east, +z south, 10 m per unit. Positions outside the model
-     * clamp to its bbox, so an off-campus phone still shows a sprite at the edge.
+     * Drive the player from GPS. Same frame the pipeline bakes in (Frame.to_world
+     * in design/pipeline/config.py): origin at the Main Quad, +x east, +z south,
+     * metersPerUnit from the pack. Positions outside the model clamp to its bbox,
+     * so an off-campus phone still shows a sprite at the edge rather than
+     * vanishing or flying off into the fog.
      */
     setPlayerLatLng(lat, lng) {
       if (!campus) return null;

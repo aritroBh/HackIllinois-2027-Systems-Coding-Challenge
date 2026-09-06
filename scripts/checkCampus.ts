@@ -43,6 +43,31 @@ const tileSchema = z.object({
   water: z.array(z.object({ k: z.enum(['line', 'poly']), p: z.array(z.tuple([z.number(), z.number()])).min(2) })),
   rail: z.array(z.array(z.tuple([z.number(), z.number()])).min(2)),
   parking: z.array(ring),
+
+  // Street furniture. Every field is optional at the array level so a pack built before the
+  // props pass still validates — the pipeline emits the keys unconditionally now, but the
+  // checker is also what an adopter runs against a pack they built last month.
+  //
+  // `k` is deliberately an open string rather than an enum. The closed vocabulary lives in
+  // design/pipeline/props.py and is checked against the renderer's mesh table by
+  // scripts/checkProps.mjs, which is where a mismatch is actually actionable; repeating the
+  // list here would make it a third place to forget.
+  props: z.array(z.object({
+    id: z.string(),
+    k: z.string().min(1),
+    x: z.number(), z: z.number(),
+    r: z.number().min(0).lt(360),
+    s: z.number().min(0.05).max(20),
+  })).optional(),
+  fences: z.array(z.object({
+    id: z.string(),
+    k: z.string().min(1),
+    // World units: 0.04 to 0.6 is the 0.4 m to 6 m band the baker clamps to.
+    h: z.number().min(0.04).max(0.6),
+    p: z.array(z.tuple([z.number(), z.number()])).min(2),
+  })).optional(),
+  pitches: z.array(z.object({ id: z.string(), sport: z.string().nullable().optional(), p: ring })).optional(),
+  steps: z.array(z.object({ id: z.string(), w: z.number().min(0.05).max(1.5), p: z.array(z.tuple([z.number(), z.number()])).min(2) })).optional(),
 });
 const indexSchema = z.object({
   meta: z.object({

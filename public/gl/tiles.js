@@ -2,21 +2,28 @@
  * tiles — streaming, culling and LOD for the schema-2 campus (plan §B3).
  *
  * The index lists 500 m tiles with an AABB and a content-addressed file. The
- * manager keeps a resident set around the camera target and the player (a
- * 5×5 ring each), fetches missing tiles nearest-first with at most three in
- * flight, bakes them (in the worker when available), and unloads tiles that
- * have sat outside a 7×7 ring for ten seconds. Each frame `select()` returns
- * the visible resident tiles with a LOD picked by distance with 10 %
- * hysteresis: L0 < 100 units (full roofs, parapets, holes), L1 < 250 (flat
- * extrusion + cap), L2 beyond (footprint decals).
+ * manager keeps a 3×3 resident ring around the camera target and around the
+ * player, fetches missing tiles nearest-first with at most three in flight,
+ * bakes them (in the worker when available), and unloads tiles that have sat
+ * outside a 7×7 ring for ten seconds. The gap between the two rings is the
+ * hysteresis: walking one tile back and forth over a boundary must not
+ * re-download anything.
+ *
+ * Each frame `select()` returns the visible resident tiles with a LOD picked
+ * by distance with 10 % hysteresis: L0 < 100 units (full roofs, parapets,
+ * holes), L1 < 250 (flat extrusion + cap), L2 beyond (footprint decals). LOD
+ * is an index range into one buffer, so changing it costs a drawElements
+ * offset and never a re-upload.
  */
 import { frustumPlanes, aabbVisible } from './glx-geometry.js';
 
 const LOD_NEAR = 100, LOD_MID = 250, HYST = 0.1;
 /**
- * 3×3 resident around each centre, a prefetch ring beyond it, and a 7×7 keep ring before
- * anything is unloaded (plan §B3). RING_LOAD 1 is the 3×3; RING_PREFETCH fetches the next
- * ring at low priority so walking into it is not a stall.
+ * Ring radii in tiles, so 1 is a 3×3 block, 2 a 5×5, 3 a 7×7 (plan §B3).
+ * RING_LOAD is what must be resident; RING_PREFETCH fills the next ring out
+ * with whatever fetch budget is left, so walking into it is not a stall;
+ * RING_KEEP is where a tile survives, and UNLOAD_MS delays even that so a
+ * quick pan away and back costs nothing.
  */
 const RING_LOAD = 1, RING_PREFETCH = 2, RING_KEEP = 3, UNLOAD_MS = 10000, MAX_INFLIGHT = 3;
 /** Past this, camera and player are looking at different places (plan §B3). */
@@ -69,6 +76,8 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
       for (let dx = -ring; dx <= ring; dx++) for (let dz = -ring; dz <= ring; dz++) {
         const k = `${tx + dx},${tz + dz}`;
         const entry = byKey.get(k);
+        // The index lists empty tiles (the farms, the far edges) with bytes 0 so
+        // the grid stays complete; they are never worth a request.
         if (!entry || !entry.bytes) continue;
         const ex = (entry.bbox[0] + entry.bbox[2]) / 2, ez = (entry.bbox[1] + entry.bbox[3]) / 2;
         const d = Math.hypot(ex - cx, ez - cz);
@@ -90,6 +99,9 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
       const baked = await bakeAsync(tile, opts);
       if (ctrl.signal.aborted) return;
       const meshes = upload(baked);
+      // The culling AABB gets 6 units of headroom over the tile's tallest baked
+      // building: roofs, parapets and elms all stand above `maxH`, and a box cut
+      // to it pops the top off a tile at the edge of the frustum.
       resident.set(k, { entry, tile, meshes, trees: baked.trees, lamps: baked.lamps, lod: 2, lastWanted: performance.now(), bounds: [entry.bbox[0], 0, entry.bbox[1], entry.bbox[2], entry.maxH * vscale + 6, entry.bbox[3]] });
       setVersion++;
       stats.resident = resident.size;
@@ -182,6 +194,24 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
     return { trees: trees.subarray(0, oT), lamps: lamps.subarray(0, oL) };
   }
 
+  /**
+   * Drop every resident tile so the next update refetches and re-bakes them.
+   *
+   * The quality tier is a bake input, not only a draw-time switch: rooftop plant and small
+   * ground furniture are simply absent from a low-tier bake, which is what makes the tier mean
+   * something on a phone where resident memory binds before fill rate does. Changing it
+   * therefore invalidates what is already uploaded. In-flight fetches are cancelled rather than
+   * allowed to land, because a tile baked at the old tier arriving after the switch would sit
+   * in the resident set at the wrong detail until the camera happened to unload it.
+   */
+  function evictAll() {
+    for (const ctrl of inflight.values()) ctrl.abort();
+    inflight.clear();
+    for (const r of resident.values()) dispose(r.meshes);
+    resident.clear();
+    setVersion++;
+  }
+
   function destroy() {
     for (const ctrl of inflight.values()) ctrl.abort();
     inflight.clear();
@@ -190,5 +220,5 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
     if (worker) worker.terminate();
   }
 
-  return { update, select, instances, destroy, stats, get version() { return setVersion; }, resident, index };
+  return { update, select, instances, destroy, evictAll, stats, get version() { return setVersion; }, resident, index };
 }

@@ -156,16 +156,40 @@ export function spireGeometry(segments = 8) {
   }
   // Apex first, then base ring counter-clockwise seen from above.
   for (let i = 1; i <= segments; i++) idx.push(0, i + 1, i);
-  // Base cap facing down.
+  // Base cap facing down, on its OWN ring of vertices.
+  //
+  // The cap used to reuse the side wall's ring, and a shared vertex can only
+  // carry one normal. Those normals point outward and slightly up, because that
+  // is what the cone flank needs; averaged with the centre's -Y they gave every
+  // cap triangle a normal pointing sideways, which agrees with no winding at
+  // all. Duplicating the ring is what a hard edge always needs, and it is eight
+  // extra vertices on a mesh that is instanced thousands of times but shares one
+  // buffer, so it costs nothing that matters.
+  //
+  // The fan then runs the opposite way round from the flank's: seen from above
+  // the flank is counter-clockwise, and a face whose normal points at -Y has to
+  // be clockwise from that same viewpoint. None of this is visible today —
+  // a spire's underside is always buried in whatever it caps — which is exactly
+  // why it survived until the audit was pointed at the props built on it.
+  const base = p.length / 3;
+  for (let i = 0; i <= segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    p.push(Math.cos(a) * 0.5, 0, Math.sin(a) * 0.5);
+    n.push(0, -1, 0);
+  }
   const c = p.length / 3;
   p.push(0, 0, 0); n.push(0, -1, 0);
-  for (let i = 1; i <= segments; i++) idx.push(c, i + 1, i);
+  for (let i = 0; i < segments; i++) idx.push(c, base + i, base + i + 1);
   return { positions: new Float32Array(p), normals: new Float32Array(n), indices: new Uint32Array(idx) };
 }
 
 /**
  * Dashed centre line along a polyline: a run of short ribbons. `dash` and
  * `gap` are world units.
+ *
+ * `carry` is how far into the current dash/gap cycle the previous segment
+ * ended. Without it every vertex of the road would restart the pattern, and
+ * road vertices cluster at bends, so the dashes would bunch up at every corner.
  */
 export function dashedRibbonGeometry(points, width, dash = 1.2, gap = 1.6, y = 0.045) {
   const segs = [];
@@ -303,8 +327,12 @@ export function bowlGeometry(seg = 56, thickness = 0.14, floor = 0.62) {
 }
 
 /**
- * Gable-roofed block: a box with a pitched roof. The default silhouette for
- * the older stone buildings around the Quad.
+ * Gable-roofed block: a box with a pitched roof, walls included.
+ *
+ * Superseded for buildings by gableRoofGeometry, which sits on a real footprint
+ * instead of a unit box. Kept because the winding audit in scripts/verify.sh
+ * calls every exported generator with no arguments, and because a crown recipe
+ * or a fork may still want a whole gabled block in one piece.
  */
 export function gableGeometry(pitch = 0.35) {
   const b = 1 - pitch;
@@ -357,9 +385,10 @@ function pointInTriangle(px, pz, ax, az, bx, bz, cx, cz) {
  * Ear-clipping triangulation of a simple CCW ring of [x, z] pairs.
  * Returns index triples into the input ring.
  *
- * OSM footprints are simple polygons (no holes, no self-intersection), which is
- * exactly the case ear clipping handles well, and it keeps the renderer free of
- * a triangulation dependency.
+ * Ear clipping is enough because a footprint is a simple polygon and it keeps
+ * the renderer free of a triangulation dependency. Courtyards do not break
+ * that: triangulateWithHoles below bridges each hole into the outer ring first
+ * and hands the result here as one simple ring.
  */
 export function triangulateRing(ring) {
   const n = ring.length;
@@ -461,16 +490,18 @@ export function polygonGeometry(ring, y = 0) {
 }
 
 /* ------------------------------------------------------------------ *
- * Static batching — the whole ambient campus in one draw call.
+ * Static batching
  * ------------------------------------------------------------------ */
 
 /**
  * Bakes a list of `{ geo, x, y, z, ry, sx, sy, sz, color, emissive }` into one
  * interleaved static mesh with per-vertex colour and emissive strength.
  *
- * The ambient campus is ~250 pieces that never move; merging them means one
- * bind and one drawElements instead of 250 of each, which is the difference
- * between a smooth orbit and a stuttering one on integrated GPUs.
+ * A tile is thousands of pieces that never move, and a crown is dozens. Merging
+ * them means one bind and one drawElements for the lot, which is the difference
+ * between a smooth orbit and a stuttering one on integrated GPUs. It also means
+ * every per-piece value (colour, material, tint) has to travel per vertex,
+ * which is why the layout is as wide as it is.
  */
 export function mergeStatic(items) {
   let vertexCount = 0, indexCount = 0;
@@ -687,9 +718,15 @@ export function offsetRing(ring, d) {
     e0x /= l0; e0z /= l0; e1x /= l1; e1z /= l1;
     // Outward normals for CCW (x east, z south) rings: (ez, -ex).
     const n0x = e0z, n0z = -e0x, n1x = e1z, n1z = -e1x;
+    // Bisector of the two edge normals. Collinear edges cancel, so fall back to
+    // one of them.
     let mx = n0x + n1x, mz = n0z + n1z;
     const ml = Math.hypot(mx, mz);
     if (ml < 1e-6) { mx = n1x; mz = n1z; } else { mx /= ml; mz /= ml; }
+    // Dividing by the half-angle cosine keeps the offset edge parallel to the
+    // original. The floor is a miter limit: at a near-reversal that cosine goes
+    // to zero and the corner would shoot off to infinity, which on the parapets
+    // showed up as a spike across half a tile.
     const cosHalf = Math.max(0.35, mx * n1x + mz * n1z);
     out.push([cx + (mx * d) / cosHalf, cz + (mz * d) / cosHalf]);
   }
@@ -822,8 +859,18 @@ export function mansardRoofGeometry(ring = [[0, 0], [10, 0], [10, 6], [0, 6]], r
  * Culling + LOD ranges
  * ------------------------------------------------------------------ */
 
-/** Six frustum planes [a, b, c, d] from a column-major viewProj matrix. */
+/**
+ * Six frustum planes [a, b, c, d] from a column-major viewProj matrix
+ * (Gribb/Hartmann).
+ *
+ * A point is inside the frustum when its clip coordinates satisfy -w <= x <= w
+ * and so on. Each of those six inequalities is w +/- x >= 0, and w and x are
+ * just rows of the matrix dotted with the world point, so the plane for each is
+ * the row sum or difference below. Normalising divides out the row's length,
+ * which turns the dot product into a signed distance in world units.
+ */
 export function frustumPlanes(m) {
+  // Rows of the matrix; the storage is column-major, hence the stride of 4.
   const r = (i) => [m[i], m[4 + i], m[8 + i], m[12 + i]];
   const r0 = r(0), r1 = r(1), r2 = r(2), r3 = r(3);
   const planes = [
@@ -841,9 +888,15 @@ export function frustumPlanes(m) {
   return planes;
 }
 
-/** Conservative AABB test: false only when the box is fully outside one plane. */
+/**
+ * Conservative AABB test: false only when the box is fully outside one plane.
+ * A box straddling a corner can pass all six and still be off screen, which
+ * costs one wasted tile draw and never a missing one.
+ */
 export function aabbVisible(planes, min, max) {
   for (const [a, b, c, d] of planes) {
+    // The corner furthest along the plane normal. If even that one is behind
+    // the plane, every other corner is too, so eight tests collapse to one.
     const px = a > 0 ? max[0] : min[0], py = b > 0 ? max[1] : min[1], pz = c > 0 ? max[2] : min[2];
     if (a * px + b * py + c * pz + d < 0) return false;
   }

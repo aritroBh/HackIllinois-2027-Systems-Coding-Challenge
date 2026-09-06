@@ -36,9 +36,23 @@ node --check public/gl/tile-bake.js
 node --check public/gl/bake-worker.js
 node --check public/gl/players.js
 node --check public/views/players.js
-node -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))" 2>/dev/null
+node --check public/gl/props.js
+node --check public/gl/decals.js
+node --check public/gl/rooftops.js
+node --check public/plugins.js
+node --check public/views/announce.js
+# `node --check` on a bare .js parses it as a script, which is NOT how the browser or the
+# bake worker load these. Importing is the only check that catches a shader template closed
+# early by a stray backtick in a GLSL comment — which is exactly how campus3d.js was broken
+# while every check above it stayed green. stderr is deliberately NOT discarded: the reason
+# the breakage survived a run of this script is that the error went to /dev/null and `set -e`
+# exited without printing anything at all.
+node --no-warnings -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))"
+node --no-warnings -e "import('$ROOT/public/gl/props.js').then(()=>console.log('props.js imports'))"
+node --no-warnings -e "import('$ROOT/public/gl/decals.js').then(()=>console.log('decals.js imports'))"
+node --no-warnings -e "import('$ROOT/public/gl/rooftops.js').then(()=>console.log('rooftops.js imports'))"
 # The bake worker imports only pure modules: importing them under node proves no GL leaked in.
-node -e "import('$ROOT/public/gl/tile-bake.js').then(m=>{const b=m.bakeTile({buildings:[{p:[[0,0],[2,0],[2,2],[0,2]],h:1.5,t:'university',r:'f',m:'brick',ao:0,par:1}],trees:[[1,1,1]],lamps:[[0,0]]},{vscale:2.6});if(!b.solid||b.solid.ranges.length!==3)process.exit(1);console.log('tile-bake.js is worker-safe')})" 2>/dev/null
+node --no-warnings -e "import('$ROOT/public/gl/tile-bake.js').then(m=>{const b=m.bakeTile({buildings:[{p:[[0,0],[2,0],[2,2],[0,2]],h:1.5,t:'university',r:'f',m:'brick',ao:0,par:1}],trees:[[1,1,1]],lamps:[[0,0]]},{vscale:2.6});if(!b.solid||b.solid.ranges.length!==3)process.exit(1);console.log('tile-bake.js is worker-safe')})"
 
 step "design tokens (public/tokens.css is generated from design/tokens.mjs)"
 if ! diff -u public/tokens.css <(node design/tokens.mjs --css); then
@@ -62,9 +76,19 @@ for (const [k, id] of Object.entries(js)) if (!new RegExp('#define MAT_[A-Z_]+ +
 console.log(Object.keys(js).length + ' material ids agree across JS, Python and TS');
 " 2>/dev/null
 
+step "props vocabulary in lockstep (props.overpass.tpl ⇔ props.py ⇔ props.js)"
+node scripts/checkProps.mjs
+
 step "geometry winding audit"
 node --input-type=module -e "
-import * as G from '$ROOT/public/gl/glx.js';
+import * as G0 from '$ROOT/public/gl/glx.js';
+import * as P from '$ROOT/public/gl/props.js';
+import * as D from '$ROOT/public/gl/decals.js';
+import * as R from '$ROOT/public/gl/rooftops.js';
+// Everything that produces triangles is audited, not just the base layer. The props, decal
+// and rooftop modules are where most of the map's geometry now comes from, and an inverted
+// face there is exactly as invisible-until-it-is-not as it was in the base generators.
+const G = { ...G0, ...P, ...D, ...R };
 const gens = {
   box: () => G.boxGeometry(), octa: () => G.octahedronGeometry(), gable: () => G.gableGeometry(),
   cone: () => G.coneGeometry(16), dome: () => G.domeGeometry(12, 6), bowl: () => G.bowlGeometry(16, .24),
@@ -72,9 +96,26 @@ const gens = {
   extrude: () => G.extrudePolygon([[0,0],[10,0],[10,10],[0,10]], 5),
   polygon: () => G.polygonGeometry([[0,0],[10,0],[10,10],[0,10]], 0),
 };
-// Any additional exported *Geometry generators are audited too.
-for (const k of Object.keys(G)) if (/Geometry\$/.test(k) && !Object.values(gens).some(f => f.toString().includes(k))) {
-  try { const g = G[k](); if (g && g.indices) gens[k] = () => g; } catch {}
+// Any additional exported generator is audited too. The name filter is deliberately wide:
+// props and decals are named for what they are (bench, crosswalkDecal, rooftopGeometry), not
+// for the suffix the base layer happens to use, and a generator that escapes the audit
+// because of its name is the one that will ship inside out.
+for (const k of Object.keys(G)) {
+  if (typeof G[k] !== 'function' || gens[k]) continue;
+  if (!/Geometry\$|Decal\$|^bench\$|^bin\$|^bikerack\$|^hydrant\$|^bollard\$|^picnic\$|^flag\$|^shelter\$|^busstop\$|^artwork\$|^postbox\$|^sign\$|^planter\$|^drinkfountain\$|^playground\$|^watertower\$|^chimney\$|^mast\$|^gate\$|Run\$|Stalls\$|Markings\$|Edging\$|^manholes\$|^rooftopGeometry\$/.test(k)) continue;
+  try { const g = G[k](); if (g && g.indices && g.indices.length) gens[k] = () => g; } catch {}
+}
+// Every rooftop kind, since one function covers ten different meshes.
+for (const kind of (R.ROOFTOP_KINDS || [])) {
+  try { const g = R.rooftopGeometry(kind); if (g && g.indices && g.indices.length) gens['roof:' + kind] = () => g; } catch {}
+}
+// Every prop kind, for the same reason.
+for (const kind of Object.keys(P.PROP_BUILDERS || {})) {
+  try { const g = P.buildProp(kind); if (g && g.indices && g.indices.length) gens['prop:' + kind] = () => g; } catch {}
+}
+// Every sport the pitch markings know about.
+for (const sport of ['soccer', 'basketball', 'tennis', 'running', 'unknown']) {
+  try { const g = D.pitchMarkings(undefined, sport); if (g && g.indices && g.indices.length) gens['pitch:' + sport] = () => g; } catch {}
 }
 let failed = 0;
 for (const [name, make] of Object.entries(gens)) {

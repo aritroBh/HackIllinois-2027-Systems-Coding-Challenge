@@ -49,3 +49,49 @@ The production height path samples the public USGS QL1 lidar (`IL_8County_PlusCh
 4. Record-then-freeze: on the first lidar run note Altgeld tower (expect 40 ± 4 m), Foellinger, Memorial Stadium and State Farm Center, review against `design/refs/`, then pin them as assertions in `tests/` before pinning the pack hash in CI.
 
 Without the raster the pipeline reports `heights.lidar: false` and uses tag → levels → default. The 2026-09-06 UIUC bake is in that state: 292 tagged heights, 773 from levels, 8,136 defaults, plus hand heights for Altgeld, Foellinger and State Farm Center in `monuments.json`.
+
+
+## The props pass
+
+The pack already bakes the big shapes, namely buildings, roads, lawns, trees, lamps, water,
+rail, parking, fountains and monuments. Rendered together those give a campus that reads as
+buildings sitting on grass, because everything a person would actually stand next to is
+missing. This file exists to fetch the human-scale clutter that makes the ground plane look
+inhabited: seating and bins, cycle racks and shelters, the transit furniture along kerbs, the
+fences and hedges that cut lawns into real quads, the row plantings, the picnic and play and
+pitch surfaces, the artwork and memorials that anchor a plaza, and the tall thin man-made
+verticals such as flagpoles and masts that give the skyline something other than roofs.
+
+Each category earns its bytes differently. Benches, bins, drinking fountains, post boxes,
+telephones and barbecues are single nodes and cost almost nothing per feature, yet they are
+what the eye reads as "a place people use", so they are the cheapest realism in the whole
+bake. Bus stops, platforms, crossings and traffic signals are likewise nodes and place the
+props that make a road look like a street rather than a grey ribbon. Steps are pulled as ways
+because a stair only means anything as a run with a direction, not as a dot. Fences, walls
+and hedges are ways for the same reason and are the single highest-value class here: they
+supply the edges that stop lawns bleeding into one another. Bollards and gates are the node
+half of the same barrier family and mark thresholds. Tree rows are ways so a line of planting
+can be instanced along its geometry instead of guessed. Picnic tables, playgrounds, pitches
+and pools are the ground-cover detail that fills the leftover green, and pitches carry their
+sport tag, which "out geom" returns for free alongside the geometry and lets the baker pick a
+court colour and line pattern rather than painting every pitch the same green.
+
+The deliberate choice throughout is per-feature node, way or nwr rather than a blanket nwr on
+every tag. The rejected alternative was one convenient "nwr[amenity]"-style sweep over the
+whole box: across roughly 25 km2 that pulls relation members and interior building parts for
+tags where only the point or only the outline is ever drawn, and the response inflates by
+roughly an order of magnitude for detail that never reaches a vertex. So nwr appears only
+where a feature is genuinely mapped both ways in the wild, which is bicycle parking, shelters
+and public transport platforms; everything else is pinned to the one geometry type that the
+renderer can consume.
+
+The template itself carries only per-block one-liners. `fetch.py` hashes the substituted query
+text into `design/osm/manifest.json` and refetches any sub-box whose hash has moved, so a
+reworded comment in a `.tpl` is sixteen fresh POSTs against a public, rate-limited endpoint.
+The reasoning belongs here, where editing it is free.
+
+Two rules keep the pass honest, and `npm run campus:check` asserts both. Every selector in
+`props.overpass.tpl` must have a consumer in `props.py`, and every kind `props.py` can emit
+must have a mesh in `public/gl/props.js`. Either half breaking is silent otherwise: a tag with
+no consumer is downloaded and discarded, and a kind with no mesh is a prop the client answers
+with `null` and simply never draws.
