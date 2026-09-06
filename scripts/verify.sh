@@ -34,6 +34,8 @@ node --check public/gl/glx-gl.js
 node --check public/gl/tiles.js
 node --check public/gl/tile-bake.js
 node --check public/gl/bake-worker.js
+node --check public/gl/players.js
+node --check public/views/players.js
 node -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))" 2>/dev/null
 # The bake worker imports only pure modules: importing them under node proves no GL leaked in.
 node -e "import('$ROOT/public/gl/tile-bake.js').then(m=>{const b=m.bakeTile({buildings:[{p:[[0,0],[2,0],[2,2],[0,2]],h:1.5,t:'university',r:'f',m:'brick',ao:0,par:1}],trees:[[1,1,1]],lamps:[[0,0]]},{vscale:2.6});if(!b.solid||b.solid.ranges.length!==3)process.exit(1);console.log('tile-bake.js is worker-safe')})" 2>/dev/null

@@ -24,6 +24,8 @@ export const reserveShiftSchema = z.object({
   body: z.object({
     shiftId: objectId('Invalid Shift ObjectId'),
     volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
+    /** Act-on-behalf: a signed-in lead+ signing this volunteer up. Ignored for everyone else. */
+    onBehalfVolunteerId: objectId('Invalid Volunteer ObjectId').optional(),
   }),
   headers: z.object({
     'idempotency-key': z.string().min(8, 'idempotency-key header must be at least 8 characters').optional(),
@@ -37,6 +39,8 @@ export const cancelRegistrationSchema = z.object({
   // ponytail: owner proof — caller must name the owning volunteer (body preferred, query fallback for DELETE-without-body clients).
   body: z.object({
     volunteerId: objectId('Invalid Volunteer ObjectId').optional(),
+    /** Act-on-behalf: a signed-in lead+ cancelling for this volunteer. Ignored for everyone else. */
+    onBehalfVolunteerId: objectId('Invalid Volunteer ObjectId').optional(),
   }).optional(),
   query: z.object({
     volunteerId: objectId().optional(),

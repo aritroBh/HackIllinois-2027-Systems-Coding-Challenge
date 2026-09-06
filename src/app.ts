@@ -39,6 +39,8 @@ import { requireOrganizerAuth } from './middleware/requireAuth';
 import { attachIdentity, enforceAuthMode, requireCsrf } from './middleware/identity';
 import { streamEventsHandler } from './routes/v1/stats.routes';
 import { eventHub } from './common/sse/eventHub';
+import { presenceService } from './presence/service';
+import { presenceStore } from './presence/store';
 import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
 import { pack } from './content/loader';
@@ -178,6 +180,7 @@ app.get('/health', (_req: Request, res: Response) => {
     service: 'WaveShift Nexus',
     authMode: env.AUTH_MODE,
     streams: eventHub.stats(),
+    presence: { enabled: env.PRESENCE_ENABLED, ...presenceService.stats, tracked: presenceStore.size() },
     timestamp: new Date().toISOString(),
   });
 });

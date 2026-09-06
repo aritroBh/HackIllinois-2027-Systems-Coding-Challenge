@@ -24,6 +24,9 @@ import { IShift } from '../models/shift.model';
 import { GeoEngine, HACKILLINOIS_VENUES, IGeoCoordinates, resolveVenueCoordinates } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
+import { presenceStore } from '../presence/store';
+import { PresenceAudit } from '../models/presenceAudit.model';
+import { toLocal } from '../content/loader';
 import { eventHub } from '../common/sse/eventHub';
 import { sameId } from '../common/utils/id';
 
@@ -38,6 +41,9 @@ export interface ICreateSOSTicketDTO {
   requiredSkill?: string;
   karmaBounty?: number;
 }
+
+/** A presence fix older than this is not a position any more; fall back to the venue. */
+const LIVE_POSITION_MAX_AGE_MS = 30_000;
 
 export class SOSService {
   /**
@@ -71,6 +77,9 @@ export class SOSService {
     ticket: ISOSTicket;
     dispatchedVolunteer: Record<string, unknown>;
     distanceMeters: number;
+    positionSource: 'live' | 'venue' | 'unknown';
+    positionAgeMs: number | null;
+    candidates: Array<{ volunteerId: string; name: string; distanceMeters: number | null; positionSource: string; ageMs: number | null }>;
   }> {
     const ticket = await SOSTicket.findById(ticketId);
     if (!ticket || ticket.status !== SOSTicketStatus.OPEN) {
@@ -95,33 +104,87 @@ export class SOSService {
       throw ApiError.conflict('No on-duty volunteers available for dispatch.', ErrorCode.SCHEDULE_CONFLICT);
     }
 
-    // 2. Score candidates by skill match and distance
-    let bestCandidate: IVolunteer | null = null;
-    let shortestDistance = Infinity;
+    // 2. Rank candidates. A live presence fix (opted in, on duty, < 30 s old) beats the
+    // shift-venue estimate, which beats nothing at all: a candidate with neither is kept
+    // and ranked last with positionSource 'unknown' so the lead queue shows them greyed
+    // rather than silently dropping them. Hackers are never candidates, and an opted-out
+    // volunteer simply falls back to their venue — opting out is honoured by dispatch too.
+    const now = Date.now();
+    const live = new Map<string, { distanceM: number; ageMs: number }>();
+    for (const p of presenceStore.nearestVolunteers(
+      toLocal(ticket.coordinates.latitude, ticket.coordinates.longitude).x,
+      toLocal(ticket.coordinates.latitude, ticket.coordinates.longitude).z,
+      LIVE_POSITION_MAX_AGE_MS,
+      now,
+      500
+    )) {
+      live.set(p.e.id, { distanceM: p.distanceM, ageMs: p.ageMs });
+    }
 
-    // Estimate volunteer location from the volunteer's shift venue (resolved, never defaulted).
+    type Candidate = {
+      vol: IVolunteer;
+      distanceMeters: number | null;
+      positionSource: 'live' | 'venue' | 'unknown';
+      ageMs: number | null;
+    };
+    const candidates: Candidate[] = [];
+
     for (const reg of activeRegs) {
       const vol = reg.volunteerId as unknown as IVolunteer;
       const shift = reg.shiftId as unknown as IShift;
-      if (!vol || !shift?.location) continue;
+      if (!vol) continue;
+      if ((vol as { kind?: string }).kind === 'HACKER') continue;
 
       // Check skill if required
       if (ticket.requiredSkill && !vol.certifications.includes(ticket.requiredSkill)) {
         continue;
       }
 
-      const venueCoord = resolveVenueCoordinates(shift.location);
-      if (!venueCoord) continue; // unmappable shift venue — skip instead of measuring from the wrong building
-      const dist = GeoEngine.haversineDistanceMeters(ticket.coordinates, venueCoord);
-
-      if (dist < shortestDistance) {
-        shortestDistance = dist;
-        bestCandidate = vol;
+      const fix = live.get(String(vol._id));
+      if (fix) {
+        candidates.push({ vol, distanceMeters: fix.distanceM, positionSource: 'live', ageMs: fix.ageMs });
+        continue;
       }
+      const venueCoord = shift?.location ? resolveVenueCoordinates(shift.location) : null;
+      if (venueCoord) {
+        candidates.push({
+          vol,
+          distanceMeters: GeoEngine.haversineDistanceMeters(ticket.coordinates, venueCoord),
+          positionSource: 'venue',
+          ageMs: null,
+        });
+        continue;
+      }
+      // Unmappable venue and no live fix: still a person who could respond.
+      candidates.push({ vol, distanceMeters: null, positionSource: 'unknown', ageMs: null });
     }
 
-    // ponytail: no skill-match wipeout fallback — assigning a random unqualified volunteer is worse than no dispatch.
-    if (!bestCandidate) {
+    // Live fixes first, then venue estimates, then unknown; distance within each tier.
+    const rank = { live: 0, venue: 1, unknown: 2 } as const;
+    candidates.sort((a, b) =>
+      rank[a.positionSource] - rank[b.positionSource] ||
+      (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity)
+    );
+
+    const winner = candidates[0];
+    const bestCandidate: IVolunteer | null = winner ? winner.vol : null;
+    const shortestDistance = winner?.distanceMeters ?? Infinity;
+
+    // One audit document per dispatch — never one per scanned cell (plan §A4).
+    if (live.size) {
+      void PresenceAudit.create({
+        readerId: 'dispatch',
+        reason: 'dispatch',
+        ticketId: String(ticket._id),
+        candidatesScanned: candidates.length,
+        winnerId: bestCandidate ? String(bestCandidate._id) : undefined,
+        at: new Date(now),
+      }).catch(() => undefined);
+    }
+
+    // ponytail: no skill-match wipeout fallback — assigning a random unqualified volunteer
+    // is worse than no dispatch at all.
+    if (!bestCandidate || !winner) {
       throw ApiError.conflict('No on-duty volunteer matches the required skill for this ticket.', ErrorCode.MISSING_SKILL_CERTIFICATION);
     }
 
@@ -143,7 +206,8 @@ export class SOSService {
         tableLocation: ticket.tableLocation,
         volunteerId: bestCandidate._id,
         volunteerName: bestCandidate.name,
-        distanceMeters: shortestDistance,
+        distanceMeters: Number.isFinite(shortestDistance) ? shortestDistance : null,
+        positionSource: winner!.positionSource,
       },
     });
 
@@ -158,6 +222,16 @@ export class SOSService {
         faction: (bestCandidate as { faction?: unknown }).faction,
       } as Record<string, unknown>,
       distanceMeters: shortestDistance,
+      positionSource: winner!.positionSource,
+      positionAgeMs: winner!.ageMs,
+      /** Everyone considered, so the lead queue can show the runners-up and their location quality. */
+      candidates: candidates.slice(0, 10).map((c) => ({
+        volunteerId: String(c.vol._id),
+        name: c.vol.name,
+        distanceMeters: c.distanceMeters,
+        positionSource: c.positionSource,
+        ageMs: c.ageMs,
+      })),
     };
   }
 

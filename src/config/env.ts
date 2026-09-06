@@ -72,6 +72,8 @@ const envSchema = z.object({
   /** Content pack directory name under CONTENT_DIR — a bare name, never a path. */
   CONTENT_PACK: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'CONTENT_PACK must be a bare lowercase directory name').default('hackillinois-2027'),
   CONTENT_DIR: z.string().min(1).optional(),
+  /** Live multiplayer presence (WebSocket + SSE fallback). */
+  PRESENCE_ENABLED: z.string().default('true').transform((v) => v !== 'false' && v !== '0'),
 
   // --- capacity -------------------------------------------------------------
   // The per-IP rate limit must be tunable at deploy time. It was previously a

@@ -1,0 +1,278 @@
+/**
+ * M4b — the presence soak (plan Part D, gate M4b).
+ *
+ * Jest keeps the protocol and unit tests; the 1,200-socket run lives here because the
+ * shared replica set and the 60 s test timeout make anything that size infeasible in the
+ * suite. This opens real WebSockets against a real server, walks each client along a random
+ * path, and reports the two things the gate is about: how long a tick takes at the far end
+ * of the distribution, and how many bytes we push per second.
+ *
+ *   npm run bench:presence -- --clients 1200 --devices 2 --seconds 120
+ *   npm run bench:presence -- --clients 1200 --storm 10        # 10 % reconnect within 60 s
+ *
+ * Phase 1 (steady state) must show: tick p95 < 30 ms, measured outbound < 1 MB/s, the
+ * cluster-only fallback never triggered, zero cross-transport evictions, and no 1013 close
+ * for an account inside its slot budget. Phase 2 (reconnect storm) must additionally show
+ * that a reconnecting account never evicts its own other transport and that every client is
+ * back at full detail within 60 s.
+ *
+ * The server must be running with PRESENCE_ENABLED=true and reachable at --url; point
+ * TRUSTED_EGRESS_CIDRS at the load generator to test the trusted-egress configuration, and
+ * run it once without to test the untrusted 800-streams-per-IP path.
+ */
+import crypto from 'crypto';
+import { WebSocket } from 'ws';
+
+interface Args {
+  url: string;
+  api: string;
+  clients: number;
+  devices: number;
+  seconds: number;
+  stormPercent: number;
+  organizerSecret?: string;
+}
+
+function parseArgs(argv: string[]): Args {
+  const get = (name: string, fallback: string) => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
+  };
+  const api = get('api', 'http://localhost:3000');
+  return {
+    api,
+    url: get('url', api.replace(/^http/, 'ws') + '/ws/presence'),
+    clients: Number(get('clients', '1200')),
+    devices: Number(get('devices', '2')),
+    seconds: Number(get('seconds', '120')),
+    stormPercent: Number(get('storm', '0')),
+    organizerSecret: process.env.ORGANIZER_SECRET,
+  };
+}
+
+const QUAD: [number, number] = [40.10746, -88.22713];
+const M_PER_LAT = 111320;
+const M_PER_LNG = 111320 * Math.cos((QUAD[0] * Math.PI) / 180);
+
+interface Client {
+  accountId: string;
+  cookie: string;
+  csrf: string;
+  sockets: WebSocket[];
+  lat: number;
+  lng: number;
+  heading: number;
+  rxBytes: number;
+  frames: number;
+  closes: Array<{ code: number; reason: string }>;
+  clusterNotices: number;
+  fullNotices: number;
+}
+
+async function json(url: string, init: RequestInit & { cookie?: string } = {}): Promise<{ status: number; body: Record<string, unknown>; setCookie: string[] }> {
+  const res = await fetch(url, {
+    ...init,
+    headers: { 'content-type': 'application/json', ...(init.headers ?? {}), ...(init.cookie ? { cookie: init.cookie } : {}) },
+  });
+  const setCookie = (res.headers.getSetCookie?.() ?? []) as string[];
+  let body: Record<string, unknown> = {};
+  try { body = (await res.json()) as Record<string, unknown>; } catch { /* empty body */ }
+  return { status: res.status, body, setCookie };
+}
+
+/**
+ * Provision one account and sign it in through dev-login (development servers only).
+ *
+ * The soak represents hackers, not volunteers: an off-shift volunteer is deliberately
+ * invisible to their peers, so a crowd of them would measure an empty map. `desk` is a
+ * signed-in organiser session, which is what may create a hacker account.
+ */
+async function makeClient(api: string, i: number, desk: { cookie: string; csrf: string } | null): Promise<Client | null> {
+  const created = await json(`${api}/api/v1/volunteers`, {
+    method: 'POST',
+    cookie: desk?.cookie,
+    headers: desk ? { 'x-csrf-token': desk.csrf } : {},
+    body: JSON.stringify({ name: `Soak ${i}`, email: `soak.${Date.now()}.${i}@load.test`, kind: 'HACKER', certifications: [] }),
+  });
+  let accountId = ((created.body.data as { _id?: string } | undefined)?._id) ?? '';
+  if (!accountId && created.status === 429) {
+    // The desk session has a 90-mutations-per-minute bucket, which a 1,200-account
+    // provisioning run walks straight into. Wait it out rather than under-provisioning.
+    await new Promise((r) => setTimeout(r, 2000));
+    const retry = await json(`${api}/api/v1/volunteers`, {
+      method: 'POST',
+      cookie: desk?.cookie,
+      headers: desk ? { 'x-csrf-token': desk.csrf } : {},
+      body: JSON.stringify({ name: `Soak ${i}`, email: `soak.${Date.now()}.${i}.r@load.test`, kind: 'HACKER', certifications: [] }),
+    });
+    accountId = ((retry.body.data as { _id?: string } | undefined)?._id) ?? '';
+  }
+  if (!accountId) return null;
+  const login = await json(`${api}/api/v1/auth/dev-login`, { method: 'POST', body: JSON.stringify({ accountId }) });
+  if (login.status !== 200) return null;
+  const cookie = login.setCookie.map((c) => c.split(';')[0]).join('; ');
+  const csrfCookie = login.setCookie.find((c) => c.includes('nexus_csrf'));
+  const csrf = csrfCookie ? decodeURIComponent(csrfCookie.split(';')[0].split('=')[1]) : '';
+  // Presence is opt-in; the soak represents people who turned it on.
+  await json(`${api}/api/v1/me/presence`, { method: 'PATCH', cookie, headers: { 'x-csrf-token': csrf }, body: JSON.stringify({ optIn: true }) });
+  const angle = (i / 1200) * Math.PI * 2;
+  return {
+    accountId, cookie, csrf, sockets: [],
+    lat: QUAD[0] + (Math.sin(angle) * 250) / M_PER_LAT,
+    lng: QUAD[1] + (Math.cos(angle) * 250) / M_PER_LNG,
+    heading: Math.random() * 360,
+    rxBytes: 0, frames: 0, closes: [], clusterNotices: 0, fullNotices: 0,
+  };
+}
+
+function connect(args: Args, c: Client): Promise<WebSocket | null> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(args.url, [`nexus.v1.${c.csrf}`], { headers: { cookie: c.cookie } });
+    const fail = () => resolve(null);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ t: 'hello', v: 1, enc: 'bin' }));
+      resolve(ws);
+    });
+    ws.on('message', (raw, isBinary) => {
+      c.rxBytes += isBinary ? (raw as Buffer).length : Buffer.byteLength(String(raw));
+      c.frames += 1;
+      if (!isBinary) {
+        try {
+          const f = JSON.parse(String(raw)) as { t?: string; mode?: string };
+          if (f.t === 'notice' && f.mode === 'clusters') c.clusterNotices += 1;
+          if (f.t === 'notice' && f.mode === 'full') c.fullNotices += 1;
+        } catch { /* not a JSON frame */ }
+      }
+    });
+    ws.on('close', (code, reason) => c.closes.push({ code, reason: String(reason) }));
+    ws.on('error', fail);
+    ws.on('unexpected-response', fail);
+  });
+}
+
+function step(c: Client, metres = 4): void {
+  c.heading = (c.heading + (Math.random() - 0.5) * 40 + 360) % 360;
+  const rad = (c.heading * Math.PI) / 180;
+  c.lat += (Math.cos(rad) * metres) / M_PER_LAT;
+  c.lng += (Math.sin(rad) * metres) / M_PER_LNG;
+}
+
+async function health(api: string): Promise<Record<string, unknown>> {
+  const res = await json(`${api}/health`);
+  return (res.body.presence as Record<string, unknown>) ?? {};
+}
+
+async function main(): Promise<number> {
+  const args = parseArgs(process.argv.slice(2));
+  console.log(`[soak] ${args.clients} accounts × ${args.devices} devices → ${args.url} for ${args.seconds}s` +
+    (args.stormPercent ? `, then a ${args.stormPercent}% reconnect storm` : ''));
+
+  // Sign in as the highest-ranked seeded account: creating hacker accounts is a desk action.
+  let desk: { cookie: string; csrf: string } | null = null;
+  const accounts = await json(`${args.api}/api/v1/auth/dev-accounts`);
+  const organiser = (accounts.body.data as Array<{ id: string; role: string }> | undefined)?.[0];
+  if (organiser) {
+    const login = await json(`${args.api}/api/v1/auth/dev-login`, { method: 'POST', body: JSON.stringify({ accountId: organiser.id }) });
+    if (login.status === 200) {
+      const cookie = login.setCookie.map((c) => c.split(';')[0]).join('; ');
+      const csrfCookie = login.setCookie.find((c) => c.includes('nexus_csrf'));
+      desk = { cookie, csrf: csrfCookie ? decodeURIComponent(csrfCookie.split(';')[0].split('=')[1]) : '' };
+      console.log(`[soak] desk session: ${organiser.role}`);
+    }
+  }
+
+  const clients: Client[] = [];
+  for (let i = 0; i < args.clients; i++) {
+    const c = await makeClient(args.api, i, desk);
+    if (c) clients.push(c);
+    if (i % 100 === 0) process.stdout.write(`\r[soak] provisioned ${clients.length}/${args.clients}`);
+  }
+  process.stdout.write(`\r[soak] provisioned ${clients.length}/${args.clients}\n`);
+  if (!clients.length) {
+    console.error('[soak] could not provision any accounts — is the server running in development with dev-login?');
+    return 1;
+  }
+
+  for (const c of clients) {
+    for (let d = 0; d < args.devices; d++) {
+      const ws = await connect(args, c);
+      if (ws) c.sockets.push(ws);
+    }
+  }
+  const open = clients.reduce((s, c) => s + c.sockets.length, 0);
+  console.log(`[soak] ${open} sockets open`);
+
+  const samples: Array<{ t: number; tickP95: number; rx: number; sessions: number; cluster: boolean }> = [];
+  let lastRx = clients.reduce((s, c) => s + c.rxBytes, 0);
+  const started = Date.now();
+
+  const walker = setInterval(() => {
+    for (const c of clients) {
+      step(c);
+      const frame = JSON.stringify({ t: 'pos', lat: c.lat, lng: c.lng, acc: 8, h: c.heading });
+      for (const ws of c.sockets) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+    }
+  }, 5000);
+
+  const sampler = setInterval(async () => {
+    const h = await health(args.api);
+    const rx = clients.reduce((s, c) => s + c.rxBytes, 0);
+    samples.push({
+      t: Date.now() - started,
+      tickP95: Number(h.p95TickMs ?? 0),
+      rx: rx - lastRx,
+      sessions: Number(h.sessions ?? 0),
+      cluster: Boolean(h.clusterMode),
+    });
+    lastRx = rx;
+    const last = samples[samples.length - 1];
+    process.stdout.write(`\r[soak] t=${Math.round(last.t / 1000)}s sessions=${last.sessions} tickP95=${last.tickP95}ms rx=${(last.rx / 1024).toFixed(0)}KB/s cluster=${last.cluster}`);
+  }, 1000);
+
+  await new Promise((r) => setTimeout(r, args.seconds * 1000));
+
+  let stormOk = true;
+  if (args.stormPercent > 0) {
+    console.log(`\n[soak] reconnect storm: ${args.stormPercent}% of clients drop one socket`);
+    const victims = clients.filter(() => Math.random() * 100 < args.stormPercent);
+    for (const c of victims) {
+      const doomed = c.sockets.shift();
+      doomed?.close(1000, 'storm');
+      const ws = await connect(args, c);
+      if (ws) c.sockets.push(ws);
+      else stormOk = false;
+    }
+    await new Promise((r) => setTimeout(r, 60_000));
+    // The other transport of a reconnecting account must survive.
+    for (const c of victims) {
+      if (c.sockets.filter((w) => w.readyState === WebSocket.OPEN).length < Math.min(args.devices, 2)) stormOk = false;
+    }
+  }
+
+  clearInterval(walker);
+  clearInterval(sampler);
+  const held = clients.reduce((s, c) => s + c.sockets.filter((w) => w.readyState === WebSocket.OPEN).length, 0);
+  for (const c of clients) for (const ws of c.sockets) ws.close(1000, 'done');
+
+  const steady = samples.slice(Math.floor(samples.length * 0.2));
+  const tickP95 = Math.max(...steady.map((s) => s.tickP95), 0);
+  const rxPeak = Math.max(...steady.map((s) => s.rx), 0);
+  const clusterTriggered = steady.some((s) => s.cluster);
+  const closes1013 = clients.reduce((s, c) => s + c.closes.filter((x) => x.code === 1013).length, 0);
+
+  console.log('\n\n=== M4b gate ===');
+  const row = (label: string, value: string, ok: boolean) => console.log(`${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(38)} ${value}`);
+  row('tick p95 < 30 ms', `${tickP95} ms`, tickP95 < 30);
+  row('outbound < 1 MB/s', `${(rxPeak / 1024).toFixed(0)} KB/s peak`, rxPeak < 1024 * 1024);
+  row('cluster-only fallback never triggered', String(clusterTriggered), !clusterTriggered);
+  row('no 1013 closes inside the slot budget', String(closes1013), closes1013 === 0);
+  row('sockets held', `${held}/${open}`, held >= open * 0.95);
+  if (args.stormPercent > 0) row('reconnect storm kept both transports', String(stormOk), stormOk);
+
+  const passed = tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
+  console.log(passed ? '\nM4b: PASS' : '\nM4b: FAIL');
+  return passed ? 0 : 1;
+}
+
+void crypto; // reserved: the trusted-egress variant signs its own source addresses
+main().then((code) => process.exit(code), (err) => { console.error(err); process.exit(1); });

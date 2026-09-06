@@ -835,7 +835,10 @@ function setSseStatus(text, cls) {
 }
 
 function connectSSE() {
-  const eventSource = new EventSource('/api/v1/stats/events');
+  // `presence` carries the multiplayer frames for the SSE fallback (views/players.js);
+  // `me` carries targeted deliveries. Both are ignored by the server for callers that may
+  // not join them, so asking costs nothing.
+  const eventSource = new EventSource('/api/v1/stats/events?v=2&channels=ops,sos,game,announce,presence,me');
 
   // Reconnect with backoff — one failed stream used to mean a permanently
   // dead dashboard with no visible sign that it had stopped updating.
@@ -856,6 +859,13 @@ function connectSSE() {
     let payload = {};
     try { payload = JSON.parse(e.data); } catch { /* keep-alive or malformed frame */ }
     fn(payload);
+  });
+
+  // Multiplayer presence over the fallback transport, and avatar takedowns.
+  on('PRESENCE_FRAME', (p) => Nexus.emit('PRESENCE_FRAME', p));
+  on('AVATAR_UNPUBLISHED', (p) => {
+    Nexus.emit('AVATAR_UNPUBLISHED', p);
+    logChaosTerminal(`[MODERATION] Avatar ${String(p.hash || '').slice(0, 8)} unpublished (${p.reason || 'takedown'}).`);
   });
 
   on('SLOT_RESERVED', (p) => {
@@ -979,7 +989,10 @@ async function runConcurrencyBomb() {
         Nexus.api('/api/v1/registrations', {
           method: 'POST',
           headers: { 'idempotency-key': `concurrency_bomb_${stamp}_worker_${i}` },
-          body: { shiftId: testShiftId, volunteerId },
+          // `onBehalfVolunteerId`, not `volunteerId`: the signed-in organiser is registering
+          // fifty other people. A plain `volunteerId` is ignored for a session (that is the
+          // IDOR fix), so all fifty would collapse into the organiser and prove nothing.
+          body: { shiftId: testShiftId, onBehalfVolunteerId: volunteerId },
           lenient: true,
         })
       )
@@ -1028,7 +1041,14 @@ async function simulateDropCascade() {
     logChaosTerminal(`[CHAOS] Cancelling registration for "${target.shiftId.title}"…`);
 
     const ownerId = target.volunteerId?._id ?? target.volunteerId;
-    const dropJson = await Nexus.api(`/api/v1/registrations/${target._id}?volunteerId=${encodeURIComponent(ownerId)}`, { method: 'DELETE', lenient: true });
+    // The registration belongs to someone else, so this is a delegated cancel: the
+    // signed-in lead/organiser names the owner in `onBehalfVolunteerId`. Anyone without
+    // that role acts as themselves and the service's owner check refuses the cancel.
+    const dropJson = await Nexus.api(`/api/v1/registrations/${target._id}?volunteerId=${encodeURIComponent(ownerId)}`, {
+      method: 'DELETE',
+      body: { onBehalfVolunteerId: ownerId },
+      lenient: true,
+    });
 
     if (dropJson.success) {
       if (dropJson.data.promoted) {
@@ -1075,9 +1095,15 @@ async function setupDefaultQr() {
   if (volunteersCache.length === 0 || shiftsCache.length === 0) return;
 
   try {
-    const res = await fetch('/api/v1/registrations?status=CONFIRMED');
-    const json = await res.json();
-    const reg = json.success && json.data.find((r) => r.volunteerId && r.shiftId);
+    const json = await Nexus.api('/api/v1/registrations?status=CONFIRMED', { lenient: true });
+    // The attendance token is minted for the SESSION's own registration: the server derives
+    // the volunteer from the session, so picking anyone else's row just fails the
+    // "does not hold a confirmed spot" check. Prefer mine, fall back to the first row for
+    // the anonymous legacy demo.
+    const me = window.Nexus?.session?.user?.id;
+    const rows = (json.success && Array.isArray(json.data) ? json.data : []).filter((r) => r.volunteerId && r.shiftId);
+    const mine = me ? rows.find((r) => String(r.volunteerId._id ?? r.volunteerId) === String(me)) : null;
+    const reg = mine || (me ? null : rows[0]);
     if (reg) {
       currentQrVolunteerId = reg.volunteerId._id ?? reg.volunteerId;
       currentQrShiftId = reg.shiftId._id ?? reg.shiftId;

@@ -29,6 +29,7 @@ import {
 import { program, mesh, framebuffer, disposeFramebuffer, instancedMesh, drawInstanced } from './glx-gl.js';
 import { MATERIAL_GLSL, MATERIALS } from './materials.js';
 import { createTileManager } from './tiles.js';
+import { createPlayerLayer, PLAYER_VS, PLAYER_FS, SLOT_W, SLOT_H } from './players.js';
 import { bakeTile, treeTemplate, lampTemplate } from './tile-bake.js';
 
 /* ------------------------------------------------------------------ *
@@ -600,6 +601,7 @@ export function createCampusRenderer(canvas, opts = {}) {
   const progScene = program(gl, SCENE_VS, SCENE_FS);
   const progStatic = program(gl, STATIC_VS, STATIC_FS);
   const progInst = program(gl, INST_VS, STATIC_FS);
+  const progPlayers = program(gl, PLAYER_VS, PLAYER_FS);
   const progGround = program(gl, GROUND_VS, GROUND_FS);
   const progSky = program(gl, POST_VS, SKY_FS);
   const progBright = program(gl, POST_VS, BRIGHT_FS);
@@ -640,6 +642,9 @@ export function createCampusRenderer(canvas, opts = {}) {
   /* ----------------------------- tiles + quality ------------------------ */
 
   let tiles = null, treeInst = null, lampInst = null, instVersion = -1, instAt = 0;
+  /** Remote trainers (plan §B4): one instanced draw, built lazily on the first setPlayers. */
+  let playerLayer = null;
+  let factionColours = {};
   const bakeOpts = { vscale: VSCALE };
   const LEVEL_NAMES = ['low', 'med', 'high'];
   const quality = { tier: 'auto', level: 2, dprCap: 2, bloomW: 480, windows: true, treeDist: Infinity, sweepK: 1, ema: 16, lastUp: 0, reduced: false };
@@ -1754,6 +1759,15 @@ export function createCampusRenderer(canvas, opts = {}) {
       });
     }
 
+    /* ---- remote trainers: one instanced, depth-tested draw ---- */
+    if (playerLayer && playerLayer.count()) {
+      const rx0 = view[0], rz0 = view[8];
+      const rl0 = Math.hypot(rx0, rz0) || 1;
+      playerLayer.update({ x: cam.cx, z: cam.cz }, (f) => factionColours[f] || '#5d7096', now, t);
+      playerLayer.draw(proj, view, new Float32Array([rx0 / rl0, 0, rz0 / rl0]));
+      progScene.use();
+    }
+
     /* ---- player: ground shadow, then the billboard sprite ---- */
     if (player.active) {
       gl.enable(gl.BLEND);
@@ -1919,6 +1933,7 @@ export function createCampusRenderer(canvas, opts = {}) {
       if (d2 <= r2) out.push({ kind, id, distanceMeters: Math.sqrt(d2) * 10, ref });
     };
     for (const mo of monuments) push('monument', mo.id, mo.cx, mo.cz, mo);
+    if (playerLayer) for (const p of playerLayer.list()) push('player', p.id, p.x, p.z, p);
     beacons.forEach((b, i) => push('beacon', b.id ?? `beacon-${i}`, b.x, b.z, b));
     distress.forEach((d, i) => push('distress', d.id ?? `sos-${i}`, d.x, d.z, d));
     out.sort((a, b) => a.distanceMeters - b.distanceMeters);
@@ -2145,6 +2160,40 @@ export function createCampusRenderer(canvas, opts = {}) {
     getRetro: () => ({ ...retro }),
     getCameraMode: () => cameraMode,
 
+    /* --------------------------- multiplayer (B4) ------------------------- */
+
+    /**
+     * Replace the set of remote trainers. Each entry: `{ id, x, z, h, faction, name,
+     * avatarHash, kind, stale }` in world units. Positions are snapshots — the layer
+     * interpolates between them and renders 1 s behind, which matches the 1 Hz deltas.
+     */
+    setPlayers(list) {
+      if (!playerLayer) playerLayer = createPlayerLayer(gl, { program: progPlayers });
+      playerLayer.setPlayers(Array.isArray(list) ? list : []);
+      return playerLayer.count();
+    },
+
+    /** Upload a peer's 128×48 walk sheet into the atlas, keyed by hash. */
+    registerAvatar(hash, image) {
+      if (!playerLayer) playerLayer = createPlayerLayer(gl, { program: progPlayers });
+      if (!image || image.width !== SLOT_W || image.height !== SLOT_H) return -1;
+      return playerLayer.registerAvatar(hash, image);
+    },
+
+    /** A takedown: drop the texture so nobody keeps drawing it. */
+    forgetAvatar(hash) {
+      return playerLayer ? playerLayer.forgetAvatar(hash) : false;
+    },
+
+    hasAvatar: (hash) => (playerLayer ? playerLayer.knownAvatar(hash) : false),
+    getPlayers: () => (playerLayer ? playerLayer.list() : []),
+    getPlayerStats: () => (playerLayer ? { ...playerLayer.stats } : { drawn: 0, sprites: 0, pills: 0, clusters: 0, slots: 0 }),
+
+    /** Faction id → hex, so remote pills and clusters match the map's colours. */
+    setFactionColours(map) {
+      factionColours = { ...map };
+    },
+
     setProximityRadius(m) { proximityRadiusM = Math.max(5, m); },
     getNearby: (radiusM = proximityRadiusM) => (player.active ? nearbyList(radiusM) : []),
 
@@ -2200,6 +2249,7 @@ export function createCampusRenderer(canvas, opts = {}) {
       fps: +(1000 / Math.max(0.1, quality.ema)).toFixed(1), frameMs: +quality.ema.toFixed(2),
       tris: Math.round(frameStats.tris), tilesDrawn: frameStats.tilesDrawn, tilesResident: tiles ? tiles.resident.size : 0,
       draws: frameStats.draws, quality: LEVEL_NAMES[quality.level], tier: quality.tier, worker: tiles ? tiles.stats.worker : false, tiled: !!tiles,
+      players: playerLayer ? playerLayer.count() : 0, playerDraws: playerLayer ? playerLayer.stats.drawn : 0,
     }),
     /** `?probe=1`: a scripted 10 s orbit that resolves with p50/p95 frame ms and the draw stats. */
     probe(seconds = 10) {
@@ -2223,10 +2273,11 @@ export function createCampusRenderer(canvas, opts = {}) {
       disposeMesh(decalMesh);
       disposeMesh(greenMesh);
       if (tiles) tiles.destroy();
+      if (playerLayer) playerLayer.destroy();
       if (treeInst) { disposeMesh(treeInst); gl.deleteBuffer(treeInst.instanceBuffer); }
       if (lampInst) { disposeMesh(lampInst); gl.deleteBuffer(lampInst.instanceBuffer); }
       gl.deleteTexture(spriteTex);
-      for (const p of [progScene, progStatic, progInst, progGround, progSky, progBright, progBlur, progComposite, progSprite]) {
+      for (const p of [progScene, progStatic, progInst, progPlayers, progGround, progSky, progBright, progBlur, progComposite, progSprite]) {
         gl.deleteProgram(p.handle);
       }
     },

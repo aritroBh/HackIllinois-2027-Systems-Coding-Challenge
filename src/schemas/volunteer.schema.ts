@@ -19,6 +19,12 @@ export const createVolunteerSchema = z.object({
     email: z.string().email('Invalid email address'),
     phone: z.string().optional(),
     // ponytail: `role` deliberately not client-writable; server forces VOLUNTEER (privilege-escalation fix).
+    /**
+     * The registration desk creating a hacker account. Honoured only for a signed-in lead+
+     * (the controller checks); anyone else gets a VOLUNTEER regardless of what they send,
+     * so this can never be a self-service route to a different account class.
+     */
+    kind: z.enum(['VOLUNTEER', 'HACKER']).optional(),
     certifications: z.array(z.string()).default([]),
   }),
 });

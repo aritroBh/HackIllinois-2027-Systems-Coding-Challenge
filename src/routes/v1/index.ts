@@ -22,11 +22,15 @@ import { pokeShiftRouter } from './pokestop.routes';
 import { authRouter } from './auth.routes';
 import { meRouter } from './me.routes';
 import { contentRouter } from './content.routes';
+import { presenceRouter } from './presence.routes';
+import { avatarRouter } from './avatar.routes';
 
 export const v1Router = Router();
 
 v1Router.use('/auth', authRouter);
 v1Router.use('/content', contentRouter);
+v1Router.use('/presence', presenceRouter);
+v1Router.use('/avatars', avatarRouter);
 v1Router.use('/me', meRouter);
 v1Router.use('/shifts', shiftRouter);
 v1Router.use('/volunteers', volunteerRouter);

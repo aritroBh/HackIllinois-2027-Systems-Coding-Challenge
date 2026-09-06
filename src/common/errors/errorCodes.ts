@@ -49,6 +49,10 @@ export enum ErrorCode {
   DUPLICATE_RESOURCE = 'DUPLICATE_RESOURCE',
   NOT_FOUND = 'NOT_FOUND',
 
+  // Rate limiting (429)
+  /** Too many calls in the window — the per-lead presence listing, or a limiter bucket. */
+  RATE_LIMITED = 'RATE_LIMITED',
+
   // Server & Database Errors (500)
   INTERNAL_ERROR = 'INTERNAL_ERROR',
   DATABASE_ERROR = 'DATABASE_ERROR',

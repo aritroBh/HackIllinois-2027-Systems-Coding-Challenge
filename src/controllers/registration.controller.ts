@@ -17,15 +17,19 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { RegistrationService } from '../services/registration.service';
-import { resolveActorId } from '../middleware/identity';
+import { resolveActorId, resolveOnBehalf } from '../middleware/identity';
 
 export class RegistrationController {
   public static async reserveShift(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+      // Registration is the one flow a lead may drive for someone else: the roster desk
+      // signing a volunteer up at the table. It must be asked for explicitly, in
+      // `onBehalfVolunteerId`, by a signed-in lead — see `resolveOnBehalf`.
+      const onBehalf = resolveOnBehalf(req);
       const result = await RegistrationService.reserveShift({
         shiftId: req.body.shiftId,
-        volunteerId: resolveActorId(req) as string,
+        volunteerId: (onBehalf?.subjectId ?? resolveActorId(req)) as string,
         idempotencyKey,
       });
 
@@ -50,7 +54,7 @@ export class RegistrationController {
     try {
       // Owner proof: the session's account (legacy mode: the body/query id). The service
       // still compares it with `sameId` and rejects cross-user cancels as 403.
-      const callerVolunteerId = resolveActorId(req);
+      const callerVolunteerId = resolveOnBehalf(req)?.subjectId ?? resolveActorId(req);
       const result = await RegistrationService.cancelRegistration(req.params.id as string, callerVolunteerId);
       res.status(200).json({
         success: true,

@@ -86,7 +86,9 @@ const VolunteerSchema = new Schema<IVolunteer>(
     name: { type: String, required: true, trim: true },
     // Sparse + unique: two volunteers cannot share an email, but any number of hackers may
     // have none. (`scripts/migrate.ts` drops the old non-sparse unique index.)
-    email: { type: String, lowercase: true, trim: true, default: null },
+    // No `default: null`: a null is a *present* value under the sparse unique index below,
+    // so defaulting it would make every email-less hacker collide with the first one.
+    email: { type: String, lowercase: true, trim: true },
     phone: { type: String, trim: true },
     kind: {
       type: String,
@@ -152,8 +154,10 @@ VolunteerSchema.pre('validate', function (next) {
     next(new Error(`Incoherent account: kind=${this.kind} role=${this.role} (kind HACKER must pair with role HACKER)`));
     return;
   }
-  // An email of "" would collide under the unique index; normalise to absent.
-  if (this.email === '') this.email = null;
+  // A sparse unique index only skips documents where the field is ABSENT. An email stored
+  // as `null` (or `""`) is present, so a second badge-claim hacker with no email would
+  // collide on `email_1`. Unset it instead, which is what makes "sparse" do what it says.
+  if (this.email === '' || this.email === null) this.set('email', undefined, { strict: false });
   next();
 });
 

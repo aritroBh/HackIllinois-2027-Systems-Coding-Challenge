@@ -11,6 +11,8 @@
 import http from 'http';
 import { Application } from 'express';
 import { env } from './config/env';
+import { attachPresenceWs } from './presence/wsTransport';
+import { presenceService } from './presence/service';
 
 export interface ServerHooks {
   /** Called with the server before it listens; presence attaches its upgrade handler here. */
@@ -35,6 +37,14 @@ export function createServer(app: Application, hooks: ServerHooks = {}): http.Se
   server.requestTimeout = env.REQUEST_TIMEOUT_MS;
   server.headersTimeout = env.HEADERS_TIMEOUT_MS;
   server.keepAliveTimeout = env.KEEP_ALIVE_TIMEOUT_MS;
+
+  // Live presence: the WebSocket upgrade handler and the 1 Hz tick. Both entry points get
+  // them because both build the server here.
+  if (env.PRESENCE_ENABLED) {
+    attachPresenceWs(server);
+    presenceService.start();
+    server.on('close', () => presenceService.stop());
+  }
 
   for (const attach of hooks.attach ?? []) attach(server);
   return server;

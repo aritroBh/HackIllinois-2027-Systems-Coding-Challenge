@@ -82,6 +82,28 @@ function legacyIdFrom(req: Request): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolve the session account from a raw Cookie header — what the WebSocket upgrade
+ * handler uses, since an upgrade never passes through Express middleware. Returns null
+ * for anonymous, revoked or expired cookies; the `csrfNonceOk` callback lets the caller
+ * verify the nonce it received out of band (the `Sec-WebSocket-Protocol` subprotocol).
+ */
+export async function resolveAccountFromCookies(
+  cookieHeader: string | undefined,
+  nowMs: number = Date.now()
+): Promise<{ account: AccountContext; csrfNonceOk: (presented: string | undefined) => boolean } | null> {
+  const cookies = parseCookies(cookieHeader);
+  const names = cookieNames();
+  const verification = verifySessionToken(cookies[names.session], nowMs);
+  if (!verification.valid) return null;
+  const ctx = await loadAccount(verification.payload.sub, nowMs);
+  if (!ctx || ctx.sessionVersion !== verification.payload.sv) return null;
+  return {
+    account: { ...ctx, source: 'session' },
+    csrfNonceOk: (presented) => csrfNonceMatches(presented, ctx.id, ctx.sessionVersion),
+  };
+}
+
 export async function attachIdentity(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
     const now = Date.now();
@@ -229,6 +251,12 @@ export function requireVolunteerKind(req: Request, _res: Response, next: NextFun
 /**
  * The actor a controller should act as. Session (or legacy) identity first; the body field
  * only as a legacy fallback, so that in `required` mode nothing ever acts on a body id.
+ *
+ * Deliberately NOT the place for act-on-behalf. Six controllers call this — registration,
+ * check-in, SOS resolution, gym battles, HackStop spins and swaps — so honouring a body id
+ * for leads here would let a shift lead spin another player's HackStop, resolve an SOS as
+ * them and take the bounty, or bank their karma on checkout. Delegation is opt-in per route
+ * instead: see `resolveOnBehalf`.
  */
 export function resolveActorId(req: Request, bodyField = 'volunteerId'): string | undefined {
   if (req.account) return req.account.id;
@@ -238,4 +266,27 @@ export function resolveActorId(req: Request, bodyField = 'volunteerId'): string 
     return typeof v === 'string' ? v : undefined;
   }
   return undefined;
+}
+
+/**
+ * Explicit act-on-behalf, honoured **only** by the routes that opt in (today: registration
+ * reserve and cancel — the roster desk signing someone up at the table, and the Chaos Lab
+ * driving many actors at once).
+ *
+ * Three conditions, all required: the caller holds a real session (a legacy-claimed
+ * identity may never delegate), that session is lead-or-above, and the request names the
+ * subject in the dedicated `onBehalfVolunteerId` field rather than in the ordinary
+ * `volunteerId` slot — so a delegated call is always visibly different from a self call.
+ * Every use is logged. Returns null when the request is not a delegation.
+ */
+export function resolveOnBehalf(req: Request): { subjectId: string; delegatedBy: string } | null {
+  const account = req.account;
+  if (!account || account.source !== 'session') return null;
+  if (!LEAD_ROLES.has(account.role)) return null;
+  const body = req.body as Record<string, unknown> | undefined;
+  const named = body?.onBehalfVolunteerId;
+  if (typeof named !== 'string' || !OBJECT_ID_PATTERN.test(named)) return null;
+  if (named === account.id) return null;
+  console.info(`[on-behalf] ${account.role} ${account.id} acting for ${named} on ${req.method} ${req.originalUrl}`);
+  return { subjectId: named, delegatedBy: account.id };
 }

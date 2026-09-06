@@ -414,6 +414,9 @@
       state.geoWatch = navigator.geolocation.watchPosition(
         (pos) => {
           const r = window.campus.setPlayerLatLng(pos.coords.latitude, pos.coords.longitude);
+          // Share the fix with the presence service (it decides whether to publish: the
+          // opt-in, the 10 m / 5 s cadence and the accuracy gate all live there).
+          window.Nexus?.presence?.publish?.(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? 999, pos.coords.heading ?? undefined);
           if (r && !r.onCampus && !state.flags.__offCampusToldAt) {
             state.flags.__offCampusToldAt = Date.now(); saveFlags();
             toast("You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");

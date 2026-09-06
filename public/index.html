@@ -119,6 +119,7 @@
         </div>
         <div class="actions">
           <span class="signal" id="onduty-chip">— on duty</span>
+          <button class="signal" id="presence-chip" data-action="presence-toggle" data-on="0" title="Show me on the map, and show me other trainers">Presence off</button>
           <button class="pb pb-ghost pb-sm" id="place-btn" data-action="place">Drop me on the Quad</button>
           <button class="pb pb-live pb-sm" id="walk-btn" data-action="walk" aria-pressed="false">Walk with me</button>
           <button class="pb pb-ghost pb-sm" id="follow-btn" data-action="follow">Follow cam</button>
@@ -153,6 +154,7 @@
         </div>
         <div class="viewport-hud br">
           <div class="hudbox" id="hud-nearest"></div>
+          <div class="hudbox nearby" id="nearby-list" aria-live="polite"></div>
           <span class="tag" id="hud-hint">WASD / arrows to walk · drag to look</span>
         </div>
       </div>
@@ -361,6 +363,7 @@
   <script src="/dashboard/session.js"></script>
   <script src="/dashboard/theme.js"></script>
   <script src="/dashboard/views/onboarding.js"></script>
+  <script src="/dashboard/views/players.js"></script>
   <script src="/dashboard/sprites.js"></script>
   <script src="/dashboard/fx.js"></script>
   <script src="/dashboard/soundEngine.js"></script>

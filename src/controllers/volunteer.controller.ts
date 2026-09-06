@@ -11,7 +11,7 @@
  * list is still open (plan M5).
  */
 import { Request, Response, NextFunction } from 'express';
-import { Volunteer } from '../models/volunteer.model';
+import { Volunteer, AccountKind, VolunteerRole } from '../models/volunteer.model';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
@@ -30,7 +30,15 @@ export class VolunteerController {
     try {
       // ponytail: picklist — `role` is never taken from the client (forced VOLUNTEER).
       const { name, email, phone, certifications } = req.body;
-      const created = await Volunteer.create({ name, email, phone, certifications });
+      // The desk may create a hacker account; everyone else gets a volunteer whatever they
+      // send. `kind` and `role` move together — the model enforces that invariant too.
+      const role = req.account?.role;
+      const deskCanChoose = req.account?.source === 'session' && (role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN');
+      const asHacker = deskCanChoose && req.body.kind === 'HACKER';
+      const created = await Volunteer.create({
+        name, email, phone, certifications,
+        ...(asHacker ? { kind: AccountKind.HACKER, role: VolunteerRole.HACKER } : {}),
+      });
       // Same projection as list/get: the created document must not echo identities or
       // sessionVersion either.
       const volunteer = await Volunteer.findById(created._id).select(projectionFor(req));

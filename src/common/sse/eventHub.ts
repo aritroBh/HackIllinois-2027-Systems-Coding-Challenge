@@ -410,6 +410,28 @@ class SSEBroadcastHub {
     }
   }
 
+  /** Targeted delivery over a specific channel (the SSE presence fallback uses `presence`). */
+  public sendToAccountOn(accountId: string, channel: Channel, message: ISSEMessage): void {
+    const targets = this.byAccount.get(accountId);
+    if (!targets || targets.size === 0) return;
+    const seq = ++this.seq;
+    const frames = new Frames(seq, message.timestamp ?? Date.now(), message.type, channel, message.data);
+    for (const client of [...targets]) {
+      if (!client.channels.has(channel)) continue;
+      if (channel === 'presence' && client.lagging) continue; // presence frames are dropped while lagging
+      this.write(client, frames.for(client.version, false));
+    }
+  }
+
+  /** Account ids with at least one stream on `channel` (deduplicated). */
+  public accountsOn(channel: Channel): string[] {
+    const out: string[] = [];
+    for (const [id, set] of this.byAccount) {
+      for (const c of set) if (c.channels.has(channel)) { out.push(id); break; }
+    }
+    return out;
+  }
+
   private publish(channel: Channel, message: ISSEMessage): void {
     const seq = ++this.seq;
     const ts = message.timestamp ?? Date.now();
