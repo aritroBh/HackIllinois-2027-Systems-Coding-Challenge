@@ -20,6 +20,13 @@ def _ring(frame: Frame, geom: list[dict], tol_m: float):
 
 
 def footprint(frame: Frame, geom: list[dict], tags: dict, osm_id: str, holes_geom=()) -> dict | None:
+    """One OSM ring into a pack record, or None when it is not worth a mass.
+
+    Two size floors, both about byte cost rather than accuracy: below
+    MIN_FOOTPRINT_M2 a building is a bin store or a transformer hut that reads
+    as noise at 10 m per unit, and a courtyard under 40 m2 is a light well that
+    the extrusion's own wall thickness would swallow anyway.
+    """
     if len(geom) < 4:
         return None
     lat, lng = centroid_latlng(geom)
@@ -52,6 +59,10 @@ def build_buildings(frame: Frame, elements: list[dict]) -> tuple[list[dict], lis
     relations = [e for e in elements
                  if e.get("type") == "relation" and "building" in e.get("tags", {})
                  and e.get("tags", {}).get("type", "multipolygon") == "multipolygon"]
+    # A relation's member ways are also returned as standalone ways by `(._;>;)`,
+    # and some carry building tags of their own. Taking both would put a second
+    # mass on top of the relation's, so the relation wins and its members are
+    # skipped in the way pass below.
     member_ways: set[int] = set()
     for r in relations:
         for m in r.get("members", []):
@@ -92,6 +103,12 @@ def build_buildings(frame: Frame, elements: list[dict]) -> tuple[list[dict], lis
 
 
 def stadium_footprints(frame: Frame, elements: list[dict]) -> list[dict]:
+    """leisure=stadium rings, which OSM does not tag building=*.
+
+    Memorial Stadium and the State Farm Center are the campus silhouette and
+    both would be missing without this. The 32 m is a hand height: neither ring
+    carries a height tag, and lidar reads the seating bowl rather than the roof.
+    """
     out = []
     for e in elements:
         geom = e.get("geometry")
@@ -176,7 +193,15 @@ def dedupe(buildings: list[dict], frame: Frame, iou: float = 0.5) -> list[dict]:
 
 
 def neighbour_ao(buildings: list[dict], frame: Frame) -> None:
-    """Baked ambient occlusion: how hemmed-in each footprint is by walls within 8 m (0..1)."""
+    """Baked ambient occlusion: how hemmed-in each footprint is by walls within 8 m (0..1).
+
+    The renderer has no shadow pass, so a dense block of Campustown reads as
+    bright as an isolated hall on the Quad. This is the cheap stand-in: one
+    scalar per building that tile-bake.js multiplies into the wall colour.
+
+    Four close neighbours saturate it. Beyond that the darkening stops meaning
+    anything, and a courtyard surrounded on all sides would otherwise go black.
+    """
     from shapely.geometry import Polygon
     from shapely.strtree import STRtree
     polys = [Polygon(b["p"]) for b in buildings]

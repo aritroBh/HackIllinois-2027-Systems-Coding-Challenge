@@ -14,3 +14,8 @@ design/osm/cache/
 # The pipeline provenance manifest is small and worth tracking; the raw OSM extracts are not.
 !design/osm/manifest.json
 design/.venv/
+
+# Python bytecode. Committed by accident once; a .pyc is a build artefact of a
+# specific interpreter version and tells a reader nothing the .py does not.
+__pycache__/
+*.pyc

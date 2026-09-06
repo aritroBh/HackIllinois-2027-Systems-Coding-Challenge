@@ -20,6 +20,11 @@ def facade_for(tags: dict, btype: str, h_m: float, name: str | None) -> tuple[st
     mat = tags.get("building:material")
     m = TAG_MATERIAL.get(str(mat).lower()) if mat else None
     if not m:
+        # No tag, so guess from era and use. The two rules that earn their keep
+        # on this campus: anything tall and recent is a curtain wall, and the
+        # pre-1930 university buildings are brick except for the ceremonial ones
+        # (libraries, auditoria, named halls), which are limestone-faced.
+        # Everything else falls to the type table.
         start = tags.get("start_date") or tags.get("construction_date") or ""
         year = int(start[:4]) if start[:4].isdigit() else None
         if year and year >= 1990 and h_m > 30:

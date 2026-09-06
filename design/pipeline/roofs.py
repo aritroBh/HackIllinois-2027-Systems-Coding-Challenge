@@ -7,9 +7,15 @@ HOUSING = {"house", "detached", "semidetached_house", "residential", "apartments
 
 
 def roof_for(tags: dict, btype: str, h_m: float, area_m2: float, lidar_ratio: float | None) -> str:
+    """Roof code, best evidence first: the tag, then lidar, then type and era rules."""
     shape = tags.get("roof:shape")
     if shape and shape in ROOF_CODES:
         return ROOF_CODES[shape]
+    # lidar_ratio is P95/P50 of the roof surface. A flat roof reads about 1.0;
+    # the gap only opens when the surface climbs toward a ridge, so 1.12 is the
+    # threshold that separates a real pitch from parapets and rooftop plant.
+    # Below 600 m2 a pitched roof is almost always a simple gable; above it,
+    # hips are the safer guess and read better from the air.
     if lidar_ratio is not None and lidar_ratio > 1.12:
         return "g" if area_m2 < 600 else "h"
     if btype in HOUSING and area_m2 < 400:
@@ -22,7 +28,17 @@ def roof_for(tags: dict, btype: str, h_m: float, area_m2: float, lidar_ratio: fl
 
 
 def ridge_for(ring) -> list[list[float]] | None:
-    """Long axis of the minimum-area rotated rectangle, as two endpoints in world units."""
+    """Long axis of the minimum-area rotated rectangle, as two endpoints in world units.
+
+    The renderer needs an axis to raise a ridge along, and a real footprint is
+    rarely a rectangle. The minimum-area rectangle is the cheapest stand-in that
+    respects the building's actual orientation, so an L-shaped hall still gets
+    its ridge running the way the roof does rather than along north.
+
+    Returns None rather than raising when shapely is missing or the ring is
+    degenerate: roof_for has already committed to a pitched code, and the
+    renderer falls back to a flat cap when `rr` is absent.
+    """
     try:
         import warnings
         from shapely.geometry import Polygon
@@ -48,5 +64,6 @@ def ridge_for(ring) -> list[list[float]] | None:
     else:
         a = ((pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2)
         b = ((pts[2][0] + pts[3][0]) / 2, (pts[2][1] + pts[3][1]) / 2)
-    # Pull the ridge in a little so hips read as hips.
+    # Full-length ridge. hipRoofGeometry insets its own ends; a gable wants the
+    # ridge to reach the gable walls.
     return [[round(a[0], 2), round(a[1], 2)], [round(b[0], 2), round(b[1], 2)]]

@@ -45,9 +45,14 @@ def resolve(tags: dict, btype: str, area_m2: float, lidar_h: float | None = None
         return h, "tag", levels or max(1, round((h - 1.2) / LEVEL_HEIGHT))
     if lidar_h is not None and 2.5 <= lidar_h <= 120.0:
         return lidar_h, "lidar", levels or max(1, round((lidar_h - 1.2) / LEVEL_HEIGHT))
+    # The 1.2 m is everything above the top floor slab: parapet, plant screen,
+    # the taller ground storey. Without it a levels-derived height lands
+    # consistently short against the tagged and lidar heights beside it.
     if levels:
         return levels * LEVEL_HEIGHT + 1.2, "levels", levels
     h = DEFAULT_HEIGHT.get(btype, 9.0)
+    # A footprint this big is an arena, a plant or a large hall, never the small
+    # shed the type default assumes.
     if area_m2 > 3000:
         h = max(h, 16.0)
     return h, "default", DEFAULT_LEVELS.get(btype, max(1, round((h - 1.2) / LEVEL_HEIGHT)))
