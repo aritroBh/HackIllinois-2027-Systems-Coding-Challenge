@@ -1,5 +1,5 @@
 /**
- * Canonical application error codes for WaveShift Nexus.
+ * Canonical application error codes for Nexus Quest.
  * Adheres directly to HackIllinois Adonix API error standardization.
  */
 export enum ErrorCode {

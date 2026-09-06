@@ -212,7 +212,7 @@ app.use(
 app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     status: 'HEALTHY',
-    service: 'WaveShift Nexus',
+    service: 'Nexus Quest',
     authMode: env.AUTH_MODE,
     streams: eventHub.stats(),
     presence: { enabled: env.PRESENCE_ENABLED, ...presenceService.stats, tracked: presenceStore.size() },
@@ -229,7 +229,7 @@ app.get('/ready', (_req: Request, res: Response) => {
   res.status(ready ? 200 : 503).json({
     success: ready,
     status: ready ? 'READY' : 'NOT_READY',
-    service: 'WaveShift Nexus',
+    service: 'Nexus Quest',
     database: ['disconnected', 'connected', 'connecting', 'disconnecting'][dbState] ?? 'unknown',
     timestamp: new Date().toISOString(),
   });

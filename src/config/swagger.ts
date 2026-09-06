@@ -18,7 +18,7 @@
 export const swaggerDocument = {
   openapi: '3.0.0',
   info: {
-    title: 'WaveShift Nexus API',
+    title: 'Nexus Quest API',
     version: '1.0.0',
     description:
       'Volunteer scheduling, SOS spatial dispatch and PokéShift operations engine. Identity (plan M1): cookie sessions with badge-code, magic-link and Adonix adapters; in AUTH_MODE=required every mutation acts as the signed-in account and any body volunteerId is a legacy-mode fallback only. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, bounded elementary-cycle swap discovery, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',

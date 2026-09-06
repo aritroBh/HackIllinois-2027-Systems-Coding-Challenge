@@ -381,7 +381,7 @@ class SSEBroadcastHub {
     this.writeControl(client, 'CONNECTED', {
       clientId: id,
       channels: authorised,
-      message: 'Connected to WaveShift Nexus SSE Stream.',
+      message: 'Connected to Nexus Quest SSE Stream.',
     });
 
     // --- replay ----------------------------------------------------------------

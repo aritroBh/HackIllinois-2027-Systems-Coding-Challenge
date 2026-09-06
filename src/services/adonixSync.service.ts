@@ -53,7 +53,7 @@ export class AdonixSyncService {
     if (process.env.NODE_ENV !== 'test') {
       try {
         const response = await fetch(this.ADONIX_EVENT_ENDPOINT, {
-          headers: { 'User-Agent': 'WaveShift-Nexus-Engine/1.0', 'Connection': 'close' },
+          headers: { 'User-Agent': 'Nexus-Quest-Engine/1.0', 'Connection': 'close' },
           keepalive: false,
           signal: AbortSignal.timeout(4000),
         });

@@ -1,5 +1,5 @@
 /**
- * Algorithmic Dynamic Karma Surge Engine for WaveShift Nexus.
+ * Algorithmic Dynamic Karma Surge Engine for Nexus Quest.
  * Formulated by Muse (Creative Director & War-Room Experience Designer).
  *
  * Dynamically balances hackathon volunteer demand and supply by increasing

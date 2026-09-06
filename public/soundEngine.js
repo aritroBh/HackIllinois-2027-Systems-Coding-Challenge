@@ -1,9 +1,9 @@
 /**
- * Pure Web Audio API Synthesizer for WaveShift Nexus.
+ * Pure Web Audio API Synthesizer for Nexus Quest.
  * Designed by Muse (Creative Director).
  * Synthesizes dynamic audio cues in real time with zero external audio assets.
  */
-class WaveShiftAudioEngine {
+class NexusQuestAudioEngine {
   constructor() {
     this.ctx = null;
     this.enabled = true;
@@ -263,6 +263,6 @@ class WaveShiftAudioEngine {
   }
 }
 
-window.soundEngine = new WaveShiftAudioEngine();
+window.soundEngine = new NexusQuestAudioEngine();
 
 

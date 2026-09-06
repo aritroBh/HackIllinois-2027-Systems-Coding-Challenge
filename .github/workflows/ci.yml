@@ -1,4 +1,4 @@
-name: WaveShift Nexus CI
+name: Nexus Quest CI
 
 on:
   push:
