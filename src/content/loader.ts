@@ -29,6 +29,8 @@ import {
   territoriesSchema,
   venuesSchema,
 } from './schema';
+import { boothsSchema } from './booths.schema';
+import { raidsSchema } from './raids.schema';
 
 export class ContentPackError extends Error {
   constructor(public readonly issues: PackIssue[]) {
@@ -75,6 +77,11 @@ export function loadPack(dir: string): ContentPack {
   // Optional files the client renders from: validated when present so pack-driven DOM input
   // is shaped before it is served.
   if (fs.existsSync(path.join(dir, 'memorabilia.json'))) readJson(dir, 'memorabilia.json', memorabiliaSchema, issues);
+  // The game files are optional — a pack with no booths simply has no booths — but a pack that
+  // HAS them and has them wrong must fail here rather than at the first scan of the event. A
+  // sponsor whose QR code 500s at nine in the morning is not a bug anyone gets to fix calmly.
+  if (fs.existsSync(path.join(dir, 'booths.json'))) readJson(dir, 'booths.json', boothsSchema, issues);
+  if (fs.existsSync(path.join(dir, 'raids.json'))) readJson(dir, 'raids.json', raidsSchema, issues);
   const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
   if (info) {

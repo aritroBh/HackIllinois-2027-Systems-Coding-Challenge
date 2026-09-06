@@ -25,6 +25,7 @@ import { contentRouter } from './content.routes';
 import { presenceRouter } from './presence.routes';
 import { avatarRouter } from './avatar.routes';
 import { announcementRouter } from './announcement.routes';
+import { gameRouter } from './game.routes';
 import { mountPlugins } from '../../plugins';
 
 export const v1Router = Router();
@@ -44,6 +45,7 @@ v1Router.use('/stats', statsRouter);
 v1Router.use('/sos', sosRouter);
 v1Router.use('/adonix', adonixRouter);
 v1Router.use('/pokeshift', pokeShiftRouter);
+v1Router.use('/game', gameRouter);
 
 // Plugins last, so a plugin can never shadow a core route by registering the same path.
 mountPlugins(v1Router);

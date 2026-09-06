@@ -11,13 +11,19 @@
  *     Mongoose create the sparse one declared on the schema.
  *  2. Backfill `kind`, `identities`, `sessionVersion`, `presenceOptIn`, `streak`,
  *     `reliability` on documents created before the fields existed.
- *  3. Ensure every index declared on the models exists (`syncIndexes`).
+ *  3. Ensure every index declared on ANY model exists (`syncIndexes` over the whole
+ *     registry). This used to name three models by hand, which meant the once-per-account
+ *     booth index, the sticker ledger's idempotency index and the bounty ledger's daily key
+ *     were left to Mongoose's background `autoIndex`. That does build them, eventually, and
+ *     "eventually" is a race against the first sponsor scan of the event: a uniqueness
+ *     constraint that is not there yet does not stop a double payment.
  */
 import mongoose from 'mongoose';
 import { env } from '../src/config/env';
 import { Volunteer } from '../src/models/volunteer.model';
-import { ClaimCode } from '../src/models/claimCode.model';
-import { AuthToken } from '../src/models/authToken.model';
+// The barrel, so every model is registered before the registry is walked below. A model whose
+// file nobody imported is invisible to `mongoose.models` and its indexes would be skipped.
+import '../src/models';
 
 async function main(): Promise<void> {
   if (!env.MONGODB_URI) {
@@ -57,9 +63,24 @@ async function main(): Promise<void> {
   const blankEmails = await volunteers.updateMany({ email: '' }, { $set: { email: null } });
   if (blankEmails.modifiedCount) console.log(`normalised ${blankEmails.modifiedCount} blank email(s) to null`);
 
-  // 3. Indexes.
-  await Promise.all([Volunteer.syncIndexes(), ClaimCode.syncIndexes(), AuthToken.syncIndexes()]);
-  console.log('indexes synced');
+  // 3. Indexes, across every registered model.
+  const models = Object.values(mongoose.models);
+  const synced = await Promise.all(
+    models.map(async (model) => {
+      try {
+        await model.syncIndexes();
+        return null;
+      } catch (err) {
+        // Named rather than swallowed: an index that cannot be built is usually a duplicate
+        // already in the data, and the operator has to see which collection to go and look at.
+        return `${model.modelName}: ${(err as Error).message}`;
+      }
+    })
+  );
+  const failed = synced.filter(Boolean);
+  console.log(`indexes synced across ${models.length - failed.length}/${models.length} model(s)`);
+  for (const line of failed) console.error(`  index sync failed — ${line}`);
+  if (failed.length) process.exitCode = 1;
 
   await mongoose.disconnect();
   console.log('migration complete');

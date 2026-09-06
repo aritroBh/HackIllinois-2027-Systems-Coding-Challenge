@@ -1,0 +1,24 @@
+{
+  "_about": "Raid windows. Each raid is one absolute stretch of the weekend, written in the event's own offset (CST, -06:00, in late February) rather than as a recurrence rule — an organiser writing the schedule already knows when 2 AM Saturday is. `venue` must be a key in venues.json and says where the raid is called, not where it is enforced; there is no geofence on a raid. `joinEvents` names the domain events that enrol a player, so a spin raid and a gym raid are pack edits rather than server changes. `karmaMultiplier` is what the window is worth while it is open.",
+  "raids": [
+    { "id": "opening-bell", "title": "Opening Bell", "blurb": "The first hour. Get a token scanned and claim something before the board empties.",
+      "venue": "SIEBEL_ATRIUM", "startsAt": "2027-02-26T18:00:00-06:00", "endsAt": "2027-02-26T19:00:00-06:00",
+      "karmaMultiplier": 1.5, "joinEvents": ["checkin.completed", "registration.created"] },
+
+    { "id": "midnight-supply-run", "title": "Midnight Supply Run", "blurb": "Every beacon on the Quad pays double for an hour. Wear a coat.",
+      "venue": "ALMA_MATER", "startsAt": "2027-02-27T00:00:00-06:00", "endsAt": "2027-02-27T01:00:00-06:00",
+      "karmaMultiplier": 2, "joinEvents": ["hackstop.spun"] },
+
+    { "id": "sponsor-hour", "title": "Sponsor Hour", "blurb": "They flew in to meet you. Walk the row while they are all still at their tables.",
+      "venue": "ILLINI_UNION", "startsAt": "2027-02-27T13:00:00-06:00", "endsAt": "2027-02-27T15:00:00-06:00",
+      "karmaMultiplier": 1.5, "joinEvents": ["booth.scanned"] },
+
+    { "id": "siege-of-altgeld", "title": "Siege of Altgeld", "blurb": "Three factions, one bell tower, one hour. Altgeld rings for whoever holds it at the end.",
+      "venue": "ALTGELD_HALL", "startsAt": "2027-02-27T21:00:00-06:00", "endsAt": "2027-02-27T22:00:00-06:00",
+      "karmaMultiplier": 2.5, "joinEvents": ["gym.captured"] },
+
+    { "id": "the-long-teardown", "title": "The Long Teardown", "blurb": "The tables do not stack themselves. The last shift of the weekend is worth the most.",
+      "venue": "KENNEY_GYM", "startsAt": "2027-02-28T12:00:00-06:00", "endsAt": "2027-02-28T15:00:00-06:00",
+      "karmaMultiplier": 2, "joinEvents": ["checkout.completed"] }
+  ]
+}

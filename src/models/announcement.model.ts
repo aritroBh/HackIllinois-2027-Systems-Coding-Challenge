@@ -41,7 +41,12 @@ const AnnouncementSchema = new Schema<IAnnouncement>(
     authorId: { type: Schema.Types.ObjectId, ref: 'Volunteer', required: true },
     authorName: { type: String, required: true },
     venueKey: { type: String, default: null },
-    expiresAt: { type: Date, required: true, index: true },
+    // No `index: true` here. The TTL index below is on the same key and Mongoose names both
+    // `expiresAt_1`, so declaring the field-level one too produced two specs with one name and
+    // different options: whichever was created first won, and the other failed. When the plain
+    // one won, the TTL was simply absent and announcements never expired — which nobody would
+    // notice until a stale "power is out in Siebel" banner outlived the outage by a day.
+    expiresAt: { type: Date, required: true },
   },
   { timestamps: true }
 );

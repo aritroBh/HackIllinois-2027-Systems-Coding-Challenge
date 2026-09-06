@@ -1,0 +1,36 @@
+{
+  "_about": "Sponsor booths. `venue` must be a key in venues.json. A booth pays once per account, ever, and the QR poster on the table carries a code the server derives from the booth id and QR_HMAC_SECRET — the code is never written here, so a copy of this pack is not a set of free karma. A `sticker` reward must be an item id from memorabilia.json; a `powerUp` must be a type from the power-up catalog. Sponsor names are the fictional ones the pack uses everywhere else, not real companies.",
+  "booths": [
+    { "id": "booth-boneyard-labs", "sponsor": "Boneyard Labs", "name": "Boneyard Labs Bench", "venue": "SIEBEL_ATRIUM",
+      "blurb": "Two engineers, one oscilloscope, and a bowl of resistors nobody is counting.",
+      "reward": { "karma": 60, "sticker": "siebel-keycard" } },
+
+    { "id": "booth-prairie-compute", "sponsor": "Prairie Compute", "name": "Prairie Compute Rack", "venue": "ECEB_LOBBY",
+      "blurb": "They brought a half-height rack up the stairs. Ask them about it.",
+      "reward": { "karma": 60, "powerUp": "OVERCLOCK_SOLDER_CORE" } },
+
+    { "id": "booth-quad-robotics", "sponsor": "Quad Robotics", "name": "Quad Robotics Pit", "venue": "KENNEY_GYM",
+      "blurb": "The arm on the table will hand you a sticker if you ask it politely enough.",
+      "reward": { "karma": 60, "sticker": "soldering-iron" } },
+
+    { "id": "booth-orange-krush-cloud", "sponsor": "Orange Krush Cloud", "name": "Orange Krush Cloud Kiosk", "venue": "DCL_BRIDGE",
+      "blurb": "Free credits, a whiteboard, and a queue that forms around 2 AM.",
+      "reward": { "karma": 60 } },
+
+    { "id": "booth-chime-analytics", "sponsor": "Chime Analytics", "name": "Chime Analytics Desk", "venue": "GRAINGER_LIBRARY",
+      "blurb": "They are quietly plotting every commit in the room and will show you yours.",
+      "reward": { "karma": 60, "sticker": "grainger-mug" } },
+
+    { "id": "booth-lincoln-avionics", "sponsor": "Lincoln Avionics", "name": "Lincoln Avionics Stand", "venue": "BECKMAN_INSTITUTE",
+      "blurb": "A wind tunnel the size of a shoebox, and someone happy to explain it twice.",
+      "reward": { "karma": 60, "powerUp": "ANKER_GAUNTLET" } },
+
+    { "id": "booth-saucer-systems", "sponsor": "Saucer Systems", "name": "Saucer Systems Counter", "venue": "ILLINI_UNION",
+      "blurb": "Named for the building, not the other way round. They are very clear about that.",
+      "reward": { "karma": 60, "sticker": "saucer" } },
+
+    { "id": "booth-altgeld-security", "sponsor": "Altgeld Security", "name": "Altgeld Security Table", "venue": "ALTGELD_HALL",
+      "blurb": "Bring them a bug and they will buy you a coffee. Bring them two and they will hire you.",
+      "reward": { "karma": 60, "sticker": "rubber-duck" } }
+  ]
+}
