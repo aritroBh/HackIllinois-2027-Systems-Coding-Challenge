@@ -544,6 +544,19 @@ export class RegistrationService {
     if (registration.status === RegistrationStatus.CANCELLED) {
       throw ApiError.badRequest("Registration is already cancelled.");
     }
+    // COMPLETED is terminal and still occupies a seat.
+    //
+    // It fell through both branches below: `wasConfirmed` is false, so no seat was released,
+    // and `waitlistPosition` is null, so no queue was touched — the row simply walked
+    // backwards to CANCELLED while `filledSlots` went on counting it. The shift then had a
+    // seat that no live row accounted for, which is the drift the reconciliation audit in
+    // `scripts/benchmarks/loadtest.ts` looks for. A finished shift is not cancellable; the
+    // volunteer already worked it.
+    if (registration.status === RegistrationStatus.COMPLETED) {
+      throw ApiError.badRequest(
+        "This shift is already completed and cannot be cancelled.",
+      );
+    }
 
     const shiftId = registration.shiftId.toString();
     // The two states that occupy a seat and therefore counted toward `filledSlots`.

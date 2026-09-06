@@ -209,9 +209,25 @@ export class CheckInService {
       throw error;
     }
 
-    reg.status = RegistrationStatus.CHECKED_IN;
-    reg.checkInTime = new Date();
-    await reg.save();
+    // Compare-and-set on the status this transition is leaving, not a read-modify-save.
+    //
+    // `reg` was read at the top of this method, several awaits ago. A cancellation that
+    // commits in that window has already released the seat and, if anybody was waiting,
+    // handed it to them — and `reg.save()` would then write CHECKED_IN straight back over
+    // it from the stale in-memory copy, silently undoing a committed cancellation and
+    // putting two people in one seat. The cancel path twenty lines away is careful to CAS
+    // for exactly this reason; this one was not.
+    const claimed = await Registration.findOneAndUpdate(
+      { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } },
+      { new: true }
+    );
+    if (!claimed) {
+      throw ApiError.conflict(
+        'This registration was cancelled or completed while the token was being scanned.',
+        ErrorCode.SCHEDULE_CONFLICT
+      );
+    }
 
     const vol = await Volunteer.findById(volunteerId);
 
@@ -254,6 +270,28 @@ export class CheckInService {
     }
     if (existing.checkOutTime) {
       return existing; // idempotent replay
+    }
+
+    // A fourth guard: the registration must still be the one this check-in belongs to.
+    //
+    // Checked here, before the check-in row is closed, because the write at the end of this
+    // method used to set `COMPLETED` unconditionally. A volunteer who checked in and then
+    // cancelled had their seat handed to the waitlist by the cascade — and this method then
+    // moved their CANCELLED row forward to COMPLETED, which occupies a seat. One seat, two
+    // occupants, and karma paid to somebody who had cancelled. `filledSlots` still read 1,
+    // so nothing downstream noticed.
+    //
+    // Refusing is the right answer rather than paying anyway: cancelling is the volunteer
+    // saying they are not working this shift, and it already gave the seat to somebody else.
+    const registration = await Registration.findById(existing.registrationId).select('status');
+    if (!registration) {
+      throw ApiError.notFound('Registration for this check-in no longer exists.', ErrorCode.REGISTRATION_NOT_FOUND);
+    }
+    if (registration.status !== RegistrationStatus.CHECKED_IN) {
+      throw ApiError.conflict(
+        `This check-in cannot be closed: the registration is ${registration.status}, not CHECKED_IN.`,
+        ErrorCode.SCHEDULE_CONFLICT
+      );
     }
 
     const now = new Date();
@@ -299,13 +337,19 @@ export class CheckInService {
     checkIn.karmaAwarded = earnedKarma;
     await checkIn.save();
 
-    await Registration.findByIdAndUpdate(checkIn.registrationId, {
-      $set: {
-        status: RegistrationStatus.COMPLETED,
-        checkOutTime: now,
-        earnedKarma,
-      },
-    });
+    // Conditional on the state being left, not merely on the row's id. The guard above makes
+    // the common case correct; this makes the transition itself impossible to get wrong, so
+    // a cancellation that lands in the window between the two cannot be overwritten.
+    await Registration.findOneAndUpdate(
+      { _id: checkIn.registrationId, status: RegistrationStatus.CHECKED_IN },
+      {
+        $set: {
+          status: RegistrationStatus.COMPLETED,
+          checkOutTime: now,
+          earnedKarma,
+        },
+      }
+    );
 
     // The graveyard badge is judged in UTC rather than the host's local zone, so the same
     // check-in earns it (or does not) whatever region the server happens to run in.

@@ -519,3 +519,39 @@ describe('AUTH_MODE=required — review round 2 pins', () => {
     expect(res.body.error).toBe('CSRF_INVALID');
   });
 });
+
+describe('committed-default secrets outside production', () => {
+  /**
+   * Every secret with a committed default must be replaced by a random per-boot value
+   * outside production, and `ORGANIZER_SECRET` most of all.
+   *
+   * It is not only a signing key. `X-Organizer-Secret` is accepted by `/auth/claim-codes`
+   * regardless of AUTH_MODE — it is the bootstrap path that exists before any session does
+   * — and a claim code mints a session for whichever account it names. While the default
+   * stayed live, one unauthenticated request carrying a string published in this repository
+   * produced a claim code for an ADMIN account, and a second turned that code into an ADMIN
+   * session. That was true on every deployment that was not `NODE_ENV=production`.
+   *
+   * The two weaker secrets were already being randomised here; this one was missed, which
+   * is exactly why it is asserted rather than left to the reader of `env.ts`.
+   */
+  const COMMITTED_DEFAULTS: Array<[string, string]> = [
+    ['SESSION_SECRET', 'nexus_session_change_me'],
+    ['QR_HMAC_SECRET', 'hackillinois_waveshift_secret_key_2027'],
+    ['ORGANIZER_SECRET', 'waveshift_change_me_in_production'],
+  ];
+
+  it.each(COMMITTED_DEFAULTS)('%s is not the committed default at runtime', (name, committed) => {
+    expect((env as unknown as Record<string, string>)[name]).not.toBe(committed);
+  });
+
+  it('the organizer secret cannot be guessed from the repository', async () => {
+    const vol = await makeVolunteer();
+    const res = await request(app)
+      .post('/api/v1/auth/claim-codes')
+      .set('X-Organizer-Secret', 'waveshift_change_me_in_production')
+      .send({ accountId: vol.id });
+    expect(res.status).toBe(403);
+    expect(res.body.data?.code).toBeUndefined();
+  });
+});

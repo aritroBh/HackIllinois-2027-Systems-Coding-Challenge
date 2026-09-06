@@ -197,3 +197,25 @@ if (env.NODE_ENV !== 'production' && env.QR_HMAC_SECRET === 'hackillinois_wavesh
   env.QR_HMAC_SECRET = `ephemeral_dev_${crypto.randomBytes(24).toString('hex')}`;
   if (env.NODE_ENV !== 'test') console.warn('⚠️  QR_HMAC_SECRET not set: using an ephemeral per-boot secret (tokens invalidate on restart).');
 }
+
+// The same treatment for the strongest secret of the three, which was missed.
+//
+// `ORGANIZER_SECRET` is not merely a signing key: `X-Organizer-Secret` is accepted by
+// `/auth/claim-codes` regardless of AUTH_MODE (it is the bootstrap path before any session
+// exists), and a claim code is a session for whichever account it names. So the committed
+// default — a string sitting in this repository — was a single unauthenticated request away
+// from an ADMIN session on every deployment that was not `NODE_ENV=production`: staging,
+// docker-compose, a self-hosted box, any demo. Production refuses to boot on it (above);
+// everywhere else it stayed live while the two weaker secrets were being randomised.
+//
+// The generated value is printed, unlike the other two, because this one is meant to be
+// typed by an operator: an organiser bootstrapping the first badge codes needs to read it
+// off the console. Anybody who can see this console is already inside the trust boundary;
+// anybody who cannot no longer has a credential they can look up on GitHub.
+if (env.NODE_ENV !== 'production' && env.ORGANIZER_SECRET === 'waveshift_change_me_in_production') {
+  env.ORGANIZER_SECRET = `ephemeral_dev_${crypto.randomBytes(24).toString('hex')}`;
+  if (env.NODE_ENV !== 'test') {
+    console.warn('⚠️  ORGANIZER_SECRET not set: using an ephemeral per-boot secret.');
+    console.warn(`    X-Organizer-Secret: ${env.ORGANIZER_SECRET}`);
+  }
+}
