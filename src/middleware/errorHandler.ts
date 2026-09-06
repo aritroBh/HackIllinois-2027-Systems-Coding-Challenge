@@ -22,6 +22,7 @@
  * detail goes to the server log instead, where it is useful and not public.
  */
 import { Request, Response, NextFunction } from 'express';
+import { TransactionContentionError } from '../common/db/withTransactionRetry';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
@@ -35,6 +36,20 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
+  // A transaction that lost every race it was allowed to run wrote nothing, so the caller's
+  // request is intact and repeating it is the right advice. Answered as a conflict with that
+  // advice rather than as a 500, which would read as a fault in the server when the only
+  // thing that happened is that the server was busy.
+  if (err instanceof TransactionContentionError) {
+    res.status(409).json({
+      success: false,
+      error: ErrorCode.CONCURRENT_MUTATION_IN_PROGRESS,
+      message: 'That was busy for a moment and nothing was changed. Try again.',
+      statusCode: 409,
+    });
+    return;
+  }
+
   if (err instanceof ApiError) {
     res.status(err.statusCode).json({
       success: false,

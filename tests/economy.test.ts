@@ -10,6 +10,7 @@ import { Volunteer, VolunteerRole, AccountKind, computePrestigeTier } from '../s
 import { KarmaLedger } from '../src/models/karmaLedger.model';
 import { StickerLedger } from '../src/models/stickerLedger.model';
 import { BountyLedger } from '../src/models/bountyLedger.model';
+import { eventDay } from '../src/models/karmaLedger.model';
 import { KarmaService } from '../src/services/karma.service';
 import { RaidService } from '../src/services/raid.service';
 import { StickerService } from '../src/services/sticker.service';
@@ -220,6 +221,50 @@ describe('the bounty budget cannot be oversold', () => {
     // The ledger equals the sum of what was granted: no reservation without a debit, and
     // no debit without a reservation.
     expect(ledger!.spent).toBe(granted.length * 100);
+  });
+});
+
+describe('the first ticket of the day is not a race anybody loses', () => {
+  it('two simultaneous first tickets both settle, neither 500s', async () => {
+    // Both transactions try to open the same account's first ledger row of the day with an
+    // upsert. One wins; the other's E11000 used to escape as a DuplicateKeyError and became a
+    // 500 — the exact contention the retry helper's own comments claim to handle. A duplicate
+    // on this collection means the row now exists, so re-running the body finds it and
+    // increments.
+    const vol = await makeAccount();
+    const day = eventDay();
+    const results = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        withTransactionRetry(
+          (session) => BountyService.reserve({ accountId: vol.id, day, bounty: 100, budget: 1000 }, session),
+          { retryOnDuplicateIn: ['bountyledgers'] }
+        ).then((r) => (r.ok ? 'granted' : 'refused')).catch((e) => `threw:${e.name}`)
+      )
+    );
+    expect(results.filter((r) => r === 'granted')).toHaveLength(2);
+    expect(results.some((r) => r.startsWith('threw'))).toBe(false);
+    const row = await BountyLedger.findOne({ accountId: vol._id, day });
+    expect(row!.spent).toBe(200);
+  });
+
+  it('twenty at once against a budget for five grant exactly five, and none of them throw', async () => {
+    const vol = await makeAccount();
+    const day = eventDay();
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        withTransactionRetry(
+          (session) => BountyService.reserve({ accountId: vol.id, day, bounty: 100, budget: 500 }, session),
+          { retryOnDuplicateIn: ['bountyledgers'] }
+        ).then((r) => (r.ok ? 'granted' : 'refused')).catch((e) => `threw:${e.name}`)
+      )
+    );
+    expect(results.filter((r) => r === 'granted')).toHaveLength(5);
+    expect(results.filter((r) => r === 'refused')).toHaveLength(15);
+    // Nothing escapes as a raw driver error. Contention that genuinely cannot settle raises a
+    // typed TransactionContentionError, which the error handler answers as a 409 with advice
+    // to retry — never a 500, which would read as a fault rather than as a busy moment.
+    expect(results.filter((r) => r.startsWith('threw:Mongo'))).toHaveLength(0);
+    expect((await BountyLedger.findOne({ accountId: vol._id, day }))!.spent).toBe(500);
   });
 });
 

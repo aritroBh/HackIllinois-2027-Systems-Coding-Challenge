@@ -120,10 +120,11 @@ def hash01(a: float, b: float) -> float:
     and a different pack hash on an ARM laptop and an x86 CI runner — which makes the
     reproducibility check the pipeline is built around meaningless.
 
-    A hash over the exact bytes of the two floats has no such problem. The quantisation to
-    millimetres before hashing is deliberate: two coordinates that differ only in float noise
-    should agree, because a rebuild that reorders an arithmetic sum by an ulp must not move a
-    bench. `blake2b` because it is in the standard library and fast; the value is decorative,
+    A hash over the exact bytes of the two floats has no such problem. The quantisation before
+    hashing is deliberate: two coordinates that differ only in float noise should agree,
+    because a rebuild that reorders an arithmetic sum by an ulp must not move a bench. Callers
+    pass WORLD UNITS, where one unit is ten metres, so rounding to a thousandth is a quantum
+    of one centimetre — far finer than anything this decides and far coarser than float noise. `blake2b` because it is in the standard library and fast; the value is decorative,
     not a credential.
     """
     key = struct.pack("<qq", int(round(a * 1000)), int(round(b * 1000)))

@@ -11,6 +11,7 @@
  * list is still open (plan M5).
  */
 import { Request, Response, NextFunction } from 'express';
+import { isLeadOrAbove } from '../common/types/account';
 import { Volunteer, AccountKind, VolunteerRole } from '../models/volunteer.model';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
@@ -57,7 +58,16 @@ export class VolunteerController {
       // unusable and makes the headcount wrong. `kind` is the axis for this — never `role` —
       // because the model's invariant ties them and `kind` is the one that means "is this
       // person staff".
-      const includeHackers = String(_req.query.kind ?? '').toUpperCase() === 'ALL';
+      // `?kind=ALL` is lead-gated.
+      //
+      // The projection already strips contact details for a non-lead, so the exposure was
+      // names and factions rather than anything sensitive — but a thousand hacker accounts
+      // enumerable by any signed-in volunteer is a roster of the attendees, and nothing below
+      // a lead has a reason to ask for it. A caller who asks anyway gets the default rather
+      // than an error, because refusing a widening parameter is a worse experience than
+      // quietly giving the answer they were entitled to.
+      const asked = String(_req.query.kind ?? '').toUpperCase() === 'ALL';
+      const includeHackers = asked && isLeadOrAbove(_req.account);
       const filter = includeHackers ? {} : { kind: AccountKind.VOLUNTEER };
       const volunteers = await Volunteer.find(filter).select(projectionFor(_req)).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: volunteers });

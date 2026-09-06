@@ -77,11 +77,15 @@ export class PresenceSession {
   /**
    * Whether this viewer may see off-shift volunteers.
    *
-   * Set from the session cookie at connect and refreshed from the account facts on every tick
-   * the service has them. It was `readonly`, fixed for the life of the socket, which failed in
-   * the disclosing direction: a lead demoted mid-event kept lead vision — and any open
-   * `presence:exact` stream — until they happened to reconnect. Losing a privilege has to take
-   * effect immediately even though gaining one can wait.
+   * Set from the session cookie at connect and re-read from the account facts on every tick.
+   *
+   * It was `readonly`, fixed for the life of the socket, so a lead demoted mid-event kept lead
+   * vision — and any open `presence:exact` stream — until they happened to reconnect. Losing a
+   * privilege has to take effect immediately even though gaining one can wait.
+   *
+   * "Every tick" is only as fresh as the facts cache behind it, which is why the role routes
+   * call `presenceService.invalidate` on a demotion: without that the tick re-asserted the old
+   * role from a thirty-second-old copy, and the window was half a minute rather than a second.
    */
   public lead: boolean;
 
@@ -104,11 +108,12 @@ export class PresenceSession {
     // the service hands us a null cohort precisely when that is the case.
     if (!cohort) { this.pendingAdjust = false; return { rows, joins, visible }; }
 
-    if (!this.clusterOnly) {
+    const cap = this.effectiveCap();
+    if (cap > 0) {
       let taken = 0;
       for (const e of cohort.detail) {
         if (e.id === this.accountId) continue;
-        if (taken >= this.detailCap || taken >= this.detailBudget) break;
+        if (taken >= cap) break;
         taken += 1;
         visible.add(e.id);
         const [idx, isNew] = this.idx.assign(e.id, nowMs);
@@ -130,7 +135,7 @@ export class PresenceSession {
     // itself took a neighbour away instead. And once the ladder stops sending rows, the list
     // being adjusted is the all-inclusive one, whose own-cell entry sits at a different index.
     const inOwnCount = this.countsSelf();
-    this.pendingAdjust = inOwnCount && this.ownClusterIndexIn(cohort) >= 0;
+    this.pendingAdjust = inOwnCount && cohort.ownClusterIndex >= 0;
     return { rows, joins, visible };
   }
 
@@ -148,13 +153,17 @@ export class PresenceSession {
     return !!me && this.store.visible(me, false);
   }
 
-  /** Which list the viewer is being sent, and where its own cell sits in that list. */
-  private usesAllCounts(): boolean {
-    return this.clusterOnly || this.detailBudget <= 0;
-  }
-
-  private ownClusterIndexIn(cohort: Cohort): number {
-    return this.usesAllCounts() ? cohort.ownClusterIndexAll : cohort.ownClusterIndex;
+  /**
+   * How many rows this session may actually send.
+   *
+   * The transport's cap and the load ladder's budget, whichever is smaller. The cohort is
+   * built with this figure so that the people its counts exclude are exactly the people this
+   * session sends — the two disagreeing is what left the middle rung's unsent neighbours in
+   * neither the rows nor the counts.
+   */
+  effectiveCap(): number {
+    if (this.clusterOnly) return 0;
+    return Math.max(0, Math.min(this.detailCap, this.detailBudget));
   }
 
   /** Whether the cluster payload just computed had this viewer subtracted from its own cell. */
@@ -166,13 +175,11 @@ export class PresenceSession {
    * itself when no adjustment is needed. Only called when the payload is going out.
    */
   private adjustedClusters(cohort: Cohort): Array<[number, number, number]> {
-    // Which list depends on whether this viewer is getting rows. When it is, the counts
-    // exclude the people arriving as rows so nobody is drawn twice; when it is not — the
-    // bottom rungs of the load ladder — the counts have to include them or the crowd in front
-    // of the player disappears at exactly the moment the map is busiest.
-    const base = this.usesAllCounts() ? cohort.clustersAll : cohort.clusters;
+    // One list. The cohort was built with this session's effective row budget, so its counts
+    // already exclude exactly the people this session is sending as rows and nobody else.
+    const base = cohort.clusters;
     if (!this.pendingAdjust) return base;
-    const at = this.ownClusterIndexIn(cohort);
+    const at = cohort.ownClusterIndex;
     if (at < 0) return base;
     const out = base.slice();
     const [cxu, czu, n] = out[at];
@@ -226,9 +233,7 @@ export class PresenceSession {
     // Clusters are sent only when they change, and "changed" is now two integer comparisons
     // against the shared cohort rather than a rebuilt map per session.
     let clusterPayload: Array<[number, number, number]> | undefined;
-    // The rung is part of the comparison: the two count lists differ, so a change of rung
-    // changes the payload even when the world has not moved.
-    const sig = active ? (active.sig ^ (this.usesAllCounts() ? 0x5f5f5f5f : 0)) | 0 : 0;
+    const sig = active ? active.sig : 0;
     if (active && (full || sig !== this.lastClusterSig || this.pendingAdjust !== this.lastClusterAdjusted)) {
       clusterPayload = this.adjustedClusters(active);
       this.lastClusterSig = sig;

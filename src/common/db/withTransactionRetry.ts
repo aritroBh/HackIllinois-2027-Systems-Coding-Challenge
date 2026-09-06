@@ -50,6 +50,27 @@ type TransactionOptions = NonNullable<Parameters<ClientSession['startTransaction
  * A unique index rejected a write. `collection` and `index` are carried out of the raw
  * driver message because the caller's decision depends on which constraint tripped.
  */
+/**
+ * A transaction that lost every race it was allowed to run.
+ *
+ * Distinct from a duplicate key, which says the request itself conflicts with a committed
+ * fact. This says only that the server was busy: nothing was written, the request is still
+ * valid, and repeating it is the correct thing to do. Callers turn it into a 409 with a retry
+ * hint rather than a 500.
+ */
+export class TransactionContentionError extends Error {
+  public readonly attempts: number;
+  public readonly cause: unknown;
+
+  constructor(attempts: number, cause: unknown) {
+    super(`Transaction lost ${attempts} successive write conflicts; nothing was committed.`);
+    this.name = 'TransactionContentionError';
+    this.attempts = attempts;
+    this.cause = cause;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class DuplicateKeyError extends Error {
   public readonly collection: string;
   public readonly index: string;
@@ -68,6 +89,21 @@ export class DuplicateKeyError extends Error {
 }
 
 export interface ITransactionRetryOptions {
+  /**
+   * Collections whose duplicate-key rejection means "somebody else got there first, try
+   * again" rather than "this request is a duplicate".
+   *
+   * The distinction is the whole point of carrying the collection name out of the driver
+   * error. An `Idempotency` collision says the CLIENT re-sent a request, and re-running the
+   * body would be wrong — the caller wants the original answer. A `bountyLedger` collision
+   * says two transactions raced to open the same account's first row of the day, which is
+   * ordinary contention: the row now exists, so the second attempt will find it and increment.
+   *
+   * Left empty, every duplicate key is fatal. That was the behaviour, and it meant two people
+   * raising their first ticket of the day in the same instant produced one ticket and one
+   * 500 — the exact contention the comments above claim to handle.
+   */
+  retryOnDuplicateIn?: readonly string[];
   /**
    * How many times the commit alone may be resent after an unknown result. Three is the
    * driver's own convention: enough to ride out a failover, few enough that a genuinely
@@ -97,9 +133,17 @@ const DEFAULT_TRANSACTION_OPTIONS: TransactionOptions = {
  * A few milliseconds, growing, with jitter. Retrying instantly just re-runs the same race;
  * the jitter is what stops N losers all coming back at the same instant and colliding again.
  */
+/**
+ * Exponential with full jitter, capped.
+ *
+ * The jitter is the load-bearing half. Twenty transactions that all lost the same race and
+ * all slept the same interval simply hold the same race again one interval later; spreading
+ * them over the window is what actually breaks the tie. The cap keeps a late attempt from
+ * sleeping longer than a caller will wait.
+ */
 async function backoff(attempt: number): Promise<void> {
-  const base = Math.min(2 ** attempt, 16);
-  await new Promise((resolve) => setTimeout(resolve, base + Math.floor(Math.random() * base)));
+  const ceiling = Math.min(2 ** attempt, 64);
+  await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * ceiling) + 1));
 }
 
 export async function withTransactionRetry<T>(
@@ -116,7 +160,13 @@ export async function withTransactionRetry<T>(
   // a legitimate reservation. Re-running a transient failure is safe by definition — it
   // committed nothing — so the bound exists to stop a genuinely deadlocked workload
   // spinning, not to ration attempts.
-  const maxBodyAttempts = options.maxBodyAttempts ?? 5;
+  //
+  // Five was still not enough. Twenty simultaneous reservations against one ledger document
+  // is a realistic burst — a shift is announced and the room reaches for it — and at that
+  // width two of the twenty lost five successive races and surfaced a WriteConflict as a
+  // 500. Twelve with the backoff below covers it with room to spare; the cost of a high
+  // bound is only paid by a request that was going to fail anyway.
+  const maxBodyAttempts = options.maxBodyAttempts ?? 12;
   const transactionOptions = options.transactionOptions ?? DEFAULT_TRANSACTION_OPTIONS;
   const session = await mongoose.startSession();
 
@@ -132,11 +182,28 @@ export async function withTransactionRetry<T>(
       } catch (err) {
         await abortQuietly(session);
         const duplicate = asDuplicateKeyError(err);
-        if (duplicate) throw duplicate;
-        if (bodyAttempts < maxBodyAttempts && hasErrorLabel(err, 'TransientTransactionError')) {
-          bodyAttempts += 1;
-          await backoff(bodyAttempts);
-          continue;
+        if (duplicate) {
+          const retryable = (options.retryOnDuplicateIn ?? []).some(
+            (name) => duplicate.collection === name || duplicate.collection.endsWith(`.${name}`)
+          );
+          if (retryable && bodyAttempts < maxBodyAttempts) {
+            bodyAttempts += 1;
+            await backoff(bodyAttempts);
+            continue;
+          }
+          throw duplicate;
+        }
+        if (hasErrorLabel(err, 'TransientTransactionError')) {
+          if (bodyAttempts < maxBodyAttempts) {
+            bodyAttempts += 1;
+            await backoff(bodyAttempts);
+            continue;
+          }
+          // Out of attempts on a conflict that committed nothing. This is contention, not a
+          // fault: the caller's request is intact and retrying it is the right advice. Raised
+          // as a typed error so a route can answer 409 rather than letting a driver-level
+          // WriteConflict surface as a 500 and read like a bug in the server.
+          throw new TransactionContentionError(bodyAttempts, err);
         }
         throw err;
       }

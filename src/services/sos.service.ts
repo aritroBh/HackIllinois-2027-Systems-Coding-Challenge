@@ -75,7 +75,7 @@ export class SOSService {
 
     const urgency = dto.urgency ?? SOSTicketUrgency.MEDIUM;
     const ceiling = pack.event.bountyCap?.[urgency];
-    const requested = dto.karmaBounty ?? DEFAULT_BOUNTY;
+    let requested = dto.karmaBounty ?? DEFAULT_BOUNTY;
     if (ceiling !== undefined && requested > ceiling) {
       throw ApiError.badRequest(`A ${urgency} ticket may offer at most ${ceiling} karma.`);
     }
@@ -92,6 +92,24 @@ export class SOSService {
     const budget = pack.event.hackerBountyBudgetPerDay ?? 0;
     const chargesBudget = !!creator?.id && budget > 0;
 
+    // A bounty nobody is charged for is a bounty nobody can be stopped from minting.
+    //
+    // Two paths reach here without a debit. A creatorless ticket — only possible in `legacy`
+    // mode, where the route admits an anonymous caller — has nobody to charge and, worse,
+    // nobody to compare against when the ticket is resolved, so the self-payout guard below
+    // cannot fire either. And a pack that sets `hackerBountyBudgetPerDay: 0` plainly means
+    // bounties are off, which is not the same as "unlimited"; reading it as no ceiling was
+    // the opposite of what an operator writing a zero intends.
+    //
+    // Both cases keep the ticket — somebody still needs help — and drop the reward to zero.
+    // Refusing the ticket instead would make an accounting rule into a reason not to answer
+    // a distress call, which is the wrong thing to optimise.
+    if (!chargesBudget && requested > 0) {
+      const why = creator?.id ? 'the pack sets no daily bounty budget' : 'the ticket has no recorded creator';
+      console.warn(`[sos] bounty dropped to zero: ${why}.`);
+      requested = 0;
+    }
+
     let ticket: ISOSTicket;
     if (chargesBudget) {
       ticket = await withTransactionRetry(async (session) => {
@@ -107,6 +125,11 @@ export class SOSService {
           { session }
         );
         return created;
+      }, {
+        // A duplicate on the bounty ledger is two people opening their first row of the day
+        // at the same instant, not a re-submitted request: the row exists now, so re-running
+        // the body finds it and increments. Left fatal, one of the two got a 500.
+        retryOnDuplicateIn: ['bountyledgers'],
       });
     } else {
       ticket = await SOSTicket.create({
@@ -549,7 +572,15 @@ export class SOSService {
 
     // Award karma bounty atomically ($inc — concurrent resolves can't lost-update).
     await Volunteer.updateOne({ _id: new Types.ObjectId(volunteerId) }, { $addToSet: { badges: 'FIRST_RESPONDER' } });
-    await KarmaService.awardKarma(volunteerId, resolved.karmaBounty, KarmaSource.SOS, { ticketId: String(resolved._id) });
+    // A zero bounty pays nothing, and asking to award nothing is an error rather than a no-op.
+    //
+    // `awardKarma` refuses a non-positive amount on purpose — a caller who computes zero has
+    // almost always computed it by mistake — so an unrewarded ticket has to be handled here
+    // instead of there. It still resolves, and the responder still gets the badge below: the
+    // work was done whether or not anybody was able to attach a reward to it.
+    if (resolved.karmaBounty > 0) {
+      await KarmaService.awardKarma(volunteerId, resolved.karmaBounty, KarmaSource.SOS, { ticketId: String(resolved._id) });
+    }
     const vol = await Volunteer.findById(volunteerId);
 
     // Recompute prestige tier from the new balance (single follow-up write; karma itself is already atomic).

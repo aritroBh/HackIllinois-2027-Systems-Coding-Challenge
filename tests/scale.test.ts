@@ -166,6 +166,51 @@ describe('the interest computation is shared, not repeated per client', () => {
     for (const [, , n] of cohort.clusters) expect(n).toBeGreaterThan(0);
   });
 
+  it('accounts for every neighbour at every rung of the load ladder', () => {
+    // The invariant the ladder must never break: a person within the interest radius is either
+    // sent as a row or counted in a cluster. Never both, and never neither.
+    //
+    // "Never neither" is the one that broke twice. First the bottom rung sent no rows and still
+    // excluded the nearest sixty from the counts, so a full room reported zero. Then the fix
+    // for that handled the top and bottom rungs and left the middle one wrong in the same way:
+    // the cohort was built at the transport's cap of sixty while the session sent thirty, and
+    // the thirty in between were excluded as though sent.
+    const store = new PresenceStore();
+    const ids = seedVenues(store, 400, 1); // one dense venue, so everybody is in range
+    const index = store.buildIndex();
+    const me = store.get(ids[0])!;
+    const radius = store.cfg.interestRadiusMeters;
+
+    for (const cap of [store.cfg.maxDetail, Math.ceil(store.cfg.maxDetail / 2), 0]) {
+      const cohort = store.cohort(store.cellKeyFor(me.fx, me.fz), radius, false, cap, index);
+
+      // The cohort's own universe: everybody in a cell the span touches.
+      //
+      // Not "everybody within the radius" — a cluster is a whole cell, so a cell the span
+      // reaches is counted entire even though its far corner lies a little beyond the ring.
+      // That is the correct behaviour for an aggregate, and asserting the stricter thing would
+      // be asserting a bug into the test.
+      const s = index.cellUnits;
+      const [cx, cz] = store.cellKeyFor(me.fx, me.fz).split(':').map(Number);
+      const span = Math.ceil((radius / store.cfg.metersPerUnit + (s * Math.SQRT2) / 2) / s);
+      let universe = 0;
+      for (let i = cx - span; i <= cx + span; i++) {
+        for (let j = cz - span; j <= cz + span; j++) {
+          const members = index.cells.get(`${i}:${j}`);
+          if (members) universe += members.pub.length;
+        }
+      }
+
+      const asRows = cohort.detail.length;
+      const asCounts = cohort.clusters.reduce((sum, c) => sum + c[2], 0);
+
+      // Never both, never neither: every person the cohort can see is a row or a count.
+      expect(asRows + asCounts).toBe(universe);
+      // And the rows are capped at what the rung allows, plus the one spare for the viewer.
+      expect(asRows).toBeLessThanOrEqual(cap === 0 ? 0 : cap + 1);
+    }
+  });
+
   it('collapses to one shared pass per venue when the crowd is clustered, as a real event is', () => {
     const store = new PresenceStore();
     const ids = seedVenues(store, 5000);

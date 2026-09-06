@@ -161,8 +161,14 @@ export class AvatarService {
       .limit(limit);
   }
 
-  public static async review(hash: string, reviewerId: string, approve: boolean, ownerId?: string): Promise<IAvatar> {
-    const doc = await Avatar.findOne(ownerId ? { hash, ownerId } : { hash });
+  public static async review(hash: string, reviewerId: string, approve: boolean, ownerId: string): Promise<IAvatar> {
+    // `ownerId` is required, not optional.
+    //
+    // A hash identifies an IMAGE and two people who upload the same sheet get one row each,
+    // so a `{ hash }`-only lookup acts on whichever the database returns first: rejecting
+    // Alice's avatar could reject Bob's, and neither would be told. The routes were fixed to
+    // pass it; leaving the parameter optional here left the trap armed for the next caller.
+    const doc = await Avatar.findOne({ hash, ownerId });
     if (!doc) throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);
     doc.status = approve ? AvatarStatus.APPROVED : AvatarStatus.REJECTED;
     doc.reviewedBy = new Types.ObjectId(reviewerId);
@@ -176,8 +182,9 @@ export class AvatarService {
    * A report. Three distinct reporters, or one lead, unpublish immediately — waiting for a
    * review queue to drain is the wrong default when the content is on other people's maps.
    */
-  public static async flag(hash: string, reporter: { id: string; role: string }, reason: string, ownerId?: string): Promise<IAvatar> {
-    const doc = await Avatar.findOne(ownerId ? { hash, ownerId } : { hash });
+  public static async flag(hash: string, reporter: { id: string; role: string }, reason: string, ownerId: string): Promise<IAvatar> {
+    // Required for the same reason as `review`: a report is against one person's upload.
+    const doc = await Avatar.findOne({ hash, ownerId });
     if (!doc) throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);
     // Three reporters unpublish, and accounts are cheap to create, so a report has to cost
     // the reporter something. Ten an hour is far more than an honest player needs and far

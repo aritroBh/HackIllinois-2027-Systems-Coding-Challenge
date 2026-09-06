@@ -101,11 +101,6 @@ export const ROOFTOP_MAT = {
   solarPanel: 'glassDark', stairHead: 'precast',
 };
 
-/** Monument ids whose roofs are hand-written by crowns.js and must not be cluttered. */
-export const CROWNED = new Set([
-  'ALMA', 'UNION', 'FOELLINGER', 'ALTGELD', 'SIEBEL', 'ECEB', 'GRAINGER',
-  'DCL', 'KENNEY', 'STADIUM', 'ASSEMBLY', 'LIBRARY', 'BECKMAN', 'KRANNERT',
-]);
 
 export const MASS = {
   university: hx('#8E3B2C').map((v) => v * 0.62),
@@ -260,9 +255,17 @@ export function bakeTile(tile, opts = {}) {
     const clutter = rooftopClutter(b, {
       metersPerUnit: MPU,
       density: detail === 1 ? 0.4 : 1,
-      // Monuments keep their hand-written crowns; generated vents on top of Altgeld's
-      // campanile would be vandalism.
-      hasCrown: !!b.crown || CROWNED.has(b.id),
+      // Monuments cannot reach here at all.
+      //
+      // `bake.assemble` splits its records: the fourteen crowned landmarks go into
+      // `model.monuments` and everything else into `model.buildings`, and only the latter is
+      // tiled. So a tile's building list is by construction crown-free, and the guard here was
+      // dead three times over — no overlap in the data, OSM ids against monument slugs, and a
+      // hardcoded set that spelled them a third way again. Its comment promised protection it
+      // could not deliver, which is worse than no guard: it invited the next person to trust
+      // it. `hasCrown` stays in the signature because `rooftopClutter` is also called from the
+      // monument path in campus3d.js, where it is real.
+      hasCrown: !!b.crown,
     });
     for (const c of clutter) {
       const geo = rooftopGeometry(c.kind, { metersPerUnit: MPU, heightScale: vscale, ring: c.ring });

@@ -1,7 +1,8 @@
 import { GeoEngine, HACKILLINOIS_VENUES, resolveVenue } from '../src/common/utils/geo';
+import { uniqueKey } from './helpers/uniqueKey';
 import { SOSService } from '../src/services/sos.service';
 import { SOSTicketCategory, SOSTicketUrgency, SOSTicketStatus } from '../src/models/sosTicket.model';
-import { Volunteer } from '../src/models/volunteer.model';
+import { Volunteer, VolunteerRole, AccountKind } from '../src/models/volunteer.model';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
 import { CheckInService } from '../src/services/checkin.service';
@@ -181,6 +182,9 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     });
 
     // Create SOS Ticket in Siebel Atrium needing HARDWARE
+    const hacker = await Volunteer.create({
+      name: 'Stuck Hacker', email: null, kind: AccountKind.HACKER, role: VolunteerRole.HACKER,
+    });
     const ticket = await SOSService.createTicket({
       hackerName: 'Stuck Hacker',
       tableLocation: 'Table 42 (Siebel Basement)',
@@ -190,9 +194,12 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
       urgency: SOSTicketUrgency.HIGH,
       requiredSkill: 'HARDWARE',
       karmaBounty: 250,
-    });
+    }, { id: String(hacker._id), kind: 'HACKER' });
 
     expect(ticket.status).toBe(SOSTicketStatus.OPEN);
+    // The bounty survives because somebody was charged for it. A ticket raised with no
+    // recorded creator carries no reward — see the case below.
+    expect(ticket.karmaBounty).toBe(250);
 
     // Dispatch nearest volunteer
     const dispatchResult = await SOSService.dispatchNearestVolunteer(ticket._id.toString());
@@ -218,9 +225,55 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     await SOSService.dispatchNearestVolunteer(ticket2._id.toString());
     await expect(
       SOSService.resolveTicket(ticket2._id.toString(), volC._id.toString())
-    ).rejects.toThrow(/only the dispatched volunteer/i);    const updatedVolB = await Volunteer.findById(volB._id);
+    ).rejects.toThrow(/only the dispatched volunteer/i);
+
+    const updatedVolB = await Volunteer.findById(volB._id);
     expect(updatedVolB?.karmaPoints).toBe(200 + 250);
     expect(updatedVolB?.badges).toContain('FIRST_RESPONDER');
+  });
+
+  it('a ticket nobody was charged for pays no bounty, and still resolves', async () => {
+    // The mint this closes: a bounty is drawn from its creator's daily budget, so a ticket
+    // with no recorded creator has nobody to charge — and paying it out anyway makes karma
+    // from nothing. Only reachable in legacy mode, where the route admits an anonymous
+    // caller, and through a direct service call like this one.
+    //
+    // The ticket is still filed and still resolves. Refusing to record a distress call
+    // because of an accounting rule would be optimising the wrong thing.
+    const responder = await Volunteer.create({
+      name: 'Unpaid Ursula', email: `u-${Date.now()}@illinois.edu`,
+      certifications: ['HARDWARE'], karmaPoints: 0,
+    });
+    const shift = await Shift.create({
+      title: 'Unpaid desk', description: 'x', category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Basement Lab Corridors',
+      startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000),
+      capacity: 2, baseKarma: 10,
+    });
+    await Registration.create({
+      shiftId: shift._id, volunteerId: responder._id,
+      status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('unpaid'),
+    });
+
+    const ticket = await SOSService.createTicket({
+      hackerName: 'Anonymous Ada',
+      tableLocation: 'Table 44 (Siebel Basement)',
+      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      category: SOSTicketCategory.HARDWARE_MALFUNCTION,
+      description: 'No creator on this one.',
+      urgency: SOSTicketUrgency.HIGH,
+      karmaBounty: 400,
+    });
+    expect(ticket.karmaBounty).toBe(0);
+
+    await SOSService.dispatchNearestVolunteer(ticket._id.toString());
+    const resolved = await SOSService.resolveTicket(ticket._id.toString(), responder._id.toString());
+    expect(resolved.status).toBe(SOSTicketStatus.RESOLVED);
+
+    const after = await Volunteer.findById(responder._id);
+    expect(after?.karmaPoints).toBe(0);
+    // The work was done, so the badge is earned even though no reward could be attached.
+    expect(after?.badges).toContain('FIRST_RESPONDER');
   });
 });
 

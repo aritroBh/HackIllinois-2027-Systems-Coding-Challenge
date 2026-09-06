@@ -1,6 +1,11 @@
 /**
- * Every server event type must be forwarded to the client bus, and every forwarded name must
- * be one the server actually emits.
+ * Every server event type must be forwarded to the client bus, every forwarded name must be
+ * one the server actually emits, and every name a view subscribes to must be one of those.
+ *
+ * That is the emit -> forward -> subscribe chain, and it is what this checks. It does NOT
+ * check that a forwarded event has a handler doing something useful, and it cannot see the
+ * plugin hooks, whose names are built at runtime from the plugin's own name. A green run
+ * means no name was invented on any hop; it does not mean every event is acted on.
  *
  * A view subscribes with `Nexus.onEvent('ANNOUNCEMENT')` and waits. If nothing forwards that
  * name, the view waits for ever and looks exactly like a view whose event has not happened

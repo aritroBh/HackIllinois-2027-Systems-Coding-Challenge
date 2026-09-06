@@ -133,17 +133,7 @@ export interface Cohort {
   detailIds: Set<string>;
   /** [cellOriginX, cellOriginZ, count] for cells whose members are not already in `detail`. */
   clusters: Array<[number, number, number]>;
-  /**
-   * The same counts with nobody excluded — what a viewer sees when it is being sent no rows.
-   *
-   * `clusters` deliberately omits the people who are arriving as individual rows, so that a
-   * player is not drawn twice. On the bottom rung of the load ladder nobody is sent as a row,
-   * and the same exclusion then removed the nearest sixty people from the counts as well: a
-   * room with forty people in it reported zero. The map emptied at exactly the moment it was
-   * fullest, which is the opposite of what a degradation mode is for.
-   */
-  clustersAll: Array<[number, number, number]>;
-  ownClusterIndexAll: number;
+
   /** The cell these were computed for, so a session can adjust its own count. */
   cellKey: string;
   /**
@@ -423,6 +413,17 @@ export class PresenceStore {
    * hundred and the cut is sixty, so a full sort spends most of its comparisons ordering
    * people nobody will be told about.
    */
+  /**
+   * `maxDetail` is the EFFECTIVE row budget, not the transport's ceiling.
+   *
+   * The counts in `clusters` exclude the people arriving as rows, so that nobody is drawn
+   * twice — which is only correct if "the people arriving as rows" is what `detailIds` holds.
+   * Building the cohort at the transport's cap while the session sent fewer left the
+   * difference in neither list: on the middle rung of the load ladder, thirty neighbours were
+   * excluded from the counts as though they had been sent and then not sent. Passing the
+   * effective budget makes the two agree by construction, and a budget of zero selects nobody
+   * so the counts include everybody — which is what the bottom rung needs.
+   */
   cohort(cellKey: string, radiusM: number, lead: boolean, maxDetail: number, index: TickIndex): Cohort {
     const s = index.cellUnits;
     const [cxRaw, czRaw] = cellKey.split(':');
@@ -442,8 +443,8 @@ export class PresenceStore {
     const reach = r + halfDiagonal;
     const span = Math.ceil(reach / s);
     // One longer than the cap: the viewer itself is usually the nearest candidate of all, and
-    // dropping it must not also drop the sixtieth neighbour.
-    const want = maxDetail + 1;
+    // dropping it must not also drop the last neighbour. A cap of zero wants nobody at all.
+    const want = maxDetail > 0 ? maxDetail + 1 : 0;
 
     const best: Array<{ e: PresenceEntry; d: number }> = [];
     let worst = Infinity;
@@ -465,8 +466,16 @@ export class PresenceStore {
           if (!members.length) continue;
           cellsInSpan.push(m);
           for (const e of members) {
+            // Against `reach`, not `r`: the ranking is done from the cell centre but the
+            // people ranked are viewed from anywhere in the cell, so the ring has to be
+            // widened by the furthest a viewer can be from that centre. Testing against the
+            // bare radius cut half the neighbours a corner viewer could legitimately see.
             const d = Math.hypot(e.fx - centreX, e.fz - centreZ);
-            if (d > r) continue;
+            if (d > reach) continue;
+            // A budget of zero selects nobody: the bottom rung of the ladder sends no rows, so
+            // everybody stays available to the counts. Without this the insertion below pushed
+            // and immediately popped, then read past the end of an empty array.
+            if (want === 0) continue;
             if (best.length >= want && d >= worst) continue;
             // Sorted insertion. `best` is at most sixty-one long, so the shift is cheap and the
             // list is already in the order the wire wants.
@@ -483,21 +492,12 @@ export class PresenceStore {
     const detail = best.map((b) => b.e);
     const detailIds = new Set(detail.map((e) => e.id));
     const clusters: Array<[number, number, number]> = [];
-    const clustersAll: Array<[number, number, number]> = [];
     let ownClusterIndex = -1;
-    let ownClusterIndexAll = -1;
     let sig = 0;
     for (const m of cellsInSpan) {
       const members = lead ? m.all : m.pub;
       let n = 0;
       for (const e of members) if (!detailIds.has(e.id)) n += 1;
-      const all = members.length;
-      if (all > 0) {
-        if (m.key === cellKey) ownClusterIndexAll = clustersAll.length;
-        clustersAll.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, all]);
-        // The signature covers both lists, so a change in either re-sends.
-        sig = (sig * 31 + m.ci * 7 + m.cj * 13 + all * 19) | 0;
-      }
       if (n === 0) continue;
       if (m.key === cellKey) ownClusterIndex = clusters.length;
       // `| 0` keeps the running value a 32-bit integer, so this stays integer arithmetic
@@ -509,7 +509,7 @@ export class PresenceStore {
       // spread campus, to round a number that was never imprecise.
       clusters.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, n]);
     }
-    return { detail, detailIds, clusters, clustersAll, cellKey, ownClusterIndex, ownClusterIndexAll, sig };
+    return { detail, detailIds, clusters, cellKey, ownClusterIndex, sig };
   }
 
   /**

@@ -376,7 +376,7 @@ export class PresenceService {
         const s = queue[cursor++];
         // A session removed since the queue was taken must not be sent to.
         if (!this.sessions.has(s.client.id)) continue;
-          s.clusterOnly = this.clusterMode;
+        s.clusterOnly = this.clusterMode;
         s.detailBudget = this.detailBudget;
         // A demotion has to bite now, not at the next reconnect. The facts are already cached
         // for anybody who has sampled recently, so this costs a map lookup; an account we have
@@ -388,12 +388,19 @@ export class PresenceService {
           const me = this.store.get(s.accountId);
           if (me && !Number.isNaN(me.fx)) {
             // Three things decide what a cohort contains: where you stand, whether you may see
-            // off-duty volunteers, and how many rows your transport can carry. Everything else
-            // about a client is per-connection bookkeeping the session still does itself.
-            const key = `${me.cell}|${s.lead ? 1 : 0}|${s.detailCap}`;
+            // off-duty volunteers, and how many rows you will actually be sent. Everything
+            // else about a client is per-connection bookkeeping the session still does itself.
+            //
+            // The third is the EFFECTIVE cap — the transport's ceiling and the load ladder's
+            // budget, whichever is smaller — not the transport's alone. The cohort's counts
+            // exclude the people it selects for detail, so building it at a cap larger than
+            // the session sends left the difference in neither the rows nor the counts: on the
+            // middle rung, thirty neighbours vanished from the map.
+            const cap = s.effectiveCap();
+            const key = `${me.cell}|${s.lead ? 1 : 0}|${cap}`;
             cohort = cohorts.get(key) ?? null;
             if (!cohort) {
-              cohort = this.store.cohort(me.cell, radius, s.lead, s.detailCap, index);
+              cohort = this.store.cohort(me.cell, radius, s.lead, cap, index);
               cohorts.set(key, cohort);
             }
           }

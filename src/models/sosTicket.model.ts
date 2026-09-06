@@ -125,7 +125,27 @@ const SOSTicketSchema = new Schema<ISOSTicket>(
       index: true,
     },
     assignedVolunteerId: { type: Schema.Types.ObjectId, ref: 'Volunteer', default: null },
-    karmaBounty: { type: Number, default: 150, min: 50 },
+    karmaBounty: {
+      type: Number,
+      default: 150,
+      min: 0,
+      /**
+       * Zero, or a real offer. Never something in between.
+       *
+       * The floor of fifty lives in the Zod schema, where a caller's number is validated, and
+       * that is the right place for it: fifty is a judgement about what is worth a responder's
+       * walk, and it applies to what somebody asks for. Zero is not a small offer — it is the
+       * system recording that no reward is attached, which it does when nobody could be
+       * charged for one (a creatorless ticket in legacy mode, or a pack with the daily budget
+       * set to zero, which plainly means bounties are off). A model minimum of fifty made that
+       * state unrepresentable and turned an accounting rule into a refusal to file a
+       * distress call.
+       */
+      validate: {
+        validator: (v: number) => v === 0 || v >= 50,
+        message: 'A bounty is either zero or at least 50 karma.',
+      },
+    },
     dispatchedAt: { type: Date },
     acknowledgedAt: { type: Date, default: null },
     onSceneAt: { type: Date, default: null },

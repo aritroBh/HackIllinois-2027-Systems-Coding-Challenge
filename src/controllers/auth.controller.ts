@@ -13,6 +13,7 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { env } from '../config/env';
 import { evictAccountCache } from '../middleware/identity';
+import { presenceService } from '../presence/service';
 
 /** Role hierarchy for revocation checks. HACKER and VOLUNTEER are peers at the bottom. */
 const ROLE_RANK: Record<string, number> = { HACKER: 0, VOLUNTEER: 0, SHIFT_LEAD: 1, ORGANIZER: 2, ADMIN: 3 };
@@ -117,6 +118,7 @@ export class AuthController {
       }
       const sessionVersion = await AuthService.revoke(targetId);
       evictAccountCache(targetId);
+      presenceService.invalidate(targetId);
       res.status(200).json({ success: true, data: { accountId: targetId, sessionVersion } });
     } catch (error) {
       next(error);
@@ -188,6 +190,12 @@ export class AuthController {
       account.role = granted;
       await account.save();
       evictAccountCache(account.id);
+      // And the presence layer's own copy of the account, which is what decides whether this
+      // person still sees off-shift volunteers and may hold a `presence:exact` stream. It has
+      // a thirty-second life of its own, so without this a demotion took up to half a minute
+      // to bite — the tick re-asserted the old role from stale facts every second in between.
+      // Dropping a privilege has to be immediate even though granting one can wait.
+      presenceService.invalidate(account.id);
       res.status(200).json({ success: true, data: AuthService.toPublicAccount(account) });
     } catch (error) {
       next(error);
