@@ -7,6 +7,9 @@
  * which turns "spend it from anywhere" into "hand any gym on campus two hours of immunity".
  * The client picking the nearest gym is a convenience; these are the checks.
  */
+import request from 'supertest';
+import { app } from '../src/app';
+import { env } from '../src/config/env';
 import { Volunteer, AccountKind, VolunteerRole } from '../src/models/volunteer.model';
 import { Gym, Faction } from '../src/models/gym.model';
 import { PowerUpInventory, PowerUpType } from '../src/models/powerup.model';
@@ -26,9 +29,11 @@ async function player(faction: Faction = Faction.TEAM_KERNEL) {
   });
 }
 
+/** Gym names carry a unique index, so two gyms in one test need two names. */
+let gymSeq = 0;
 async function gym(controllingFaction: Faction) {
   return Gym.create({
-    name: 'Siebel Cyber Bastion', locationName: 'Siebel Center',
+    name: `Siebel Cyber Bastion ${++gymSeq}`, locationName: 'Siebel Center',
     latitude: SIEBEL.latitude, longitude: SIEBEL.longitude,
     controllingFaction, controlPoints: 100, maxControlPoints: 1000, version: 0,
   });
@@ -153,5 +158,68 @@ describe('a hacker can read their own SOS ticket', () => {
     expect(live.body.data.id).toBe(String(created.body.data._id));
     expect(live.body.data.status).toBe('OPEN');
     expect(live.headers['cache-control']).toBe('no-store');
+  });
+});
+
+describe('a live distress call is not readable by naming somebody', () => {
+  it('refuses GET /me/sos to a claimed identity, and answers a real session', async () => {
+    // The route was written with `requireAccount`, which in the shipped legacy posture is
+    // satisfied by `?volunteerId=` in the query string — and account ids are public, handed
+    // out by the unauthenticated leaderboard. So it returned a named person's live
+    // `tableLocation` and `category`: where they are sitting and whether they called for
+    // medical help, to a caller with no cookie and no audit row. Even null-versus-a-ticket
+    // is an oracle for whether somebody is in trouble.
+    const victim = await Volunteer.create({
+      name: 'Vic', email: null, kind: AccountKind.HACKER, role: VolunteerRole.HACKER,
+    });
+    const { agent, csrf } = await signIn(victim.id);
+    const created = await agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', csrf).send({
+      hackerName: 'Vic', tableLocation: 'Table 42, second floor', description: 'help',
+      urgency: 'HIGH', coordinates: SIEBEL,
+    });
+    expect(created.status).toBe(201);
+
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app).get(`/api/v1/me/sos?volunteerId=${victim.id}`);
+      expect(claimed.status).toBe(401);
+      expect(JSON.stringify(claimed.body)).not.toContain('Table 42');
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+
+    // The person it belongs to still gets it.
+    const mine = await agent.get('/api/v1/me/sos');
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.tableLocation).toBe('Table 42, second floor');
+  });
+});
+
+describe('an account that never picked a side cannot buff every side', () => {
+  it('refuses a rival gym to a factionless actor', async () => {
+    // The first version of the check required the actor's faction to be *set*: `mine &&
+    // holder !== mine`. `faction` defaults to null and only a gym battle binds it, so an
+    // account that had never fought could spin beacons until it held a shield and then drop
+    // two hours of immunity on any stronghold on campus — the one actor the rule was least
+    // able to reason about was the one it let through.
+    const drifter = await Volunteer.create({
+      name: 'Drifter', email: `dr-${Date.now()}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    expect(drifter.faction ?? null).toBeNull();
+    const theirs = await gym(Faction.TEAM_TENSOR);
+    await give(drifter._id, PowerUpType.INSOMNIA_COOKIE_SHIELD);
+
+    await expect(
+      HackStopService.usePowerUp(String(drifter._id), PowerUpType.INSOMNIA_COOKIE_SHIELD, String(theirs._id), SIEBEL)
+    ).rejects.toThrow(/held by TEAM_TENSOR/i);
+    expect((await Gym.findById(theirs._id))!.isShielded).toBeFalsy();
+
+    // A neutral gym is still fair game — taking neutral ground is the point of the game.
+    const open = await gym(Faction.NEUTRAL);
+    const res = await HackStopService.usePowerUp(String(drifter._id), PowerUpType.INSOMNIA_COOKIE_SHIELD, String(open._id), SIEBEL);
+    expect(res.remainingQuantity).toBe(0);
+    expect((await Gym.findById(open._id))!.isShielded).toBe(true);
   });
 });

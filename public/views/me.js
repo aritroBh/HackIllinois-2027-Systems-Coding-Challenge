@@ -349,6 +349,24 @@
   N.onEvent('session:ready', ({ user }) => { if (user) void load(); else paint(); });
   N.onEvent('session', () => paint());
 
+  /**
+   * The browser changed hands. Drop everything before repainting, not after the fetch lands.
+   *
+   * `session` alone repaints, and a repaint draws the new name over the previous account's
+   * shifts, venues and inventory counts — and over their live attendance token, which is a
+   * credential a scanner accepts. The window is short, one round trip, and it is a window in
+   * which the screen is showing one person's badge under another person's name.
+   */
+  N.onEvent('session:handover', () => {
+    clearToken();
+    state.shifts = [];
+    state.next = null;
+    state.inventory = [];
+    state.card = null;
+    paint();
+    void load();
+  });
+
   // Anything that moves a registration, a check-in or the inventory changes what this tab
   // is showing. The rows are small and the tab is usually closed, so reloading all three
   // is cheaper than tracking each mutation.

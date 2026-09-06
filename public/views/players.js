@@ -437,5 +437,26 @@
     renderNearby();
   });
 
+  /**
+   * The browser changed hands without a sign-out, so the socket has to as well.
+   *
+   * The socket authenticated as the previous account and nothing revokes it, so left open it
+   * kept publishing their position — a dot on the map under a name that is no longer sitting
+   * there — until the server's idle sweep reaped it. And because `api.start()` refuses
+   * whenever `mode !== 'off'`, the new user could never connect however they set the toggle:
+   * one ghost, one invisible person, one shared laptop.
+   *
+   * Stopped and restarted rather than left alone, because the new account's opt-in is its
+   * own decision: `presenceOptIn` comes from the session, and somebody who has not opted in
+   * must not inherit a live publisher from whoever sat here before.
+   */
+  N.onEvent('session:handover', (user) => {
+    api.stop();
+    state.optIn = !!(user && user.presenceOptIn);
+    paintChip();
+    renderNearby();
+    if (state.optIn) api.start();
+  });
+
   window.addEventListener('beforeunload', () => { if (state.ws) try { state.ws.close(1001, 'unload'); } catch { /* gone */ } });
 })();

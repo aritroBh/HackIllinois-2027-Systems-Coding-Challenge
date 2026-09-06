@@ -95,6 +95,12 @@ npm run bench:presence -- --clients 5000 --storm 10
 
 The harness provisions hacker accounts through a desk session, opens real sockets, walks each client, and reports the gate: tick CPU p95 under 200 ms, the longest event-loop block under about 15 ms, the ladder never leaving rung 0, and no 1013 close for an account inside its slot budget. Run it once with the generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without, to exercise both the trusted path and the 3,000-streams-per-IP ceiling.
 
+Two things learned by running it, both about setup rather than about the gate.
+
+**Provisioning is slow on purpose and no allow-list fixes it.** The harness creates its accounts through a desk session, and `POST /volunteers` is a mutation: the 90-per-minute bucket that guards it is keyed on the *account*, not the address, so `TRUSTED_EGRESS_CIDRS` — which widens per-IP ceilings — does nothing for it. The harness waits the bucket out rather than under-provisioning, which settles at roughly thirty accounts a minute: about forty minutes of setup before a sixty-second measurement. That is the limiter behaving correctly, and it is why the file suggests four hosts at `--clients 1250` rather than one at 5,000.
+
+**Point `--url` at the address you allow-listed.** `localhost` resolves to `::1` first on macOS and `TRUSTED_EGRESS_CIDRS` is IPv4-only, so `--url http://localhost:3000` with `127.0.0.1/32` in the list silently leaves the *stream* ceilings on the untrusted path. Use `http://127.0.0.1:<port>`, and watch the boot log for the "ignoring" warning if you pasted an IPv6 range.
+
 It provisions hackers rather than volunteers on purpose: an off-shift volunteer is invisible to their peers, so a crowd of them would measure an empty map.
 
 ## Act on behalf

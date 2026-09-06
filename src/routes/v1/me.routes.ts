@@ -3,7 +3,7 @@
  * inventory, stickers and presence preferences.
  */
 import { Router, Request, Response, NextFunction } from 'express';
-import { requireAccount } from '../../middleware/identity';
+import { requireAccount, requireSession } from '../../middleware/identity';
 import { Volunteer } from '../../models/volunteer.model';
 import { Registration } from '../../models/registration.model';
 import { PowerUpInventory } from '../../models/powerup.model';
@@ -156,11 +156,23 @@ meRouter.get('/card', requireAccount, async (req: Request, res: Response, next: 
  * ticket may be cleared) — and no further SSE would ever arrive for a ticket that had already
  * finished. No button, no escape, and no way to raise another call from that device.
  *
- * Full detail deliberately: this is the caller's own ticket, and the redaction on `/sos/tickets`
- * exists to keep one hacker from reading another's. There is exactly one row here and it is
- * theirs.
+ * Full detail deliberately: this is the caller's own ticket, and the redaction on
+ * `/sos/tickets` exists to keep one hacker from reading another's.
+ *
+ * **`requireSession`, not `requireAccount`** — the distinction the rest of this file draws
+ * for a far smaller disclosure, and which this route missed when it was written. In the
+ * shipped `AUTH_MODE=legacy` posture an "account" can be a `?volunteerId=` in the query
+ * string, and account ids are public: the unauthenticated leaderboard hands them out. Gated
+ * on `requireAccount`, `GET /me/sos?volunteerId=<anyone>` returned that person's live
+ * `tableLocation` and `category` — where they are sitting right now and whether they called
+ * for medical help — to a caller with no cookie and no audit row. Even `null` versus a
+ * ticket is an oracle for whether somebody is in trouble.
+ *
+ * `GET /me` already nulls the email for a claimed identity and `listBeacons` already
+ * withholds a cooldown from one; a live distress call is not the place to be looser than
+ * either.
  */
-meRouter.get('/sos', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+meRouter.get('/sos', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ticket = await SOSTicket.findOne({
       createdById: req.account!.id,

@@ -560,6 +560,18 @@
   N.onEvent('session:ready', ({ user }) => { if (user) void load(); else paint(); });
   N.onEvent('session', () => paint());
 
+  // Same as Me, plus the camera: a scanner stream opened by the previous person keeps
+  // running through a handover, because `stopCamera` otherwise only fires when the tab hides
+  // or the session goes empty — and neither happens when one account replaces another.
+  N.onEvent('session:handover', () => {
+    stopCamera();
+    state.quests = [];
+    state.raid = null;
+    state.objective = null;
+    paint();
+    void load();
+  });
+
   // Everything a quest counts, plus the two tickers that move a raid or an objective.
   for (const type of [
     'QUEST_COMPLETED', 'STICKER_AWARDED', 'SLOT_RESERVED', 'VOLUNTEER_CHECKED_IN', 'VOLUNTEER_CHECKED_OUT',

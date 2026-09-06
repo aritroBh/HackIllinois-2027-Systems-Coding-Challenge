@@ -2248,6 +2248,15 @@ export function createCampusRenderer(canvas, opts = {}) {
      * replicated into a 4-frame cycle with a 1-px bob) or a 128×32 sheet.
      */
     setPlayerSprite(source) {
+      // `null` means "back to the default face", not "crash".
+      //
+      // There was no null branch, so the shared-laptop handover reset — which calls exactly
+      // this to stop showing the previous person's photograph — threw a TypeError on
+      // `source.width` into a `catch` that assumed the renderer was down. The default sprite
+      // was never uploaded and the previous user's face stayed in texture memory, walking
+      // around the map under the new user's name. The one call that most needed to work was
+      // the one shape the function could not take.
+      if (!source) { uploadSprite(drawDefaultSprite()); return true; }
       const w = source.width, h = source.height;
       const frameOK = (h === 32 || h === 48);
       // Full sheet: 4 frames side by side (128×32 or 128×48), frames = stand /

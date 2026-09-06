@@ -36,6 +36,14 @@ while IFS= read -r -d '' f; do
   node --check "$f"
   FRONTEND_COUNT=$((FRONTEND_COUNT + 1))
 done < <(find "$ROOT/public" -name '*.js' -not -path '*/node_modules/*' -print0 | sort -z)
+# A count, asserted. `find | sort -z` inside a process substitution has an unchecked status,
+# so a `sort` without `-z` (stock BSD sort, on a machine that is not this one) would leave the
+# loop with nothing to read — and a gate that checked zero files would print "0 frontend files
+# parse" and exit green, which is the failure this whole step was rewritten to prevent.
+if [ "$FRONTEND_COUNT" -lt 20 ]; then
+  echo "frontend syntax gate found only $FRONTEND_COUNT files under public/ — the scan is broken, not the tree" >&2
+  exit 1
+fi
 echo "$FRONTEND_COUNT frontend files parse"
 # `node --check` on a bare .js parses it as a script, which is NOT how the browser or the
 # bake worker load these. Importing is the only check that catches a shader template closed

@@ -703,6 +703,13 @@
     state.earned = new Set();
     state.fresh = new Set();
     state.walking = false;
+    // The creator's working copy, which round six's storage purge could not reach: an
+    // unsaved photograph and its palette previews live only here. Without this the next
+    // person opening Trainer sees the previous person's face in the previews, and pressing
+    // Keep writes it into their own stored avatar and onto their map sprite.
+    creator.source = null;
+    creator.heads = {};
+    creator.palette = 'SNES16';
     if (state.geoWatch !== null && navigator.geolocation) {
       navigator.geolocation.clearWatch(state.geoWatch);
       state.geoWatch = null;

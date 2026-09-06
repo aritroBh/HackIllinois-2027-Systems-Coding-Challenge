@@ -360,7 +360,14 @@ export class HackStopService {
       const holder = targetGym.controllingFaction;
       const actor = await Volunteer.findById(volunteerId).select('faction');
       const mine = actor?.faction ?? null;
-      if (holder && holder !== Faction.NEUTRAL && mine && holder !== mine) {
+      // A held gym is a rival's unless it is demonstrably yours.
+      //
+      // The first version required `mine` to be set, which let the one account that has
+      // never picked a side buff every side: `faction` defaults to null and only a gym
+      // battle binds it, so a fresh account could spin beacons until it held a shield and
+      // then drop two hours of immunity on any stronghold on campus. Reading "no faction" as
+      // "not this faction" is the only reading that matches what the rule is for.
+      if (holder && holder !== Faction.NEUTRAL && holder !== mine) {
         throw ApiError.conflict(
           `${targetGym.name} is held by ${holder}. A ${itemMeta.name} strengthens the gym it is used on, so it cannot be spent on a rival's.`,
           ErrorCode.FACTION_ALLEGIANCE_LOCKED

@@ -274,19 +274,16 @@
   }
 
   /**
-   * The remembered ticket, reconciled against the server where that is possible.
+   * The remembered ticket, reconciled against the server.
    *
-   * Only hackers reach this — the tab is `roles: ['HACKER']` and `restore` is called from
-   * `session:ready` for them alone — and `GET /sos/tickets` is staff-only, so in practice the
-   * fetch below always 403s and the remembered ticket is what stands. The call is kept
-   * because it costs one refused request and is the right answer the moment a hacker-readable
-   * "my tickets" endpoint exists; the comment used to claim staff take this path, which they
-   * never have.
+   * `GET /me/sos` is the hacker-readable "my ticket" endpoint, and it answers with the
+   * caller's own live call or `null`. That `null` is the important half: it is what unsticks
+   * a device holding a ticket that finished while the tab was shut.
    *
-   * The match is on ids, never on `hackerName`. A display name is not an identifier — the
-   * submit form defaults it to "A hacker" for an account that has not set one — so matching
-   * on it would have adopted a stranger's open ticket the first time two people left the name
-   * blank.
+   * Only hackers reach this. `/sos/tickets` — the staff list this used to try, and always be
+   * refused from — is not consulted at all any more, and nothing here matches on a display
+   * name: the server decides whose ticket this is from the session, which is the only party
+   * that can.
    */
   async function restore(user) {
     const held = recall();
@@ -318,9 +315,25 @@
   // by now; this drops the copy held in memory, which is the one on the screen. Without it
   // the next person sits down looking at a stranger's live distress call, seat number and
   // all, with a Cancel button under it.
-  N.onEvent('session:handover', () => {
+  /** The tab is HACKER-only, and so is the reconcile: a volunteer has the lead queue instead. */
+  const isHacker = (user) => !!user && (user.role === 'HACKER' || user.kind === 'HACKER');
+
+  N.onEvent('session:handover', (user) => {
     state.ticket = null;
+    // The previous occupant's GPS fix and their rate-limit, both of which outlive the
+    // ticket. A fix left behind is the worse of the two: the new user taps "I need help",
+    // fills the form faster than the browser returns a position, and the call goes out with
+    // somebody else's seat on it — so dispatch ranks responders against the wrong table
+    // while the person who needs help waits. The cooldown is only unfair.
+    state.coords = null;
+    state.geo = 'idle';
+    if (state.cooldown?.timer) clearInterval(state.cooldown.timer);
+    state.cooldown = null;
+    state.category = CATEGORIES[0].id;
     show('idle');
+    // And ask the server what the new person's situation is, rather than showing them an
+    // idle form while a volunteer is already walking towards their table.
+    if (isHacker(user)) void restore(user);
   });
 
   N.registerTab({
@@ -346,5 +359,12 @@
   });
 
   // The same gate the tab uses, so nothing is fetched for an account that cannot see it.
-  N.onEvent('session:ready', ({ user }) => { if (user && (user.role === 'HACKER' || user.kind === 'HACKER')) void restore(user); });
+  // Both events, not just the first.
+  //
+  // `session:ready` fires once, at boot. A hacker who signs in afterwards — a badge scan, a
+  // claim code, the ordinary path at a registration desk — got no reconcile at all, so the
+  // tab showed the idle form while their DISPATCHED ticket sat live on the server. Pressing
+  // "I need help" then raised a second call and sent a second volunteer to the same table.
+  N.onEvent('session:ready', ({ user }) => { if (isHacker(user)) void restore(user); });
+  N.onEvent('session', (user) => { if (isHacker(user) && !state.ticket) void restore(user); });
 })();

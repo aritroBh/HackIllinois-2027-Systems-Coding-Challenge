@@ -42,7 +42,19 @@ SMTP down is the same. The event has never depended on one way in.
 
 **Revocation** is a version number on the account, checked against a sixty-second cache. A
 revoked session dies within a minute across the whole process without a database read per
-request.
+request. A demotion is the same mechanism seen from the other side, and it has to bite on a
+socket that is already open: the presence service is told to forget the account's cached facts
+and treats "not yet re-read" as *not a lead* until the refresh lands, because losing a
+privilege has to be immediate even though gaining one can wait.
+
+**Signing out is not the only handover.** These are shared laptops, and people close the lid.
+Anything a departing account leaves on the device is cleared on sign-out *and* whenever the
+browser changes hands without one — the remembered SOS ticket, the face drawn from a
+photograph, the sticker book, the service-worker copy of the trainer card (the worker
+acknowledges the delete, so the page waits for it rather than racing its own reload), the
+presence socket, and every copy of those held in memory by a tab that is still open. The
+device preference for lite mode is deliberately kept: it is a fact about the laptop, not about
+the person.
 
 ---
 
@@ -94,15 +106,27 @@ where no limiter applies and gets two confirmed and forty-eight waitlisted, ever
 1. The volunteer's phone asks for a token for their shift. The server returns an HMAC over
    (shift, person, time slice) that expires in seconds.
 2. A desk scanner reads it and POSTs it with the scanner's coordinates. The server checks the
-   signature, the expiry, the geofence, and a replay store.
-3. A photograph of somebody's screen is worthless: the token has rotated, and if it has not,
+   signature, the expiry, the geofence, a replay store — and **the clock**: a scan is accepted
+   only within half an hour either side of the shift. The token binds a person to a shift and
+   to a thirty-second slice, and the geofence binds the scan to a place, but until that window
+   existed nothing tied any of it to the shift actually happening: a volunteer confirmed for
+   tomorrow could mint a token today, stand at the venue, check in and check out for the full
+   award, having worked nothing.
+3. **The desk, not the person.** Minting a token and redeeming one are different privileges:
+   the scan is `requireRole('SHIFT_LEAD')`, so the volunteer being checked in cannot present
+   their own token to their own scan. The scanner's free-text id is still recorded, but the
+   answer to "who did this" comes from the session beside it.
+4. A photograph of somebody's screen is worthless: the token has rotated, and if it has not,
    it has already been spent. Tampering with a character produces `INVALID_SIGNATURE`, not a
    confusing failure.
-4. **Check-out pays.** The award is the shift's karma times its surge multiplier, computed
+5. **Check-out pays.** The award is the shift's karma times its surge multiplier, computed
    against the moment the volunteer *arrived* rather than the moment they left, so nobody is
    paid the rate the shift decayed to while they worked. It is then scaled by time served:
    a full hour earns the full award and a one-minute presence earns a sixtieth of it.
-5. Check-out is idempotent. Ten simultaneous requests settle it once and pay once.
+6. Check-out is idempotent. Ten simultaneous requests settle it once and pay once — and ten
+   simultaneous *check-ins* produce one attendance, because `CheckIn.registrationId` carries a
+   unique index. Ten distinct valid tokens is not a replay, so nothing else would have caught
+   it.
 
 **Worth knowing:** check-out is final. The registration moves to `COMPLETED` and the token
 endpoint refuses it, so a volunteer who steps out and scans back in is refused and needs a
@@ -134,7 +158,17 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
    because "Table 9, back left" is exactly what the redaction exists to remove.
 5. **Nobody answering** is the failure that matters. A ticket unacknowledged for three minutes
    escalates to the floor announcement channel — redacted, because that channel is public —
-   with the full ticket going to leads.
+   with the full ticket going to leads. A reassigned ticket can escalate again: the sweep
+   filters on `escalatedAt`, so reassignment clears it along with the other timestamps.
+6. **Coming back to it.** The hacker's browser remembers the ticket, stamped with whose it is,
+   and reconciles against `GET /me/sos` on every sign-in — which answers with their own live
+   call or `null`. The `null` is the important half: without it, a ticket that was resolved
+   while the tab was shut came back stuck at `DISPATCHED`, a state with no Cancel and no
+   Clear, and the device could never raise another call.
+7. **What dispatch costs to ask.** Every dispatch writes one audit row naming the account that
+   asked, and a non-lead is told a distance bucketed to 25 m and derived from the *published*
+   position, not the exact one — a range quoted finely enough, from three chosen points, is a
+   trilateration of somebody the fuzz was supposed to protect.
 
 ---
 
@@ -194,10 +228,24 @@ over every geometry generator and a reproducibility rebuild.
 
 ## What runs on a timer
 
-One scheduler module (`src/scheduler.ts`), one interval, several jobs: the no-show sweep that
-resets streaks, the SOS escalation, raid windows opening and closing, and the presence roster
-refresh. It is deliberately a single process — the event runs one instance, and a leader lock
-is documented as the path to a second rather than built for one that does not exist.
+One scheduler module (`src/scheduler.ts`), one interval, three jobs, and this list is the
+whole of it:
+
+| Job | Every | What it does |
+|---|---|---|
+| `sos-escalation` | 30 s | A dispatched ticket nobody has acknowledged for three minutes is shouted about once — redacted on the public channel, in full to leads. |
+| `presence-sse-sweep` | 30 s | The SSE fallback has no socket to close, so a client that stops posting is reaped on a timer. |
+| `raid-windows` | 30 s | Announces a raid window opening and closing, once each. |
+
+It is deliberately a single process — the event runs one instance, and a leader lock is
+documented as the path to a second rather than built for one that does not exist.
+
+This paragraph used to name a no-show sweep that resets streaks and a presence roster refresh,
+and neither is a scheduled job: no no-show sweep exists at all, and the roster refresh is a
+lazy re-read inside the presence service rather than something on this timer. It also named
+raid windows, which *was* wrong until the ticker was given a caller — `RaidService.tick` had
+none for the whole of M6. The table above is generated from nothing; it is checked instead, by
+`scripts/checkPlanGates.sh`, which asserts these three names are registered.
 
 ## What to watch during the event
 

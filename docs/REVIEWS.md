@@ -478,3 +478,70 @@ running demo:
   `nexus.lite.v1` — a device preference, not a fact about a person — in place.
 - The service worker deletes the cached trainer card and acknowledges on the port, so the
   `await` in `logout` is a real handshake rather than a timeout.
+
+---
+
+## Round eight — reviewing round seven's fixes, 2026-09-06
+
+The pattern from round seven held, and so did its lesson: **nearly every finding this round
+was in code written the round before.** Three reviewers, ten findings, eight of them mine
+from round seven. Read-only on one scratch copy, hash verified identical afterwards.
+
+### The one that mattered
+
+All three found it independently. `GET /me/sos` — the route added in round seven to unstick a
+hacker whose ticket settled while their tab was shut — was gated on `requireAccount` rather
+than `requireSession`. In the shipped `AUTH_MODE=legacy` posture an "account" can be a
+`?volunteerId=` in the query string, and account ids are public: the unauthenticated
+leaderboard hands them out.
+
+So the route returned a named person's live `tableLocation` and `category` — where they are
+sitting right now, and whether they called for medical help — to a caller with no cookie and
+no audit row. Even `null` versus a ticket is an oracle for whether somebody is in trouble.
+
+The same file already nulls the email for a claimed identity, `listBeacons` already withholds
+a cooldown from one, and `GET /presence` already uses `requireSession`. The pattern was known
+and the new route missed it, which is the most ordinary way a hole gets opened: not by
+disagreeing with the rule, but by writing something new next to it.
+
+### The rest
+
+| Finding | Source | Fix |
+|---|---|---|
+| `GET /me/sos` answered a claimed identity with a live distress call's seat and category. | muse, opencode, agy | (this round) |
+| The new rival-gym check read "no faction" as "not a rival", so the one account that had never picked a side could buff every side — `faction` defaults to null and only a gym battle binds it. | muse, opencode | (this round) |
+| `setPlayerSprite(null)` threw on `source.width`, into a `catch` that assumed the renderer was down — so the handover reset never uploaded the default face and the previous user's photograph kept walking around the map. | agy | (this round) |
+| The SOS handover cleared the ticket and kept the previous occupant's GPS fix, so the next person's call went out with somebody else's seat on it. Their 429 cooldown carried over too. | opencode | (this round) |
+| The SOS view reconciled only on `session:ready`, which fires once at boot — so a hacker signing in at a registration desk saw an idle form while their DISPATCHED ticket sat live, and "I need help" raised a second call to the same table. | agy | (this round) |
+| Nothing handed the presence socket over: it kept publishing the previous account's position, and `api.start()` refuses while `mode !== 'off'`, so the new user could never connect. One ghost, one invisible person. | muse | (this round) |
+| The creator's unsaved photograph and palette previews survived the handover in memory, so pressing Keep wrote the previous person's face into the new account's avatar. | muse | (this round) |
+| Me and Quests repainted the new name over the previous account's shifts, inventory and **live attendance token** — a credential a scanner accepts — until the fetch returned. Quests also kept a running camera stream. | muse | (this round) |
+| `verify.sh`'s new frontend glob printed its count and never asserted it, so a scan that found zero files would have passed green. | muse | (this round) |
+| The `restore()` docblock still described the round-six staff fetch it no longer makes. | agy | (this round) |
+
+### What this round says about the loop
+
+Round seven's fixes were good fixes and they opened one serious hole and seven smaller ones.
+That is not an argument against fixing things; it is an argument for the rule that produced
+this round — *review the last round's changes first* — and for the discipline that every fix
+carries a test that fails without it, which is what stopped any of these from being the second
+time the same mistake was made.
+
+### The M4b soak, actually run
+
+`docs/PRESENCE.md` has described how to run the presence soak since M4b without recording a
+run. It has now been run, and two things about it cost an hour to learn.
+
+Provisioning settles at about thirty accounts a minute, so a 1,200-client run is forty
+minutes of setup before a sixty-second measurement. My first explanation for that was the
+credential limiter, and I had written it into the doc before checking — the harness's own
+comment names the real cause, which is the desk session's 90-mutations-per-minute bucket on
+`POST /volunteers`. The difference matters: that bucket is keyed on the *account*, so
+`TRUSTED_EGRESS_CIDRS` cannot widen it, and a reader who believed my first version would have
+spent the evening editing an allow-list that was never going to help. Corrected before it
+shipped, and recorded here because it is the same defect class this log is full of — a
+confident comment about a mechanism nobody re-read.
+
+The second: `--url localhost` resolves to `::1` first on macOS while `TRUSTED_EGRESS_CIDRS`
+is IPv4-only, so the two together silently leave the *stream* ceilings on the untrusted path.
+Use the IPv4 literal. Both notes are now in `docs/PRESENCE.md`.

@@ -87,7 +87,11 @@ check "domain bus has call sites"       "test \$(grep -rl 'domainEvents.emit' sr
 check "quests, stickers, raids, booths" "test -f src/services/quest.service.ts -a -f src/services/sticker.service.ts -a -f src/services/raid.service.ts -a -f src/services/booth.service.ts"
 check "game router mounted"             "grep -q \"'/game'\" src/routes/v1/index.ts"
 check "raid multiplier applied"         "grep -q 'RaidService.multiplierAt' src/services/karma.service.ts"
-check "scheduler runs the tickers"      "test -f src/scheduler.ts"
+# Named jobs, not a file. See the note at the top of this script: as `test -f src/scheduler.ts`
+# this passed green for the whole of M6, while the raid ticker it was about had no caller.
+check "scheduler registers its jobs"    "npx tsx -e \"import('./src/scheduler').then(m => { const n = m.schedulerStats().map(j => j.name); process.exit(['sos-escalation','presence-sse-sweep','raid-windows'].every(w => n.includes(w)) ? 0 : 1); })\""
+check "economy wires raid enrolment"    "grep -q 'RaidService.subscribe()' src/economy/wiring.ts"
+check "boot warms the game catalogs"    "grep -q 'BoothService.warm' src/economy/wiring.ts && grep -q 'QuestService.warm' src/economy/wiring.ts"
 
 echo "M7 — renderer fidelity"
 check "crown recipes data-driven"       "test -d design/hand/crowns && test \$(ls design/hand/crowns/*.json | wc -l) -ge 14"

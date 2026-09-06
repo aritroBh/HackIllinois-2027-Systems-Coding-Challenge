@@ -33,7 +33,14 @@
 
   // Bump VERSION whenever the shell list or the caching rules change. Old caches
   // are deleted on activate, so a bump is also the eviction mechanism.
-  const VERSION = 'v1';
+  //
+  // `v2`: the shell list gained the nine scripts the per-tab split had left out, and the
+  // clear-card handler learned to acknowledge. Not bumping is not cosmetic — the shell is
+  // served cache-first, so an installed worker keeps handing the page the JS it cached at
+  // install time, and a `fetch(url, {cache: 'reload'})` does not get past it either. That is
+  // how it should behave for a user on a train; it is also how a developer spends twenty
+  // minutes testing code the browser is not running.
+  const VERSION = 'v2';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
