@@ -542,6 +542,18 @@ export class SOSService {
     //
     // Checked before the assignee rule so that the message is the true reason: a creator who
     // has somehow also been dispatched to their own ticket is still refused here.
+    //
+    // What this does NOT close, said plainly: one person holding two accounts. Somebody with a
+    // hacker badge and a volunteer badge can raise a ticket on one and collect on the other,
+    // because these are two different account ids and nothing here links them to a human.
+    // Closing it properly needs identity linking the event does not have — a badge and an SSO
+    // login are not tied to each other — and every heuristic substitute (same device, same
+    // address, same name) refuses honest people to catch a rare dishonest one.
+    //
+    // It is bounded rather than open: the bounty is drawn from the raiser's daily budget, so
+    // the trade costs them exactly what it earns the other account, and both halves leave a
+    // row in `bountyLedger` and `karmaLedger` against a timestamp. It is auditable after the
+    // fact, which for a thirty-six hour event with a leaderboard is the proportionate answer.
     if (ticket.createdById && sameId(ticket.createdById, volunteerId)) {
       throw ApiError.forbidden('You cannot resolve a ticket you raised yourself.');
     }

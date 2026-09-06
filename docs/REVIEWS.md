@@ -128,3 +128,36 @@ must be forwarded to the client bus and every forwarded name must be one the ser
 
 Live after the fixes: 208 tests, five consecutive clean runs, `scripts/verify.sh` green, the
 pack rebuild byte-reproducible across runs.
+
+
+## Round two — a re-review of the round-one fixes
+
+The same three reviewers, on the diff that closed the previous round, against a fresh scratch
+copy. The bar was different: not "is this code correct" but "is each of these fifteen claimed
+fixes actually a fix, and did it introduce anything new". That is the round that found the
+most, because a fix that moves a bug rather than removing it reads as correct.
+
+| Finding | Raised by | Verdict | Fix |
+|---|---|---|---|
+| The middle rung of the load ladder left thirty neighbours in neither the rows nor the counts — the previous fix handled the top and bottom rungs and reproduced the bug in the middle | opencode, agy | confirmed | the cohort is built with the effective row budget, so its counts exclude exactly what is sent; the second count list is gone and a test asserts rows + counts accounts for everybody at every rung |
+| The dispatch search ignored fuzz displacement: cells are indexed by the published position and ranked by the exact one, so somebody can be eighteen metres nearer than their shell implies | agy | confirmed | the floor allows for the pack's own fuzz grid; the existing fuzz test did not catch it because it set the published position equal to the real one, and now does not |
+| A ticket nobody could be charged for still carried a payable bounty — a creatorless ticket in legacy mode, or a pack with the budget set to zero | opencode | confirmed | both file the ticket and attach no reward; the model's minimum of fifty made "no reward" unrepresentable, and the range belongs at the API boundary |
+| Two simultaneous first-of-day tickets raced the ledger upsert and one got a 500 | opencode | confirmed | duplicates branch by collection as the plan says; twenty-way contention then exhausted five retries, so the bound is twelve with full jitter and genuine exhaustion is a typed 409 |
+| A demotion took up to thirty seconds, not a tick: the per-tick refresh reads a cache with a life of its own | opencode | confirmed | the role routes invalidate it |
+| The avatar service kept `ownerId` optional, so a future caller could reintroduce the wrong-row takedown the routes were fixed to prevent | opencode | confirmed | required |
+| The crown-suppression guard was dead three times over and its comment promised protection it could not deliver | opencode | confirmed | removed, with the real reason stated: monuments never reach the tile building list |
+| `?kind=ALL` let any signed-in volunteer enumerate hacker accounts | opencode | confirmed | lead-gated |
+| The budget-exhausted message suggested raising a ticket without a bounty, which every layer rejects | agy | confirmed | reworded to something the reader can act on |
+| The event checker's header claimed more than it checks | opencode | confirmed | scoped to the emit-forward-subscribe chain it actually walks |
+| `hash01`'s quantum is centimetres, not millimetres, because its callers pass world units | opencode | confirmed | one word |
+| One human holding two accounts can raise on one and collect on the other | agy | **accepted, not fixed** | closing it needs identity linking the event does not have, and every heuristic substitute refuses honest people to catch a rare dishonest one. It is bounded by the raiser's daily budget and leaves a row in both ledgers, so it is auditable rather than invisible. Stated in the code beside the guard it is a limit of. |
+| A crash between a booth scan's insert and its award strands the bounty | opencode | **accepted, not fixed** | the once-only guarantee is the important half and is sound; recovering a crashed award needs an outbox, which is a larger change than the window justifies |
+
+Writing the tests for these found three more that no reviewer saw: the shell scan walked the
+whole square each ring rather than its perimeter, which is O(R³) and made one dispatch on an
+empty campus nearly eight million cell lookups; a zero row budget popped an empty array and
+read past its end; and two edits from the previous round had silently not applied, one of them
+a security guard reverted by a snapshot restored during an A/B check.
+
+Both accepted findings are recorded here rather than closed silently, because a reader who
+finds them later should be able to tell a decision from an oversight.
