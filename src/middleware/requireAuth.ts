@@ -38,6 +38,18 @@ import { ApiError } from '../common/errors/apiError';
  * Deployments handling real attendance data should set REQUIRE_AUTH=true
  * with a strong ORGANIZER_SECRET.
  */
+/**
+ * Constant-time check of a presented organiser secret, independent of `REQUIRE_AUTH`.
+ * Used by the claim-code bootstrap route, which must work before any session exists but
+ * must never accept a wrong secret just because the legacy flag is off.
+ */
+export function organizerSecretMatches(presented: unknown): boolean {
+  if (typeof presented !== 'string' || presented.length === 0) return false;
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(env.ORGANIZER_SECRET, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function requireOrganizerAuth(req: Request, _res: Response, next: NextFunction): void {
   if (!env.REQUIRE_AUTH) {
     next();

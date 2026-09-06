@@ -129,7 +129,9 @@ if (parsedEnv.data.NODE_ENV === 'production') {
     console.error('❌ Refusing to boot: QR_HMAC_SECRET is the committed default. Set a strong secret.');
     process.exit(1);
   }
-  if (parsedEnv.data.REQUIRE_AUTH && parsedEnv.data.ORGANIZER_SECRET === 'waveshift_change_me_in_production') {
+  // Always in production (not only under REQUIRE_AUTH): the secret is also the bootstrap
+  // credential for printing badge claim codes.
+  if (parsedEnv.data.ORGANIZER_SECRET === 'waveshift_change_me_in_production') {
     console.error('❌ Refusing to boot: ORGANIZER_SECRET is the committed default. Set a strong secret.');
     process.exit(1);
   }

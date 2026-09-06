@@ -122,6 +122,10 @@ const ANONYMOUS_ALLOW = new Set<string>([
   'POST /auth/magic',
   'POST /auth/adonix',
   'POST /auth/dev-login',
+  // Bootstrap: printing the first badge codes happens before anyone has a session. The
+  // route itself demands the organiser secret (checked regardless of mode).
+  'POST /auth/claim-codes',
+  'POST /auth/claim-codes/bulk',
   'GET /content',
 ]);
 

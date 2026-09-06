@@ -254,6 +254,19 @@ describe('AUTH_MODE=required', () => {
     expect(token.status).toBe(403);
   });
 
+  it('claim-code bootstrap works anonymously with the organiser secret and only with it', async () => {
+    const vol = await makeVolunteer();
+    const ok = await request(app)
+      .post('/api/v1/auth/claim-codes')
+      .set('X-Organizer-Secret', env.ORGANIZER_SECRET)
+      .send({ accountId: vol.id });
+    expect(ok.status).toBe(201);
+    const wrong = await request(app).post('/api/v1/auth/claim-codes').set('X-Organizer-Secret', 'nope').send({ accountId: vol.id });
+    expect(wrong.status).toBe(403);
+    const none = await request(app).post('/api/v1/auth/claim-codes').send({ accountId: vol.id });
+    expect(none.status).toBe(401);
+  });
+
   it('the model refuses an incoherent kind/role pair', async () => {
     await expect(Volunteer.create({ name: 'Bad', kind: AccountKind.HACKER, role: VolunteerRole.SHIFT_LEAD })).rejects.toThrow(/Incoherent account/);
   });

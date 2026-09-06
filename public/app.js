@@ -13,7 +13,9 @@ let currentQrToken = null;
 let currentQrVolunteerId = null;
 let currentQrShiftId = null;
 let qrCountdownTimer = null;
-let currentVolunteerFaction = 'TEAM_KERNEL';
+// The session user's faction when signed in; the picker still overrides it
+// locally until PATCH /me lands in M3. Re-synced on the `session` event below.
+let currentVolunteerFaction = window.Nexus?.session?.user?.faction || 'TEAM_KERNEL';
 let gymsCache = [];
 let hackStopsCache = [];
 let userInventoryCache = [];
@@ -85,11 +87,20 @@ function playerCoords() {
  * with no indication why.
  */
 function actingVolunteer() {
+  const u = window.Nexus?.session?.user;
+  if (u) return sessionAsVolunteer(u);
+  // Legacy fallback — dies in M5 with the role router: with no session (the
+  // server in AUTH_MODE=legacy and no dev-login), act as the first roster entry.
   if (volunteersCache.length === 0) {
     logChaosTerminal('[ERROR] No volunteers loaded yet — wait for the roster to sync.');
     return null;
   }
   return volunteersCache[0];
+}
+
+/** `/me` speaks `id`/`displayName`; the roster code below speaks `_id`/`name`. */
+function sessionAsVolunteer(u) {
+  return { ...u, _id: u.id, name: u.displayName || u.name || 'Trainer' };
 }
 const mapColorOf = (f) => (f === 'NEUTRAL' || !FACTION[f] ? MAP_NEUTRAL : FACTION[f].color);
 
@@ -209,24 +220,25 @@ const logQrTerminal = (msg) => writeTerminal('qr-terminal', msg);
  * Navigation
  * ------------------------------------------------------------------ */
 
-function switchTab(tabId) {
-  document.querySelectorAll('.tab-content').forEach((tab) => tab.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach((btn) => btn.classList.remove('active'));
-
-  document.getElementById(tabId)?.classList.add('active');
-  // Match on data-tab, not the onclick attribute: the shell is wired through the
-  // delegated data-action map, so no tab button carries an inline handler to read.
-  document.querySelector(`.tab-btn[data-tab="${tabId}"]`)?.classList.add('active');
-
-  if (tabId === 'tab-qr' && shiftsCache.length > 0 && !currentQrShiftId) setupDefaultQr();
-  if (tabId === 'tab-campus') bootCampus();
-  if (tabId === 'tab-pokeshift') {
-    loadGymsData();
-    loadHackStopsData();
-    loadUserInventory();
-  }
-  window.game?.onTabChange(tabId);
-}
+/**
+ * The six shell tabs, registered with the Nexus registry (nexus.js renders the
+ * nav from it and owns activation — `switchTab` is gone; `Nexus.showTab(id)`
+ * replaces it and `window.switchTab` survives one release as a warning alias).
+ * `roles` stays empty until the role router lands in M5: everyone sees every tab.
+ */
+Nexus.registerTab({ id: 'tab-shifts', label: 'War Room', order: 10 });
+Nexus.registerTab({ id: 'tab-campus', label: 'Campus', order: 20, onShow: () => bootCampus() });
+Nexus.registerTab({
+  id: 'tab-pokeshift', label: 'Turf Wars', order: 30,
+  onShow: () => { loadGymsData(); loadHackStopsData(); loadUserInventory(); },
+});
+Nexus.registerTab({
+  id: 'tab-qr', label: 'Trainer', order: 40,
+  onShow: () => { if (shiftsCache.length > 0 && !currentQrShiftId) setupDefaultQr(); },
+});
+Nexus.registerTab({ id: 'tab-chaos', label: 'Chaos Lab', order: 50 });
+Nexus.registerTab({ id: 'tab-leaderboard', label: 'Ranks', order: 60 });
+Nexus.onEvent('tab', ({ id }) => window.game?.onTabChange(id));
 
 document.getElementById('sound-toggle-btn')?.addEventListener('click', (e) => {
   if (!window.soundEngine) return;
@@ -257,7 +269,7 @@ const CLICK_ACTIONS = {
   details: (el) => viewShiftDetails(el.dataset.id),
   dispatch: (el) => dispatchNearestVolunteer(el.dataset.id, el),
   encounter: (el) => (window.game ? window.game.openEncounter(el.dataset.id) : battleOrFortifyGym(el.dataset.id, el)),
-  locate: (el) => { switchTab('tab-campus'); focusMonument(el.dataset.venue); },
+  locate: (el) => { Nexus.showTab('tab-campus'); focusMonument(el.dataset.venue); },
   deploy: (el) => deployPowerUp(el.dataset.item, el),
   spin: (el) => spinHackStop(
     el.dataset.beacon,
@@ -273,7 +285,6 @@ const CLICK_ACTIONS = {
   // every tab and every demo button was inert while the dynamically rendered
   // buttons above kept working, because those go through this delegated listener.
   // Routing the shell through the same map fixes it without weakening the CSP.
-  tab: (el) => switchTab(el.dataset.tab),
   'adonix-sync': () => triggerAdonixSync(),
   'sos-simulate': () => simulateHackerSOS(),
   'sos-refresh': () => loadSOSTickets(),
@@ -289,22 +300,11 @@ const CLICK_ACTIONS = {
   'stops-refresh': () => loadHackStopsData(),
 };
 
-document.addEventListener('click', (event) => {
-  const el = event.target.closest('[data-action]');
-  if (!el) return;
-  const handler = CLICK_ACTIONS[el.dataset.action];
-  if (handler) {
-    handler(el);
-    return;
-  }
-  // Not in the shell map — try the PokeShift module, which owns the creator and
-  // encounter controls. If neither claims it the control is dead, and the whole
-  // point of this migration was that a dead control used to fail silently. An
-  // inline `onclick` at least threw a ReferenceError into the console; delegation
-  // swallows a typo, so say so out loud instead.
-  if (window.game?.handle(el.dataset.action, el)) return;
-  console.warn(`[app] no handler for data-action="${el.dataset.action}"`, el);
-});
+// The one delegated click listener lives in nexus.js; the map above is just
+// registered into it. (`tab` is registered by nexus.js itself.) Registration
+// order matters for `encounter`: game.js registered its own first, this one
+// wins and adds the no-renderer fallback.
+for (const [name, handler] of Object.entries(CLICK_ACTIONS)) Nexus.registerAction(name, handler);
 
 /**
  * Delegated `change` handling, for the same CSP reason as the click map above:
@@ -854,10 +854,9 @@ async function runConcurrencyBomb() {
   window.soundEngine?.playSurgeAlert();
 
   try {
-    const createRes = await fetch('/api/v1/shifts', {
+    const shiftData = await Nexus.api('/api/v1/shifts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: {
         title: 'Contested Pizza Station (HOT)',
         description: 'High contention shift to benchmark atomic locks',
         category: 'FOOD',
@@ -866,9 +865,8 @@ async function runConcurrencyBomb() {
         endTime: new Date(Date.now() + 7200000).toISOString(),
         capacity: CAPACITY,
         baseKarma: 150,
-      }),
+      },
     });
-    const shiftData = await createRes.json();
     const testShiftId = shiftData.data._id;
 
     // Fifty *distinct* contenders. Recycling the five seeded volunteers made
@@ -879,15 +877,15 @@ async function runConcurrencyBomb() {
     const stamp = Date.now();
     const workers = await Promise.all(
       Array.from({ length: WORKERS }, (_, i) =>
-        fetch('/api/v1/volunteers', {
+        Nexus.api('/api/v1/volunteers', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: {
             name: `Load Worker ${i + 1}`,
             email: `worker.${stamp}.${i}@bomb.test`,
             certifications: [],
-          }),
-        }).then((r) => r.json())
+          },
+          lenient: true,
+        })
       )
     );
     const workerIds = workers.filter((w) => w.success).map((w) => w.data._id);
@@ -900,14 +898,12 @@ async function runConcurrencyBomb() {
     const start = performance.now();
     const responses = await Promise.all(
       workerIds.map((volunteerId, i) =>
-        fetch('/api/v1/registrations', {
+        Nexus.api('/api/v1/registrations', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'idempotency-key': `concurrency_bomb_${stamp}_worker_${i}`,
-          },
-          body: JSON.stringify({ shiftId: testShiftId, volunteerId }),
-        }).then((r) => r.json())
+          headers: { 'idempotency-key': `concurrency_bomb_${stamp}_worker_${i}` },
+          body: { shiftId: testShiftId, volunteerId },
+          lenient: true,
+        })
       )
     );
     const elapsed = (performance.now() - start).toFixed(1);
@@ -954,8 +950,7 @@ async function simulateDropCascade() {
     logChaosTerminal(`[CHAOS] Cancelling registration for "${target.shiftId.title}"…`);
 
     const ownerId = target.volunteerId?._id ?? target.volunteerId;
-    const dropRes = await fetch(`/api/v1/registrations/${target._id}?volunteerId=${encodeURIComponent(ownerId)}`, { method: 'DELETE' });
-    const dropJson = await dropRes.json();
+    const dropJson = await Nexus.api(`/api/v1/registrations/${target._id}?volunteerId=${encodeURIComponent(ownerId)}`, { method: 'DELETE', lenient: true });
 
     if (dropJson.success) {
       if (dropJson.data.promoted) {
@@ -973,8 +968,7 @@ async function simulateDropCascade() {
 async function resolveCyclicTrade() {
   logChaosTerminal('[TARJAN] Searching the trade graph for circular exchange dependencies…');
   try {
-    const res = await fetch('/api/v1/swaps/cycles/resolve', { method: 'POST' });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/swaps/cycles/resolve', { method: 'POST', lenient: true });
     if (json.success) {
       const cycles = json.data.discoveredCycles;
       logChaosTerminal(`[TARJAN] Discovered ${cycles.length} elementary cycle(s).`);
@@ -1022,12 +1016,7 @@ async function setupDefaultQr() {
 async function refreshQrToken() {
   if (!currentQrVolunteerId || !currentQrShiftId) return;
   try {
-    const res = await fetch('/api/v1/attendance/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ volunteerId: currentQrVolunteerId, shiftId: currentQrShiftId }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/attendance/token', { method: 'POST', body: { volunteerId: currentQrVolunteerId, shiftId: currentQrShiftId }, lenient: true });
 
     if (json.success) {
       currentQrToken = json.data.token;
@@ -1071,12 +1060,7 @@ async function simulateDeskScan() {
   if (!currentQrToken) { logQrTerminal('No active token to scan.'); return; }
   logQrTerminal('Scanning token at the check-in desk…');
   try {
-    const res = await fetch('/api/v1/attendance/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: currentQrToken, coordinates: DESK_COORDS }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/attendance/verify', { method: 'POST', body: { token: currentQrToken, coordinates: DESK_COORDS }, lenient: true });
     if (json.success) {
       logQrTerminal('[VERIFIED] Check-in accepted — volunteer status CHECKED_IN.');
       window.soundEngine?.playSonarPing();
@@ -1094,12 +1078,7 @@ async function simulateReplayAttack() {
   if (!currentQrToken) return;
   logQrTerminal('Re-submitting an already-scanned token…');
   try {
-    const res = await fetch('/api/v1/attendance/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: currentQrToken, coordinates: DESK_COORDS }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/attendance/verify', { method: 'POST', body: { token: currentQrToken, coordinates: DESK_COORDS }, lenient: true });
     if (!json.success && json.error === 'REPLAY_ATTACK_DETECTED') {
       logQrTerminal('[VERIFIED] Replay detected and rejected.');
     } else {
@@ -1118,12 +1097,7 @@ async function quickSignUp(shiftId, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
   try {
-    const res = await fetch('/api/v1/registrations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shiftId, volunteerId: vol._id }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/registrations', { method: 'POST', body: { shiftId, volunteerId: vol._id }, lenient: true });
     if (json.success) {
       logChaosTerminal(`[EVENT] ${vol.name} claimed a slot (status ${json.status})`);
       window.fx?.burstAt(btn, json.status === 'CONFIRMED' ? '#34f5a0' : '#ffb020', 26);
@@ -1189,12 +1163,7 @@ async function simulateHackerSOS() {
   const pick = SOS_SAMPLES[Math.floor(Math.random() * SOS_SAMPLES.length)];
 
   try {
-    const res = await fetch('/api/v1/sos/tickets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pick),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/sos/tickets', { method: 'POST', body: pick, lenient: true });
     if (json.success) {
       logSosTerminal(`[SOS] Simulated ticket ${json.data._id.slice(-6)} raised at ${pick.tableLocation}`);
       loadSOSTickets();
@@ -1209,11 +1178,7 @@ async function simulateHackerSOS() {
 async function dispatchNearestVolunteer(ticketId, btn) {
   logSosTerminal(`[DISPATCH] Computing Haversine distances for ticket ${ticketId.slice(-6)}…`);
   try {
-    const res = await fetch(`/api/v1/sos/tickets/${ticketId}/dispatch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const json = await res.json();
+    const json = await Nexus.api(`/api/v1/sos/tickets/${ticketId}/dispatch`, { method: 'POST', lenient: true });
     if (json.success) {
       const vol = json.data.dispatchedVolunteer;
       const dist = json.data.distanceMeters;
@@ -1236,8 +1201,7 @@ async function triggerAdonixSync() {
   logChaosTerminal('[ADONIX] Synchronising the official schedule…');
 
   try {
-    const res = await fetch('/api/v1/adonix/sync', { method: 'POST' });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/adonix/sync', { method: 'POST', lenient: true });
     if (json.success) {
       logChaosTerminal(`[ADONIX] ${json.data.syncedCount} shifts synchronised.`);
       fetchShifts();
@@ -1291,17 +1255,16 @@ async function battleOrFortifyGym(gymId, btn) {
   }
 
   try {
-    const res = await fetch(`/api/v1/pokeshift/gyms/${gymId}/battle`, {
+    const json = await Nexus.api(`/api/v1/pokeshift/gyms/${gymId}/battle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: {
         volunteerId: vol._id,
         faction: currentVolunteerFaction,
         power: 150,
         coordinates: playerCoords() ?? { latitude: gym.latitude, longitude: gym.longitude },
-      }),
+      },
+      lenient: true,
     });
-    const json = await res.json();
     if (json.success) {
       const captured = json.data.action === 'CAPTURED';
       if (captured) window.soundEngine?.playGymVictoryFanfare();
@@ -1335,12 +1298,7 @@ async function spinHackStop(beaconId, lat, lon, btn) {
   window.soundEngine?.playStopSpin();
 
   try {
-    const res = await fetch(`/api/v1/pokeshift/hackstops/${beaconId}/spin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ volunteerId: vol._id, coordinates: playerCoords() ?? { latitude: lat, longitude: lon } }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api(`/api/v1/pokeshift/hackstops/${beaconId}/spin`, { method: 'POST', body: { volunteerId: vol._id, coordinates: playerCoords() ?? { latitude: lat, longitude: lon } }, lenient: true });
 
     if (json.success) {
       const item = json.data.itemDetails;
@@ -1398,26 +1356,22 @@ function closeLootModal() {
   document.getElementById('loot-drop-modal')?.classList.remove('open');
 }
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    closeLootModal();
-    if (window.game?.closeEncounter && document.getElementById('encounter')?.classList.contains('open')) window.game.closeEncounter();
-    if (document.body.classList.contains('cinema')) toggleCinema(false);
-  }
-  // Gym cards are role=button articles; make them keyboard-operable.
-  if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[data-action][role="button"]')) {
-    e.preventDefault();
-    e.target.click();
-  }
+// Escape reaches here only when no Nexus dialog is open (nexus.js closes the
+// topmost dialog itself — the encounter is one). Enter/Space on role=button
+// cards is also handled in nexus.js now.
+Nexus.onEvent('escape', () => {
+  closeLootModal();
+  if (document.body.classList.contains('cinema')) toggleCinema(false);
 });
 document.getElementById('loot-drop-modal')?.addEventListener('click', (e) => {
   if (e.target.id === 'loot-drop-modal') closeLootModal();
 });
 
 async function loadUserInventory() {
-  if (volunteersCache.length === 0) return; // startup ordering, not a user action
+  const me = window.Nexus?.session?.user ? sessionAsVolunteer(window.Nexus.session.user) : volunteersCache[0];
+  if (!me) return; // startup ordering, not a user action
   try {
-    userInventoryCache = await apiGet(`/api/v1/pokeshift/inventory/${volunteersCache[0]._id}`);
+    userInventoryCache = await apiGet(`/api/v1/pokeshift/inventory/${encodeURIComponent(me._id)}`);
     renderUserInventory();
     window.game?.renderTrainer();
   } catch (err) {
@@ -1431,12 +1385,7 @@ async function deployPowerUp(itemType, btn) {
   const targetGym = gymsCache[0];
 
   try {
-    const res = await fetch('/api/v1/pokeshift/inventory/use', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ volunteerId: vol._id, itemType, targetGymId: targetGym?._id }),
-    });
-    const json = await res.json();
+    const json = await Nexus.api('/api/v1/pokeshift/inventory/use', { method: 'POST', body: { volunteerId: vol._id, itemType, targetGymId: targetGym?._id }, lenient: true });
     if (json.success) {
       window.soundEngine?.playSonarPing();
       window.fx?.burstAt(btn, '#ffb020', 24);
@@ -1673,7 +1622,7 @@ function focusMonument(locationName, attempt = 0) {
       logChaosTerminal('[ERROR] Campus map unavailable — cannot locate that stronghold.');
       return;
     }
-    switchTab('tab-campus');
+    Nexus.showTab('tab-campus');
     setTimeout(() => focusMonument(locationName, attempt + 1), 900);
     return;
   }
@@ -1681,7 +1630,7 @@ function focusMonument(locationName, attempt = 0) {
   const mon = campus.getMonuments().find((m) =>
     hay.includes(m.venue.toLowerCase()) || hay.includes(m.name.toLowerCase()));
   if (!mon) return;
-  switchTab('tab-campus');
+  Nexus.showTab('tab-campus');
   campus.focus(mon.id, { dist: 42 });
   selectMonument(mon);
 }
@@ -1791,7 +1740,7 @@ function toggleCinema(force) {
     // to nothing focused.
     cinemaReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Make sure the map is the active view before going edge to edge.
-    if (!document.getElementById('tab-campus')?.classList.contains('active')) switchTab('tab-campus');
+    if (!document.getElementById('tab-campus')?.classList.contains('active')) Nexus.showTab('tab-campus');
     bootCampus();
     document.getElementById('campus-3d-canvas')?.focus?.();
     // A browser without WebGL2 would otherwise be left in an edge-to-edge
@@ -1811,6 +1760,7 @@ function paintWorldLabels(payload) {
   const { projectToScreen, monuments, hovered, dist, player } = payload;
   updateTelemetry(dist);
   window.game?.tick(payload);
+  Nexus.emit('frame', payload);
   const layer = document.getElementById('world-labels');
   if (!layer) return;
 
@@ -1885,11 +1835,35 @@ async function loadMonumentInfo() {
   }
 }
 
+/** Sign-in / sign-out at runtime: re-point everything that keys on "me". */
+function onSessionChange(user) {
+  if (user?.faction && user.faction !== currentVolunteerFaction) {
+    currentVolunteerFaction = user.faction;
+    const sel = document.getElementById('user-faction-selector');
+    if (sel && [...sel.options].some((o) => o.value === user.faction)) sel.value = user.faction;
+  }
+  if (user) {
+    loadUserInventory();
+    logChaosTerminal(`[EVENT] Signed in as ${user.displayName || user.id}`);
+  }
+  renderGymsList();
+  window.game?.onFactionChange();
+}
+
 async function init() {
   loadMonumentInfo(); // independent of the API; no need to await
   hydrateSprites();
   window.Sprites?.ready.then(() => hydrateSprites()).catch(() => {});
   try { await window.game?.init(); } catch (err) { console.warn('Game layer failed to init:', err); }
+  // One round trip to /me (plus dev-login in the demo) before the first
+  // fetch, so inventory and the trainer card belong to the right account.
+  const me = await Nexus.session.ready;
+  if (me?.faction) {
+    currentVolunteerFaction = me.faction;
+    const sel = document.getElementById('user-faction-selector');
+    if (sel && [...sel.options].some((o) => o.value === me.faction)) sel.value = me.faction;
+  }
+  Nexus.onEvent('session', onSessionChange);
   await fetchVolunteers();
   await fetchShifts();
   await fetchStats();

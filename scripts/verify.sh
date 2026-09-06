@@ -20,8 +20,14 @@ step "typecheck"
 npx tsc --noEmit
 
 step "frontend syntax"
-node --check public/app.js
+node --check public/nexus.js
+node --check public/session.js
+node --check public/views/onboarding.js
+node --check public/sprites.js
 node --check public/fx.js
+node --check public/soundEngine.js
+node --check public/game.js
+node --check public/app.js
 node -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))" 2>/dev/null
 
 step "geometry winding audit"

@@ -1,0 +1,271 @@
+/**
+ * session — identity for the dashboard (plan A2 client side).
+ *
+ * Fills in `Nexus.session` and installs `Nexus.api`, the fetch wrapper every
+ * mutating request goes through so the CSRF header rides along. The session
+ * itself is an HttpOnly cookie this script never sees; the only cookie read
+ * here is the JS-readable CSRF nonce (`__Host-nexus_csrf`, or `nexus_csrf`
+ * over plain http in development).
+ *
+ * Boot order (all before `Nexus.session.ready` resolves):
+ *   0. An Adonix landing (`/dashboard/auth/adonix?token=…`) has its query
+ *      token moved into the fragment immediately — fragments never reach the
+ *      server or its logs.
+ *   1. GET /me. 200 → signed in.
+ *   2. Else a `#claim=` / `#magic=` / `#adonix=` fragment is exchanged, then
+ *      cleared from the URL.
+ *   3. Else, when the server is in legacy mode or lists the `dev` provider,
+ *      dev-login as the first volunteer so `npm run demo` stays zero-setup.
+ *   4. Else `session:required` fires and onboarding takes over.
+ *
+ * Every auth endpoint may 404 while the backend lands: that is treated as
+ * legacy mode with no session, and the shell keeps working exactly as before.
+ */
+
+(function () {
+  'use strict';
+
+  const N = window.Nexus;
+  if (!N) { console.error('[session] nexus.js must load first'); return; }
+
+  const API = '/api/v1';
+  const LANDING = '/dashboard/';
+
+  /* ------------------------------------------------------------------ *
+   * 0. Adonix landing: query → fragment, synchronously, before anything else
+   * ------------------------------------------------------------------ */
+
+  (function moveQueryTokenIntoFragment() {
+    const onLanding = /\/auth\/adonix\/?$/.test(location.pathname);
+    const q = new URLSearchParams(location.search);
+    const token = q.get('token') || q.get('jwt') || q.get('access_token');
+    if (!onLanding && !token) return;
+    const hash = token ? `#adonix=${encodeURIComponent(token)}` : location.hash;
+    try { history.replaceState(null, '', LANDING + hash); } catch { /* opaque origin */ }
+  })();
+
+  /* ------------------------------------------------------------------ *
+   * CSRF + fetch wrapper
+   * ------------------------------------------------------------------ */
+
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)(?:__Host-)?nexus_csrf=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  class ApiError extends Error {
+    constructor(message, { status = 0, code = 'UNKNOWN', details = null, body = null } = {}) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+      this.code = code;
+      this.details = details;
+      this.body = body;
+    }
+  }
+
+  /**
+   * Nexus.api(path, { method = 'GET', body, headers, lenient, signal })
+   *
+   * Same-origin fetch that JSON-encodes `body`, adds `X-CSRF-Token` to every
+   * non-GET, parses the `{ success, data, ... }` envelope and returns it whole
+   * (callers read `.data`, and the registration endpoint also puts `.status`
+   * beside `.success`). `success:false` or a non-2xx throws an ApiError with
+   * `.status` (HTTP) and `.code` (the server's `error` field). `lenient: true`
+   * returns the envelope instead of throwing — for callers that inspect
+   * rejections themselves, like the concurrency bomb tallying its losers.
+   */
+  async function api(path, { method = 'GET', body, headers = {}, lenient = false, signal } = {}) {
+    const url = path.startsWith('/') ? path : `${API}/${path}`;
+    const m = String(method).toUpperCase();
+    const h = { Accept: 'application/json', ...headers };
+    if (m !== 'GET' && m !== 'HEAD') {
+      h['Content-Type'] = h['Content-Type'] || 'application/json';
+      const token = csrfToken();
+      if (token) h['X-CSRF-Token'] = token;
+    }
+    const init = { method: m, credentials: 'same-origin', headers: h, signal };
+    if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
+
+    const res = await fetch(url, init);
+    const text = await res.text();
+    let json = null;
+    if (text) { try { json = JSON.parse(text); } catch { json = null; } }
+
+    if (!json || typeof json !== 'object') {
+      if (!res.ok) throw new ApiError(`${m} ${url} -> HTTP ${res.status}`, { status: res.status, code: `HTTP_${res.status}` });
+      json = { success: true, data: null }; // 202/204 with an empty body
+    }
+    Object.defineProperty(json, 'httpStatus', { value: res.status, enumerable: false });
+
+    if (json.success === false || !res.ok) {
+      if (lenient) return json;
+      throw new ApiError(json.message || json.error || `${m} ${url} -> HTTP ${res.status}`, {
+        status: res.status,
+        code: json.error || json.code || `HTTP_${res.status}`,
+        details: json.details ?? null,
+        body: json,
+      });
+    }
+    return json;
+  }
+
+  N.api = api;
+  N.ApiError = ApiError;
+
+  /* ------------------------------------------------------------------ *
+   * Providers
+   * ------------------------------------------------------------------ */
+
+  let providersCache = null;
+
+  /** `{ mode: 'legacy'|'required', providers: [...], available: boolean }`. 404 → legacy, unavailable. */
+  async function providers(force = false) {
+    if (providersCache && !force) return providersCache;
+    try {
+      const { data } = await api(`${API}/auth/providers`);
+      providersCache = {
+        mode: data?.mode === 'required' ? 'required' : 'legacy',
+        providers: Array.isArray(data?.providers) ? data.providers : [],
+        available: true,
+      };
+    } catch (err) {
+      if (err.status !== 404) console.warn('[session] providers unavailable:', err.message);
+      providersCache = { mode: 'legacy', providers: [], available: false };
+    }
+    N.flags.dev = providersCache.mode === 'legacy'
+      || providersCache.providers.some((p) => p.id === 'dev' && p.enabled);
+    return providersCache;
+  }
+
+  const hasProvider = (prov, id) => prov.providers.some((p) => p.id === id && p.enabled);
+
+  /* ------------------------------------------------------------------ *
+   * Session state
+   * ------------------------------------------------------------------ */
+
+  const session = N.session;
+
+  function setUser(account) {
+    const prev = session.user;
+    session.user = account || null;
+    if (prev !== session.user) N.emit('session', session.user);
+    return session.user;
+  }
+
+  /** Re-reads GET /me. 401 → signed out (not an error); anything else throws. */
+  session.refresh = async function refresh() {
+    try {
+      const { data } = await api(`${API}/me`);
+      return setUser(data?.account || null);
+    } catch (err) {
+      if (err.status === 401 || err.status === 404) return setUser(null);
+      throw err;
+    }
+  };
+
+  session.logout = async function logout({ reload = true } = {}) {
+    try { await api(`${API}/auth/logout`, { method: 'POST' }); } catch (err) { console.warn('[session] logout:', err.message); }
+    setUser(null);
+    N.emit('session:logout');
+    // Every cache in app.js was filled for the old account; a clean load is
+    // the honest reset rather than chasing each one.
+    if (reload) location.replace(LANDING);
+  };
+
+  session.providers = providers;
+
+  /* ------------------------------------------------------------------ *
+   * Exchanges
+   * ------------------------------------------------------------------ */
+
+  const EXCHANGE = {
+    claim: { path: `${API}/auth/claim`, field: 'code' },
+    magic: { path: `${API}/auth/magic`, field: 'token' },
+    adonix: { path: `${API}/auth/adonix`, field: 'token' },
+    dev: { path: `${API}/auth/dev-login`, field: 'accountId' },
+  };
+
+  /** POSTs a credential to its adapter, then refreshes /me. Returns the account. */
+  session.exchange = async function exchange(kind, value) {
+    const ex = EXCHANGE[kind];
+    if (!ex) throw new ApiError(`unknown provider "${kind}"`, { code: 'UNKNOWN_PROVIDER' });
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) throw new ApiError('Nothing to send.', { code: 'EMPTY_CREDENTIAL' });
+    await api(ex.path, { method: 'POST', body: { [ex.field]: kind === 'claim' ? trimmed.toUpperCase() : trimmed } });
+    const user = await session.refresh();
+    if (!user) throw new ApiError('Signed in, but /me says otherwise.', { code: 'SESSION_NOT_ESTABLISHED' });
+    N.emit('session:exchanged', { kind, user });
+    return user;
+  };
+
+  /** POST /auth/magic-link {email} → 202. */
+  session.requestMagicLink = (email) => api(`${API}/auth/magic-link`, { method: 'POST', body: { email: String(email || '').trim() } });
+
+  /** The `#claim=`, `#magic=`, `#adonix=` fragments — exactly those names. */
+  function readFragment() {
+    const m = location.hash.match(/^#(claim|magic|adonix)=(.+)$/);
+    if (!m) return null;
+    let value = m[2];
+    try { value = decodeURIComponent(value); } catch { /* keep raw */ }
+    return { kind: m[1], value };
+  }
+
+  function clearFragment() {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch { /* opaque origin */ }
+  }
+
+  /** `npm run demo`: sign in as the first volunteer when the server allows it. */
+  async function devAutoLogin() {
+    const { data } = await api(`${API}/volunteers`);
+    const first = Array.isArray(data) ? data[0] : null;
+    if (!first?._id) throw new ApiError('No volunteers seeded', { code: 'NO_VOLUNTEERS' });
+    await api(EXCHANGE.dev.path, { method: 'POST', body: { accountId: first._id } });
+    return session.refresh();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Boot
+   * ------------------------------------------------------------------ */
+
+  async function boot() {
+    const frag = readFragment();
+    let user = null;
+    let fragmentError = null;
+
+    try { user = await session.refresh(); } catch (err) { console.warn('[session] /me failed:', err.message); }
+
+    if (frag) {
+      // A fresh credential wins over whatever session the browser already had
+      // — scanning a badge on a shared laptop must sign *that* hacker in.
+      try {
+        user = await session.exchange(frag.kind, frag.value);
+      } catch (err) {
+        fragmentError = { kind: frag.kind, error: err };
+        console.warn(`[session] ${frag.kind} exchange failed:`, err.message);
+      } finally {
+        clearFragment();
+      }
+    }
+
+    const prov = await providers();
+
+    if (!user && (prov.mode === 'legacy' || hasProvider(prov, 'dev'))) {
+      try { user = await devAutoLogin(); } catch (err) {
+        if (err.status !== 404) console.info('[session] dev auto-login skipped:', err.message);
+      }
+    }
+
+    session._settle(user);
+    N.emit('session:ready', { user, providers: prov, fragment: frag, fragmentError });
+
+    if (fragmentError) N.emit('session:error', fragmentError);
+    if (!user && prov.mode === 'required') N.emit('session:required', prov);
+  }
+
+  boot().catch((err) => {
+    console.error('[session] boot failed:', err);
+    session._settle(null);
+    N.emit('session:ready', { user: null, providers: providersCache || { mode: 'legacy', providers: [], available: false }, fragment: null, fragmentError: null });
+  });
+})();

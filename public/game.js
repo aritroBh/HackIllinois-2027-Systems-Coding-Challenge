@@ -86,7 +86,10 @@
    * ------------------------------------------------------------------ */
 
   function syncFromCaches() {
-    const vol = (window.volunteersCache || [])[0];
+    // The signed-in account when there is one; the first roster entry is the
+    // legacy fallback that goes away with the role router in M5.
+    const u = window.Nexus?.session?.user;
+    const vol = u ? { name: u.displayName, karmaPoints: u.karmaPoints, hoursServed: u.hoursServed } : (window.volunteersCache || [])[0];
     if (vol) {
       state.name = vol.name || state.name;
       state.karma = Number(vol.karmaPoints) || 0;
@@ -546,9 +549,20 @@
         </div>
         <div class="jrpg msg"><div id="enc-msg">${msg}</div><span class="cursor">▼</span></div>
       </div>`;
-    host.classList.add('open');
-    host.querySelector('.cmd')?.focus({ preventScroll: true });
-    host.querySelector('.cmd.first')?.focus();
+    const initial = host.querySelector('.cmd.first') || host.querySelector('.cmd');
+    if (window.Nexus?.dialog) {
+      // Focus trap, Escape and return-focus come from the registry now.
+      // `returnFocus` is only honoured on first open; a re-render after a
+      // command keeps the original opener.
+      window.Nexus.dialog.open(host, {
+        returnFocus: state.encounter.returnFocus,
+        initialFocus: initial,
+        onClose: () => { state.encounter = null; },
+      });
+    } else {
+      host.classList.add('open');
+      initial?.focus({ preventScroll: true });
+    }
     window.soundEngine?.playSonarPing?.();
   }
 
@@ -581,7 +595,7 @@
       }
       case 'bag':
         closeEncounter();
-        if (typeof switchTab === 'function') switchTab('tab-qr');
+        if (window.Nexus) window.Nexus.showTab('tab-qr'); else if (typeof switchTab === 'function') switchTab('tab-qr');
         setTimeout(() => $('sticker-book')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
         break;
       case 'map':
@@ -596,7 +610,12 @@
   function closeEncounter() {
     const back = state.encounter?.returnFocus;
     state.encounter = null;
-    $('encounter')?.classList.remove('open');
+    const host = $('encounter');
+    if (window.Nexus?.dialog && host && window.Nexus.dialog.isOpen(host)) {
+      window.Nexus.dialog.close(host); // restores focus to the opener itself
+      return;
+    }
+    host?.classList.remove('open');
     if (back?.isConnected) back.focus({ preventScroll: true });
   }
 
@@ -646,6 +665,13 @@
     retro: () => toggleRetro(),
     place: () => { if (has('setPlayer')) { window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction }); applyPlayerSprite(); gateSpins(); toast('Dropped you on the Main Quad. WASD to walk.'); updateHud(true); } },
   };
+
+  // Same handlers, registered into the Nexus action registry (nexus.js owns
+  // the delegated listener). `handle` below stays for anything that still
+  // dispatches directly.
+  if (window.Nexus?.registerAction) {
+    for (const [name, fn] of Object.entries(ACTIONS)) window.Nexus.registerAction(name, fn);
+  }
 
   window.game = {
     state, init, renderTrainer, computeEarned, award, toast, tick,

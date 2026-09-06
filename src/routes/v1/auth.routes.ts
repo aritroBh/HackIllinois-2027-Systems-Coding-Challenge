@@ -14,7 +14,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { AuthController } from '../../controllers/auth.controller';
 import { validate } from '../../middleware/validate';
 import { requireAccount, requireRole } from '../../middleware/identity';
-import { requireOrganizerAuth } from '../../middleware/requireAuth';
+import { organizerSecretMatches } from '../../middleware/requireAuth';
+import { ApiError } from '../../common/errors/apiError';
 import { authExchangeLimiter } from '../../middleware/rateLimiter';
 import { env } from '../../config/env';
 import {
@@ -51,9 +52,13 @@ function organizerOrSecret(req: Request, res: Response, next: NextFunction): voi
     return;
   }
   if (typeof req.headers['x-organizer-secret'] === 'string') {
-    // requireOrganizerAuth passes through when REQUIRE_AUTH is off; in that (legacy) case
-    // the demo is open anyway, which matches the rest of the legacy contract.
-    requireOrganizerAuth(req, res, next);
+    // Checked regardless of AUTH_MODE/REQUIRE_AUTH: this is the bootstrap path before any
+    // session exists, so the secret itself is the whole gate.
+    if (organizerSecretMatches(req.headers['x-organizer-secret'])) {
+      next();
+      return;
+    }
+    next(ApiError.forbidden('Invalid organizer credentials.'));
     return;
   }
   requireRole('ORGANIZER')(req, res, next);

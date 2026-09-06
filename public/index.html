@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#13294b">
   <title>Nexus Quest · HackIllinois 2027</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Jersey+10&family=Pixelify+Sans:wght@400;600;700&family=VT323&display=swap" rel="stylesheet">
+  <!-- Fonts are self-hosted (public/fonts, OFL 1.1) so the shell needs no third-party request; see styles.css. -->
   <link rel="stylesheet" href="/dashboard/styles.css">
 </head>
 <body>
@@ -32,13 +30,15 @@
         <div class="rule-v" aria-hidden="true"></div>
         <button id="adonix-sync-btn" class="pb pb-patina pb-sm" data-action="adonix-sync">Sync Adonix</button>
         <button id="sound-toggle-btn" class="pb pb-ghost pb-sm" aria-label="Toggle audio cues" aria-pressed="true">Audio On</button>
+        <button id="session-btn" class="pb pb-ghost pb-sm" data-action="session" aria-label="Sign in">Sign in</button>
       </div>
     </div>
   </header>
 
   <!-- ============================== TABS =============================== -->
+  <!-- Rendered from Nexus.registerTab() by nexus.js; these buttons are the pre-script fallback. -->
   <nav class="tabs-nav" aria-label="Sections">
-    <div class="inner">
+    <div class="inner" role="tablist">
       <button class="pb tab-btn active" data-action="tab" data-tab="tab-shifts">War Room</button>
       <button class="pb tab-btn" data-action="tab" data-tab="tab-campus">Campus</button>
       <button class="pb tab-btn" data-action="tab" data-tab="tab-pokeshift">Turf Wars</button>
@@ -352,6 +352,11 @@
     </div>
   </div>
 
+  <!-- Order matters: nexus.js (registry) → session.js (identity, Nexus.api) → onboarding view,
+       then the shell. All classic scripts; campus3d.js / avatar.js are the only ES modules. -->
+  <script src="/dashboard/nexus.js"></script>
+  <script src="/dashboard/session.js"></script>
+  <script src="/dashboard/views/onboarding.js"></script>
   <script src="/dashboard/sprites.js"></script>
   <script src="/dashboard/fx.js"></script>
   <script src="/dashboard/soundEngine.js"></script>
