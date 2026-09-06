@@ -12,6 +12,7 @@ import mongoose, { Schema, Document } from 'mongoose';
  */
 export interface IReservationLock extends Document {
   key: string;
+  token: string;
   acquiredAt: Date;
   expiresAt: Date;
 }
@@ -19,6 +20,16 @@ export interface IReservationLock extends Document {
 const ReservationLockSchema = new Schema<IReservationLock>(
   {
     key: { type: String, required: true, unique: true, index: true },
+    /**
+     * Who currently holds this lock.
+     *
+     * A lock whose holder is anonymous can be released by somebody who no longer owns it. The
+     * stale-lock path here hands a key from a slow request to a waiting one, and without a
+     * fence the slow request's `finally` then deletes the *new* holder's lock — leaving two
+     * reservations for one volunteer running at once, which is the single thing this lock
+     * exists to prevent. Every acquisition mints a token and every release names it.
+     */
+    token: { type: String, required: true },
     acquiredAt: { type: Date, required: true, default: Date.now },
     expiresAt: { type: Date, required: true },
   },

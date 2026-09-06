@@ -34,6 +34,7 @@
  * — see the note on the field in `shift.model.ts`.
  */
 import { Types, ClientSession } from "mongoose";
+import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { Shift, IShift } from "../models/shift.model";
 import { Volunteer } from "../models/volunteer.model";
@@ -247,8 +248,9 @@ export class RegistrationService {
     // fatigue) is read-then-act; without a lock, concurrent overlapping
     // bookings by one volunteer both pass before either writes. The lock is
     // per-volunteer so distinct volunteers stay fully parallel.
+    let lockToken: string | null = null;
     try {
-      await this.acquireVolunteerLock(volunteerId);
+      lockToken = await this.acquireVolunteerLock(volunteerId);
     } catch (lockError) {
       // No request is in flight anymore, so release the key: without this,
       // the record would sit PENDING and block same-key retries for 24h.
@@ -448,7 +450,7 @@ export class RegistrationService {
       );
       throw error;
     } finally {
-      await this.releaseVolunteerLock(volunteerId);
+      await this.releaseVolunteerLock(volunteerId, lockToken);
     }
   }
 
@@ -460,17 +462,21 @@ export class RegistrationService {
    */
   private static async acquireVolunteerLock(
     volunteerId: string,
-  ): Promise<void> {
+  ): Promise<string> {
     const key = volunteerLockKey(volunteerId);
     for (let attempt = 0; attempt < VOLUNTEER_LOCK_RETRIES; attempt++) {
+      // A fresh token per attempt, so a steal and a first acquisition are told apart by the
+      // value in the document rather than by which code path produced it.
+      const token = randomUUID();
       const now = Date.now();
       try {
         await ReservationLock.create({
           key,
+          token,
           acquiredAt: new Date(now),
           expiresAt: new Date(now + VOLUNTEER_LOCK_TTL_MS),
         });
-        return;
+        return token;
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
       }
@@ -479,18 +485,21 @@ export class RegistrationService {
       if (!existing) continue;
       if (existing.expiresAt.getTime() <= Date.now()) {
         // Stale lock (TTL sweeper can lag ~60s): steal it atomically so two
-        // stealers cannot both believe they hold it.
+        // stealers cannot both believe they hold it. The filter names the token we READ, not
+        // just the expiry, so two stealers racing on an expiry that has not moved still
+        // produce one winner.
         const stolen = await ReservationLock.findOneAndUpdate(
-          { key, expiresAt: existing.expiresAt },
+          { key, token: existing.token },
           {
             $set: {
+              token,
               acquiredAt: new Date(),
               expiresAt: new Date(Date.now() + VOLUNTEER_LOCK_TTL_MS),
             },
           },
           { new: true },
         );
-        if (stolen) return;
+        if (stolen) return token;
       }
     }
     throw ApiError.conflict(
@@ -499,11 +508,22 @@ export class RegistrationService {
     );
   }
 
+  /**
+   * Release the lock, but only if we still hold it.
+   *
+   * An unconditional delete releases whoever holds the key, which is not always the caller.
+   * A request slow enough for its lock to expire has the key stolen by a waiter; when the slow
+   * one finishes, its `finally` deleted the waiter's lock, and two reservations for one
+   * volunteer then ran at once — precisely what this lock exists to prevent, and invisible
+   * because both of them succeed. Naming the token makes a release by a former holder a no-op.
+   */
   private static async releaseVolunteerLock(
     volunteerId: string,
+    token: string | null,
   ): Promise<void> {
+    if (!token) return;
     try {
-      await ReservationLock.deleteOne({ key: volunteerLockKey(volunteerId) });
+      await ReservationLock.deleteOne({ key: volunteerLockKey(volunteerId), token });
     } catch {
       // Lock release is best-effort; TTL expiry is the backstop.
     }
