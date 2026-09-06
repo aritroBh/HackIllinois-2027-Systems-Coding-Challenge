@@ -29,6 +29,30 @@
 
   N.plugins = { loaded, failed, list: () => [...loaded.entries()].map(([name, v]) => ({ name, ...v })) };
 
+  /**
+   * Subresource Integrity wants base64; the manifest publishes hex.
+   *
+   * Those are two encodings of the same thirty-two bytes and the browser accepts exactly one
+   * of them. Handing it the hex string is not a soft failure: the digest never matches, every
+   * plugin script is refused, and the only symptom is a plugin that silently does not load —
+   * which is indistinguishable from a plugin that was never enabled. That is precisely how
+   * this shipped, and how it survived a passing plugin test suite, because the server side was
+   * right and the browser side was never exercised.
+   *
+   * Hex stays in the manifest deliberately. It is what `sha256sum` prints, so an operator can
+   * compare what the server says it is serving against the file on disk without a conversion
+   * step; the conversion belongs here, where the browser's requirement is.
+   *
+   * Returns null for anything that is not 64 hex characters, so a malformed digest is a
+   * refusal rather than an `integrity` attribute the browser quietly ignores.
+   */
+  function hexToBase64(hex) {
+    if (typeof hex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+    let binary = '';
+    for (let i = 0; i < hex.length; i += 2) binary += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+    return btoa(binary);
+  }
+
   /** A plugin asset must be same-origin and under the canonical /dashboard/plugins/ path. */
   function pathIsSafe(url) {
     try {
@@ -52,7 +76,14 @@
       // The digest is the contract. Without `integrity` the manifest would be a list of
       // suggestions rather than a description of what is about to run.
       if (asset.sha256) {
-        el.integrity = `sha256-${asset.sha256}`;
+        const b64 = hexToBase64(asset.sha256);
+        if (!b64) {
+          failed.push({ name, url: asset.url, reason: 'BAD_DIGEST' });
+          console.warn(`[plugins] refusing ${name}: "${asset.sha256}" is not a sha256 hex digest`);
+          resolve(false);
+          return;
+        }
+        el.integrity = `sha256-${b64}`;
         el.crossOrigin = 'anonymous';
       }
       el.defer = true;
@@ -94,7 +125,20 @@
     }
   }
 
-  // After the session settles, so a plugin's tab registration sees the right role and the
-  // manifest request carries the session cookie.
-  N.onEvent('session:ready', () => { void load(); });
+  /**
+   * After the session settles, so a plugin's tab registration sees the right role and the
+   * manifest request carries the session cookie.
+   *
+   * Awaiting the promise rather than subscribing to the event. `session:ready` fires exactly
+   * once, and a subscriber that arrives afterwards waits for a second firing that never
+   * comes — the plugin then simply never loads, with no error anywhere, which is
+   * indistinguishable from a plugin that was not enabled. `Nexus.session.ready` is the
+   * promise built for this: it resolves whether you were there or not.
+   *
+   * A rejection is still a settled session as far as this is concerned. The manifest request
+   * carries whatever cookie the browser has, and a signed-out visitor gets an empty manifest
+   * rather than an error, so there is nothing to abandon.
+   */
+  const started = Promise.resolve(N.session && N.session.ready).catch(() => undefined).then(() => load());
+  void started;
 })();

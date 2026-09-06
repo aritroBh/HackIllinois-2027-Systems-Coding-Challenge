@@ -76,6 +76,38 @@ for (const [k, id] of Object.entries(js)) if (!new RegExp('#define MAT_[A-Z_]+ +
 console.log(Object.keys(js).length + ' material ids agree across JS, Python and TS');
 " 2>/dev/null
 
+step "plugin asset digests are SRI-usable"
+node --input-type=module -e "
+import fs from 'fs';
+import crypto from 'crypto';
+import path from 'path';
+// The manifest publishes hex, because that is what sha256sum prints and what an operator
+// compares against. Subresource Integrity wants base64. Handing the browser the hex string
+// is not a soft failure — the digest never matches, every plugin script is refused, and the
+// only symptom is a plugin that silently does not load. This asserts the loader still
+// converts, and that the conversion lands on the real file.
+const loader = fs.readFileSync('$ROOT/public/plugins.js', 'utf8');
+if (!/hexToBase64/.test(loader) || !/btoa\(/.test(loader)) {
+  console.error('public/plugins.js no longer converts the hex digest to base64 for integrity=');
+  process.exit(1);
+}
+const root = '$ROOT/plugins';
+let checked = 0;
+for (const name of fs.existsSync(root) ? fs.readdirSync(root) : []) {
+  const pub = path.join(root, name, 'public');
+  if (!fs.existsSync(pub)) continue;
+  for (const file of fs.readdirSync(pub)) {
+    const bytes = fs.readFileSync(path.join(pub, file));
+    const hex = crypto.createHash('sha256').update(bytes).digest('hex');
+    const viaHex = Buffer.from(hex, 'hex').toString('base64');
+    const direct = crypto.createHash('sha256').update(bytes).digest('base64');
+    if (viaHex !== direct) { console.error('digest conversion disagrees for', name, file); process.exit(1); }
+    checked++;
+  }
+}
+console.log(checked + ' plugin asset digest(s) convert cleanly from hex to SRI base64');
+"
+
 step "props vocabulary in lockstep (props.overpass.tpl ⇔ props.py ⇔ props.js)"
 node scripts/checkProps.mjs
 
