@@ -218,3 +218,76 @@ that records `'dispatch'` rather than the reader, SSE authorisation snapshotted 
 the per-volunteer lock covering only `reserveShift`, the cascade's bare `catch`, the cycle
 finder's handling of a volunteer holding two pending proposals, and the absence of a shift
 time-window check on check-in.
+
+---
+
+## Round four — the files nobody had read, 2026-09-06
+
+The first three rounds concentrated on the concurrency primitives, because that is where the
+interesting failures were expected. Round four pointed **muse** and **opencode** at the files
+those rounds had never opened, and took the standing list of verified-but-unclaimed findings
+from the parallel session working in the same tree. Both reviewers ran read-only against a
+scratch copy whose tree hash was verified unchanged afterwards.
+
+Every fix below has a test, and every test was checked by reverting the fix and confirming it
+goes red. The three that could not be given a deterministic test are named as such.
+
+### Closed
+
+| Finding | Source | Fix |
+|---|---|---|
+| A lead resolving a ticket collected the dispatched volunteer's bounty, badge and quest credit. Closing a call on a responder's behalf is a normal thing for a lead to do, so the payout went silently to the person with the power to take it. | agy | cdc7f0c |
+| A shift already worked and paid could be registered for again while it was still open — `COMPLETED` sat outside the partial unique index. A fresh QR token, a second check-in and a second check-out paid twice, and each round consumed a seat permanently. | agy | cdc7f0c |
+| The daily fatigue cap weighed only the day a shift *starts*. The overlap split exists to divide an overnight shift across the two days it spans; half of it was discarded, so seven hours booked on Saturday plus a 22:00–06:00 shift was thirteen hours in a day. | agy | cdc7f0c |
+| `GET /shifts/:id` populated the name, certifications, karma and prestige of every confirmed and waitlisted volunteer, behind no middleware at all — while `/:id/roster` beside it is lead-only, session-only and audited. The gate was one path segment wide. | opencode | 86f5079 |
+| `?kind=ALL` read the lead role off a *claimed* identity, so naming any lead's id in legacy mode enumerated every attendee account. The projection on the same handler already required a proved session. | opencode | 86f5079 |
+| Dispatch quoted a distance measured to the **exact** position, bucketed at 10 m — finer than the 20 m fuzz grid. Anyone who can raise a ticket chooses its coordinates and any volunteer can dispatch it, so three tickets trilaterated a colleague to within the bucket, with the fuzz bypassed and no exact-read audit row anywhere, because no exact position was ever returned. | parallel session | 86f5079 |
+| The dispatch audit recorded `readerId: 'dispatch'`, so every dispatch in the event collapsed onto one indistinguishable reader and `docs/PRESENCE.md`'s "who read whom and why" was untrue for that reader. | parallel session | 86f5079 |
+| The candidate pool had no clock in it: a `CHECKED_IN` row from a shift that ended yesterday stayed a candidate for ever, so at 3 a.m. the "nearest on-duty volunteer" was somebody asleep — and the ticket was marked `DISPATCHED`, which stops anybody else looking at it. | parallel session | 86f5079 |
+| `reassign` cleared every timestamp except `escalatedAt`, which the sweep filters on, so a ticket that escalated, was reassigned and was ignored again could never escalate a second time. | parallel session | 86f5079 |
+| SOS resolution and quest completion both announced the *advertised* reward rather than the granted one, so a responder past their daily cap was told they had earned 150 while their balance did not move. | opencode | 86f5079 |
+| `reindexWaitlist` wrote positions unconditionally, stamping a queue position onto a row a concurrent cascade had already promoted out of the queue — which the next cascade's `sort({ waitlistPosition: 1 })` reads as order. | muse, opencode | 86f5079 |
+| The waitlist cascade's candidate probe caught everything, reading a replica-set stepdown or a dropped socket as "this candidate is busy" and silently passing over the head of the queue with no log and no retry. | parallel session | 86f5079 |
+| Two settle writes on an idempotency record were unconditional, so an owner that stalled past the steal window could stamp its result over the stealer's, and the stealer's failure path could mark a committed record `FAILED`. | muse | 86f5079 |
+| Two first-ever gym battles declaring different factions both read `faction == null` and both wrote, so one account fought a whole battle for a side it was not on. | opencode | 86f5079 |
+| `allowWaitlist` and its `SHIFT_FULL` branch were unreachable over HTTP — the schema did not accept the field and the controller never forwarded it — so confirm-or-fail always queued instead, and a documented 409 was dead code. | opencode | 86f5079 |
+| In the presence layer, a viewer subtracted itself from a cluster count it was already absent from, deleting a neighbour (and, where the cell held one other person, the whole cluster); and at rungs where the viewer fell outside `detail`, one person was excluded from the counts as a row and then never sent. | parallel session | e0c8964 |
+
+### Corrected in the reviewers' own findings
+
+Two reported findings did not survive checking, and are recorded because the reasoning
+matters more than the verdict.
+
+- **muse H2** described `reindexWaitlist`'s `save()` as writing a stale `status: WAITLISTED`
+  back over a concurrent `CONFIRMED`. Mongoose sends a delta for a loaded document, so only
+  the modified path is written and the promotion survives. The *position* was still stamped
+  onto a row that had left the queue, which is enough to promote the wrong person next time,
+  so the fix stands on the narrower ground.
+- **agy F1** and **opencode F1** both described the quest settlement re-paying karma when the
+  sticker award fails. That was true when they read it and had already been fixed in
+  `ff45fc3` by the parallel session: `settle()` now carries a `paid` flag and un-completes the
+  row only when nothing has moved.
+
+### Accepted, not fixed
+
+- **The crash window between a check-out's CAS and its payout.** `checkOutTime` is CAS-set
+  first, and a crash before `awardKarma` leaves a closed check-in that the idempotent-replay
+  guard reports as done, unpaid, with the registration stuck `CHECKED_IN`. Closing it needs an
+  outbox, not a patch — the same shape as the booth-scan window already accepted above, and
+  the same answer.
+- **A demoted lead keeps lead vision for up to 60 seconds** through the account-facts cache.
+  The role routes call `presenceService.invalidate` on a demotion, which closes the presence
+  half; the residual window is the facts cache itself and is documented rather than removed,
+  because a per-request account read is exactly the cost that cache exists to avoid.
+
+### Test quality
+
+The parallel session's criticism of `tests/scale.test.ts` was correct and is fixed: the
+neighbour-accounting test re-derived the search span with the implementation's own formula and
+asserted on the cohort's internal bookkeeping, so it could not have failed on either presence
+bug — both of which live one layer out, in the per-session corrections. The replacement seats
+thirty people inside a single cell, so the universe is not a function of the search geometry,
+drives a real `PresenceSession`, and asserts on the frame the client receives: rows plus
+cluster counts equal everybody but the viewer, at five rungs, with the viewer seated both at
+the centre of its cell and on the rim — because the two corrections are triggered by opposite
+seatings, and one seating alone tests only half of the fix.
