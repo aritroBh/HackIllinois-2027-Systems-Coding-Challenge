@@ -731,3 +731,126 @@ means binding the scan to the scanner, not reordering gates.
   in a real browser with zero console errors. The campus tab reports `WEBGL2 UNAVAILABLE` in a
   headless browser and degrades to a legible message with every other panel working, which is
   the fallback behaving as designed rather than a defect.
+
+---
+
+## Round eleven — the pre-deploy sweep, and one bug class in nine places, 2026-09-06
+
+The last review before this repository was published as an interview deliverable and deployed.
+Each reviewer got a different half of the system rather than the same diff, because round ten
+had shown they barely overlap: muse took the request surface and identity, opencode took the
+client and the demo path, agy took the production path and documentation.
+
+**Twenty findings across the three, and seventeen were real.** The headline is not any single
+one of them.
+
+### One bug class, nine sites, four rounds
+
+Round C, round four, round eight, round nine and round ten each closed a version of the same
+defect: a **disclosure** decision made on a *claimed* identity. `AUTH_MODE=legacy` lets a caller
+assert `?volunteerId=<public id>`, `GET /volunteers` and the leaderboard hand those ids to
+anonymous callers, and the standing rule is that legacy may be believed for an **action** and
+never for a **disclosure**. Every round found one or two instances, fixed exactly those, and
+left the siblings — because each site was written independently, with its own
+`/SHIFT_LEAD|ORGANIZER|ADMIN/.test(role)` or `kind === 'VOLUNTEER'`.
+
+This round swept the class instead of the instances. Nine sites:
+
+| Site | What a caller with no cookie could read |
+|---|---|
+| `eventHub.registerClient` — `fullSos` | An **unredacted SOS stream**: hacker names, table text, medical categories, and full-ticket `SOS_ESCALATED_FULL` with coordinates. `listTickets` redacts exactly those fields over REST, so the stream was undoing the REST fix live. |
+| `eventHub.reauthorise` | The same, re-granted on the heartbeat — a connection that opened redacted was *upgraded* a minute later by the code written to downgrade it. |
+| `eventHub.mayJoin` — `presence:exact` | The channel named for exact positions, open to anonymous callers in the default mode. Latent: nothing publishes to it yet, which is precisely why the missing gate would not have been noticed by the first thing that did. |
+| `audienceReaches` (SSE) + `announcementReaches` (REST) | Staff-only announcements, with author name and venue, to anyone naming a lead's id. `POST` and `DELETE` already required a session; the reads did not. |
+| `AvatarService.fetch` | The **bytes of an unpublished face photo** — pending review or never shared — to a claimed lead. The hash is broadcast publicly on the presence wire, so the attacker already has the URL. |
+| `ShiftService.getShiftById` | Every rostered volunteer's name, certifications, karma, prestige and avatar hash. Anonymous got redacted counts; naming one public id upgraded that to the full roster. |
+| `GET /me/inventory`, `/quests`, `/stickers`, `/card` | A named person's bag, quest progress, sticker book and trainer card. Two rounds had put `requireSession` on the two `/me` routes carrying a location and left the four beside them. |
+| `DELETE /presence` | Removes any named person from the presence store and drops their SSE session — no session, and because a claimed identity is not a session, no CSRF check. `PATCH /me/presence` was fixed for this attack in round ten; the `DELETE` beside it does the same thing more directly. |
+
+The fix is `isProvenSession` / `isProvenLead` / `isProvenKind` in `src/common/types/account.ts`,
+beside `isLeadOrAbove`, with the rule stated once where the next person will read it: **an
+action may believe a claimed identity; a disclosure may not.** Every site above now calls one
+of the three. `presence:exact` was found by re-scanning for the class after fixing the eight
+the reviewers named — which is the argument for fixing classes rather than instances.
+
+### The client kept the previous person's distress calls
+
+opencode's two client P0s are the same shape as round nine's and round ten's handover work,
+in the two places that had never been looked at.
+
+`app.js` cleared the inventory cache on handover and left `openSosTicketsCache` — a lead's
+**unredacted** open tickets, seat numbers and medical categories — sitting in memory and
+painted in the DOM for whoever sat down next. And `views/lead.js`, the view holding the roster
+and the SOS queue, subscribed to **no session event at all**: it was the only view without a
+handover listener, and the one with the most to lose. Both now clear, repaint, and reload under
+the new session, so what comes back is what the new account is actually entitled to.
+
+### `/health` was a surveillance endpoint
+
+agy and my own probe of the running container agreed. `GET /health` is on `ANONYMOUS_ALLOW`
+because an orchestrator must reach it without a cookie, and it returned the whole operational
+picture: live stream counts, the exact number of tracked people, the slot ceilings, presence
+tick timings, the plugin list, and `jobs[].lastError` — a background job's error text, the one
+field that can carry an internal detail nobody chose to publish. On a laptop that is a
+convenience; on a public URL it is a live read on how busy the event is and how much load
+exhausts it. Anonymous callers now get liveness; a proved lead gets the rest.
+
+That fix needed a second one to work at all: `attachIdentity` is mounted on `/api/v1`, so on
+`/health` `req.account` was always undefined and the lead branch would have been dead code
+that read as a working gate.
+
+### Documentation that lies
+
+Weighted P1 this round, because the author will be asked to explain this repository out loud.
+Nine corrections, and the two that would have cost real time:
+
+- `docs/DEPLOYMENT.md` told operators to run `npx tsx scripts/migrate.ts` **inside the
+  production container**. `scripts/` is excluded from the build and not copied into the image,
+  and `tsx` is a dev dependency, so the documented command cannot run there. Verified by
+  listing the built image: there is no `/app/scripts`.
+- `docs/DEPLOYMENT.md` said `TRUSTED_EGRESS_CIDRS` addresses are "exempt from the per-IP stream
+  and rate ceilings". The code gives them **10x**, and gives the anonymous ceilings **no**
+  allowance at all. An operator hitting 429s at the door would have widened a list that was
+  never going to lift the limit they were actually hitting. `docs/IDENTITY.md` had it right.
+
+The rest: README claimed two exact-position readers where there are three, and claimed opting
+out is symmetric when a lead's roster still counts you (`docs/DEMO.md` already volunteered both
+truths — the two documents disagreed with each other); `docs/IDENTITY.md` promised magic-link
+always answers 202 when production without SMTP answers 403; `docs/DEMO.md` narrated "fifty
+real signed-in sessions" for what the Chaos Lab does as fifty delegated registrations under one
+organiser session, and pointed at a "Swaps panel" that does not exist; a `checkin.controller.ts`
+docblock still said token minting was unauthenticated and should sit behind organiser auth,
+which stopped being true when `/verify` was gated instead; and the seed logs "5 Volunteers"
+while creating six.
+
+**One reviewer claim was wrong, and checking mattered.** agy reported that `ARCHITECTURE.md`
+lies about `public/gl/uiuc-campus.json` no longer existing, citing `.gitignore` as the
+contradiction. The file genuinely does not exist and nothing loads it: `ARCHITECTURE.md` is
+correct and **`.gitignore`'s comment** was the stale one, along with a comment in `seedData.ts`.
+Fixed at the two places that were actually wrong, rather than the one that was reported.
+
+### Verification this round
+
+| Check | Result |
+|---|---|
+| `npm test` | **305 passed, 0 failed**, 29 suites |
+| `npm run lint` | clean |
+| `npm run e2e` — live HTTP surface, real cookies, real concurrency | **83 passed, 0 failed** (two new assertions: the anonymous `/health` discloses nothing, the lead's does) |
+| `npm run gates:check` | **58 passed, 0 failed** |
+| `npm run csp:audit`, `props:check`, `events:check` | clean |
+| `docker build` | 249 MB image |
+| Production boot rehearsal: image + real Mongo replica set, secrets from env only | boots clean, `/ready` 200 |
+| Hostile probe of the running production container | every anonymous and claimed-identity read 401; `dev-login`/`dev-accounts` 404; CSP, HSTS, nosniff, frame-options present; no stack traces |
+| Browser playthrough — all seven tabs, token mint, account handover | zero console errors; handover clears the token and reloads the new account's data |
+
+### Reviewer mechanics
+
+All three were read-only, proved by comparing every tracked file in each scratch copy against
+`git archive` of the reviewed commit: zero differences. agy needed the same
+"do not run any shell command" prompt round ten found; without it headless auto-denies the
+`command` permission and it produces nothing.
+
+**A hygiene note against myself:** the `rsync` that built the scratch copies swept `.gstack/`
+local runtime state, including a terminal token, into three directories handed to external
+review CLIs. Nothing appears to have read them, and they were scrubbed, but the exclude list
+should have had `.gstack` and `.claude` in it from the start.

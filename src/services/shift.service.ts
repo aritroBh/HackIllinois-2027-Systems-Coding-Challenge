@@ -19,7 +19,7 @@
 import { Types } from 'mongoose';
 import { Shift, IShift, ShiftCategory } from '../models/shift.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
-import { AccountContext } from '../common/types/account';
+import { AccountContext, isProvenKind } from '../common/types/account';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { SurgePricingEngine, ISurgeResult } from '../common/utils/surgePricing';
@@ -165,7 +165,12 @@ export class ShiftService {
     // Kind, not role: this is the same line `/registrations` draws. A volunteer needs to
     // know who they are working the desk with; a hacker does not, and an anonymous caller
     // in legacy mode certainly does not.
-    const staff = viewer?.kind === 'VOLUNTEER';
+    //
+    // And *proved*, not claimed. This read returns every rostered volunteer's name,
+    // certifications, karma, prestige and avatar hash. Anonymous already got the redacted
+    // counts — but naming any public volunteer id in `?volunteerId=` upgraded that to the
+    // full roster, which is the disclosure the redaction exists to prevent.
+    const staff = isProvenKind(viewer, 'VOLUNTEER');
 
     const detail = 'name certifications karmaPoints prestigeTier';
     const [confirmedRegs, waitlistedRegs] = await Promise.all([

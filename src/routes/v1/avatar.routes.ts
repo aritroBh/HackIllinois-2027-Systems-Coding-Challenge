@@ -56,7 +56,11 @@ avatarRouter.get('/queue', requireSession, requireRole('SHIFT_LEAD'), async (_re
 
 avatarRouter.get('/:hash', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const viewer = req.account ? { id: req.account.id, role: req.account.role } : undefined;
+    // `source` travels with the role. Without it `fetch()` sees a role with no provenance and
+    // hands the unpublished-avatar branch to a claimed lead — see the note there.
+    const viewer = req.account
+      ? { id: req.account.id, role: req.account.role, source: req.account.source }
+      : undefined;
     const doc = await AvatarService.fetch(String(req.params.hash), viewer);
     const etag = `"${doc.hash.slice(0, 32)}"`;
     if (req.headers['if-none-match'] === etag) {

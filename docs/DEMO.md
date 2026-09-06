@@ -34,8 +34,10 @@ Then: **the interesting engineering is contention.** Everything else follows fro
 
 Open the **Chaos Lab** tab, or run `npm run e2e` and watch section 3.
 
-Fifty accounts, fifty real signed-in sessions, fifty concurrent `POST /registrations`
-against a shift with two seats.
+Fifty accounts and fifty concurrent `POST /registrations` against a shift with two seats,
+issued as delegated on-behalf registrations under the one signed-in organiser session rather
+than fifty separate logins. The contention being demonstrated is at the database, not at the
+cookie: fifty requests reach the same two seats at the same moment either way.
 
 **Exactly two confirmed. Forty-eight waitlisted. Zero oversold. Every time.**
 
@@ -75,7 +77,7 @@ nobody is promoted — so it is never briefly claimable.
 
 ## 3. The three-way ring
 
-`POST /swaps/cycles/resolve`, or the Swaps panel.
+`POST /swaps/cycles/resolve`, or the **Resolve 3-way trade** button in the Chaos Lab tab.
 
 Alice wants Bob's shift, Bob wants Charlie's, Charlie wants Alice's. The resolver builds the
 directed wants-graph, enumerates elementary cycles of length 2–4 by depth-first search, and
@@ -165,7 +167,7 @@ and lidar is a step you run yourself. The README used to imply the good sources 
 
 ## What to say about how it was built
 
-The suite is 23 files and 240 tests, and the interesting ones are invariants rather than
+The suite is 29 files and 305 tests, and the interesting ones are invariants rather than
 coverage: fifty racing registrations against two seats, ten concurrent bounty reservations
 against a budget for three granting exactly three, twenty phones on one sponsor poster
 producing one winner and nineteen refusals, a lead who cannot spin another player's

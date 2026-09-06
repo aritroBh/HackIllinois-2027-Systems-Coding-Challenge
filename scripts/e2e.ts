@@ -107,6 +107,24 @@ class Client {
   }
 
   get = <T = any>(p: string, h?: Record<string, string>): Promise<Res<T>> => this.req<T>('GET', p, { headers: h });
+
+  /**
+   * A GET outside `/api/v1`, carrying this client's cookies.
+   *
+   * `/health` is mounted at the root but reads the session, because its operational detail is
+   * lead-only. Every other request this harness makes is under the API prefix, so rather than
+   * bending `req()`'s path handling this says plainly that the root is the exception.
+   */
+  async getRoot<T = any>(path: string): Promise<Res<T>> {
+    const headers: Record<string, string> = {};
+    const cookie = this.jar();
+    if (cookie) headers['Cookie'] = cookie;
+    const res = await fetch(`${BASE}${path}`, { headers });
+    const text = await res.text();
+    let body: unknown;
+    try { body = JSON.parse(text); } catch { body = text; }
+    return { status: res.status, body: body as T, headers: res.headers };
+  }
   post = <T = any>(p: string, b?: unknown, h?: Record<string, string>): Promise<Res<T>> =>
     this.req<T>('POST', p, { body: b, headers: h });
   patch = <T = any>(p: string, b?: unknown): Promise<Res<T>> => this.req<T>('PATCH', p, { body: b });
@@ -160,24 +178,18 @@ async function main(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   section('0. The process is up and the database is behind it');
 
-  let health = await fetch(`${BASE}/health`).then((r) => r.json());
-  ok('GET /health reports HEALTHY', health.status === 'HEALTHY', `authMode=${health.authMode}`);
+  const anonHealth = await fetch(`${BASE}/health`).then((r) => r.json());
+  ok('GET /health reports HEALTHY', anonHealth.status === 'HEALTHY', `authMode=${anonHealth.authMode}`);
+  // Liveness for anyone, telemetry for a lead. On a public URL the full body is a live read on
+  // how busy the event is, how much load exhausts the slot ceilings, and whatever a failing
+  // background job left in `jobs[].lastError` — so an anonymous caller gets none of it. The
+  // telemetry assertions this section used to make now live in section 1, behind a session.
+  ok('an anonymous /health discloses no operational telemetry',
+    anonHealth.streams === undefined && anonHealth.presence === undefined && anonHealth.jobs === undefined,
+    Object.keys(anonHealth).join(', '));
   const ready = await fetch(`${BASE}/ready`);
   const readyBody = await ready.json();
   ok('GET /ready is 200 and the database is connected', ready.status === 200 && readyBody.database === 'connected');
-
-  // Polled, not sampled once. The tick runs on an interval, so a run that starts the instant
-  // the server finishes booting can legitimately observe zero — which says nothing about
-  // whether the loop is alive, and asserting on it made the run's verdict depend on how
-  // quickly the process got here.
-  for (let i = 0; i < 20 && !(health.presence?.ticks > 0); i += 1) {
-    await new Promise((r) => setTimeout(r, 250));
-    health = await fetch(`${BASE}/health`).then((r) => r.json());
-  }
-  ok('the presence tick loop is running', typeof health.presence?.ticks === 'number' && health.presence.ticks > 0,
-    `${health.presence?.ticks} ticks, p95 ${health.presence?.p95TickMs}ms`);
-  ok('background jobs are scheduled', Array.isArray(health.jobs) && health.jobs.length > 0,
-    (health.jobs ?? []).map((j: any) => j.name).join(', '));
 
   // ────────────────────────────────────────────────────────────────────────
   section('1. Getting in — three adapters, one session (docs/WORKFLOWS.md §1)');
@@ -205,6 +217,23 @@ async function main(): Promise<void> {
   await bob.login(accounts.find((a) => a.name.startsWith('Bob'))!.id);
   ok('four distinct sessions were minted', new Set([organizer.id, lead.id, alice.id, bob.id]).size === 4,
     `${organizer.name}/${organizer.role}, ${lead.name}/${lead.role}, ${alice.name}, ${bob.name}`);
+
+  // The telemetry `/health` now withholds from anonymous callers, read by the lead who is
+  // entitled to it. Polled, not sampled once: the tick runs on an interval, so a run that
+  // starts the instant the server finishes booting can legitimately observe zero — which says
+  // nothing about whether the loop is alive, and asserting on it made the run's verdict depend
+  // on how quickly the process got here.
+  let health = (await lead.getRoot('/health')).body ?? {};
+  for (let i = 0; i < 20 && !(health.presence?.ticks > 0); i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+    health = (await lead.getRoot('/health')).body ?? {};
+  }
+  ok('a lead reads the operational telemetry the anonymous caller did not get',
+    health.streams !== undefined && health.plugins !== undefined);
+  ok('the presence tick loop is running', typeof health.presence?.ticks === 'number' && health.presence.ticks > 0,
+    `${health.presence?.ticks} ticks, p95 ${health.presence?.p95TickMs}ms`);
+  ok('background jobs are scheduled', Array.isArray(health.jobs) && health.jobs.length > 0,
+    (health.jobs ?? []).map((j: any) => j.name).join(', '));
 
   const me = await alice.get('/me');
   ok('GET /me resolves the caller from the cookie alone',

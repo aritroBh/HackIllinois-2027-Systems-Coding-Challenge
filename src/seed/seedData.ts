@@ -368,7 +368,7 @@ export async function seedDatabase(): Promise<void> {
   // 5. Seed Campus Territory Gyms (PokéShift Turf Wars)
   //
   // One stronghold per campus monument. These ids line up with the monuments
-  // in the 3D campus model (public/gl/uiuc-campus.json), so capturing a gym
+  // in the 3D campus model (the tiles under content/<pack>/campus/), so capturing a gym
   // here recolours the matching landmark on the war-room map.
   const LEADERS = [
     { id: charlie._id, name: 'Charlie Patel' },
@@ -449,7 +449,7 @@ export async function seedDatabase(): Promise<void> {
   );
 
   console.log('✅ [SEED COMPLETED] Seeded:');
-  console.log(`   - 5 Volunteers (Alice, Bob, Charlie, Dana, Evan)`);
+  console.log(`   - 6 Volunteers (Nexus Ops, Alice, Bob, Charlie, Dana, Evan)`);
   console.log(`   - 6 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag, Info Desk running now)`);
   console.log(`   - 1 Contested Shift with 1 Waitlisted Candidate`);
   console.log(`   - 1 3-Way Circular Trade Demand Ring (Alice -> Bob -> Charlie -> Alice)`);

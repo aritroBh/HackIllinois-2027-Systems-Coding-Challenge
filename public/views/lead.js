@@ -45,6 +45,17 @@
   // `roster` is the whole `{ shift, counts, roster }` envelope, or null when nothing loaded.
   const state = { timer: null, shifts: [], shiftId: '', roster: null, announcements: [], tickets: [], avatars: [] };
 
+  /**
+   * Bumped on every handover, so a response addressed to the departed lead is dropped.
+   *
+   * This console holds the most sensitive data in the client: the roster (names, statuses,
+   * karma), and the SOS queue as a lead reads it — hacker names, seat numbers, descriptions,
+   * medical categories. It is also the one view that subscribed to no session event at all,
+   * so a device changing hands left every one of those in memory and painted in the DOM,
+   * readable from devtools by whoever sat down next even once the tab itself refused to open.
+   */
+  let generation = 0;
+
   const esc = (v) => String(v ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
@@ -181,7 +192,15 @@
 
   /** GET one panel and repaint it. A failure says so and leaves the panel as it was. */
   async function load(what, path, apply) {
-    try { apply((await N.api(path)).data); } catch (err) { failed(what, err); }
+    const mine = generation;
+    try {
+      const { data } = await N.api(path);
+      if (mine !== generation) return; // the lead this was for has left the device
+      apply(data);
+    } catch (err) {
+      if (mine !== generation) return;
+      failed(what, err);
+    }
   }
 
   const loadShifts = () => load('Could not list shifts', '/api/v1/shifts', (data) => {
@@ -192,8 +211,10 @@
 
   async function loadRoster() {
     if (!state.shiftId) { state.roster = null; paintRoster(); return; }
+    const mine = generation;
     try {
       const { data } = await N.api(`/api/v1/shifts/${encodeURIComponent(state.shiftId)}/roster`);
+      if (mine !== generation) return; // see `generation`
       state.roster = data || null;
       paintRoster();
     } catch (err) {
@@ -391,4 +412,33 @@
   }
   N.onEvent('ANNOUNCEMENT', onFrame(loadAnnouncements));
   N.onEvent('ANNOUNCEMENT_CLEARED', onFrame(loadAnnouncements));
+
+  /**
+   * The browser changed hands, so everything this console is holding belongs to someone else.
+   *
+   * `me.js`, `quests.js`, `players.js` and `app.js` all grew one of these; this file never
+   * had one, and it is the view with the most to lose. Both halves matter: emptying `state`
+   * is what stops the next occupant reading a stranger's roster and open medical calls out of
+   * memory, and repainting is what takes them off the screen — the tab is hidden by the role
+   * gate, not unmounted, so unpainted DOM survives in place.
+   *
+   * Reloaded afterwards rather than left empty, because the new account may also be a lead
+   * and the server decides that: `/roster` and the unredacted ticket list both answer to the
+   * session, so what comes back is what this account is actually entitled to.
+   */
+  N.onEvent('session:handover', () => {
+    generation += 1;
+    state.roster = null;
+    state.tickets = [];
+    state.avatars = [];
+    state.announcements = [];
+    state.shifts = [];
+    state.shiftId = '';
+    paintShiftPicker();
+    paintRoster();
+    paintTickets();
+    paintAvatars();
+    paintAnnouncements();
+    void refreshAll();
+  });
 })();

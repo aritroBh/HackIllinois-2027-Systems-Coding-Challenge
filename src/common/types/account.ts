@@ -49,6 +49,37 @@ export function isOrganizerOrAbove(account: AccountContext | undefined): boolean
   return !!account && ORGANIZER_ROLES.has(account.role);
 }
 
+/**
+ * The same checks, for **disclosure** decisions, where a claimed identity is not enough.
+ *
+ * `isLeadOrAbove` and a bare `kind === 'VOLUNTEER'` answer "what does this caller say they
+ * are". That is the right question for an *action* — `AUTH_MODE=legacy` is a documented open
+ * demo and believing a claimed id for a write is the contract. It is the wrong question for a
+ * *read*, because in `legacy` the id comes from the query string and `GET /volunteers` and the
+ * leaderboard hand account ids to anonymous callers. Naming a lead's public id is therefore
+ * one string away from being treated as that lead.
+ *
+ * Nine separate sites got this wrong, in four different review rounds, each fixed on its own
+ * and each time leaving siblings that read the same way. They live here now so the next one is
+ * a call to a named function rather than a fresh `/SHIFT_LEAD|ORGANIZER/.test(...)`.
+ *
+ * The rule, stated once: **an action may believe a claimed identity; a disclosure may not.**
+ * If what you are about to do reveals something the caller could not otherwise see, use these.
+ */
+export function isProvenSession(account: AccountContext | undefined): boolean {
+  return account?.source === 'session';
+}
+
+/** Lead-or-above **and** proved it. For anything that discloses somebody else's data. */
+export function isProvenLead(account: AccountContext | undefined): boolean {
+  return isProvenSession(account) && isLeadOrAbove(account);
+}
+
+/** Staff kind **and** proved it. The roster/registration line, for disclosure. */
+export function isProvenKind(account: AccountContext | undefined, kind: AccountKind): boolean {
+  return isProvenSession(account) && account?.kind === kind;
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {

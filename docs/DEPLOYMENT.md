@@ -53,8 +53,14 @@ set. A single-node replica set is enough and is what the compose file runs: `mon
 Run the migration on every deploy. It is idempotent:
 
 ```sh
-MONGODB_URI=... npx tsx scripts/migrate.ts
+MONGODB_URI='<your production URI>' npx tsx scripts/migrate.ts
 ```
+
+Run it **from a checkout**, not inside the running container. `scripts/` is excluded from the
+production build (`tsconfig.build.json`) and is not copied into the image, and `tsx` is a dev
+dependency — so the same command executed in the container fails with a missing file. The
+migration only needs network access to the database, so a laptop or a CI job pointed at the
+production URI is the right place for it.
 
 ## Behind a proxy
 
@@ -67,9 +73,14 @@ the limit entirely.
 
 **`TRUSTED_EGRESS_CIDRS`** is the venue's NAT egress, comma-separated IPv4 CIDRs. A
 thousand people on venue Wi-Fi arrive from a handful of addresses, so the per-IP anti-abuse
-ceilings would lock the venue out. Addresses in this list are exempt from the per-IP stream
-and rate ceilings, and capacity is controlled per account instead. They are never exempt
-from authentication, and anonymous stream slots stay capped even on trusted egress. Find
+ceilings would lock the venue out. Addresses in this list get **ten times** the per-IP
+credential and anti-abuse ceilings — not an exemption — and are exempt from the per-IP
+*stream* cap, with capacity controlled per account instead. The anonymous stream and request
+allowances are **not** widened at all: they stay at 1x on trusted egress, deliberately, because
+an anonymous flood from the venue's own NAT looks exactly like an anonymous flood from
+anywhere else. They are never exempt from authentication. `docs/IDENTITY.md` states the same
+10x rule; this page used to say "exempt", which would have had an operator widening a list
+that was never going to lift the anonymous ceiling they were actually hitting. Find
 the ranges from campus networking before the event, not during it.
 
 **Socket timeouts.** The defaults (`KEEP_ALIVE_TIMEOUT_MS=10000`,
@@ -97,7 +108,14 @@ Terminate TLS at the proxy, forward to the process over the internal network, an
 ## What to watch
 
 `GET /health` never touches the database, so it stays cheap and cannot be made to fail by a
-slow query. It is liveness, and it is also the operational dashboard.
+slow query. It is liveness for anyone, and the operational dashboard for a lead.
+
+**The detail needs a session.** An anonymous caller — an orchestrator's probe, or anyone on
+the internet — gets `status`, `service`, `authMode` and a timestamp, and nothing else. The
+fields described below appear only for a caller holding a real session with a lead role,
+because together they are a live read on how busy the event is, how much load exhausts the
+slot ceilings, and whatever text a failing background job put in `jobs[].lastError`. Sign in
+as a lead in the browser, or curl it with the session cookie.
 
 `GET /ready` reports the Mongoose connection state and returns 503 when it is not
 connected. Point the load balancer at this one so an instance drains during a database

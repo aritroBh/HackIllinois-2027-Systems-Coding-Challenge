@@ -7,7 +7,7 @@ campus or event, keep this file and add your own sources to it.
 
 Map data
 --------
-* public/gl/uiuc-campus.json and everything under design/osm/ are derived from
+* The campus tiles under content/<pack>/campus/ and everything under design/osm/ are derived from
   OpenStreetMap. © OpenStreetMap contributors. Licensed under the Open Database
   License (ODbL) 1.0 — https://opendatacommons.org/licenses/odbl/1.0/
   The baked model is a "derivative database" under the ODbL; if you modify and

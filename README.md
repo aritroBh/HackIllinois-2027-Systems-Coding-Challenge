@@ -23,7 +23,7 @@ No configuration, no Docker, no secrets. That command starts an in-memory single
 
 **A campus you can walk.** Five by five kilometres of Urbana-Champaign, nine thousand buildings, baked from OpenStreetMap into five-hundred-metre tiles that stream as the camera moves. Fourteen landmarks are territory gyms with hand-written silhouettes. Heights come from OSM tags where they exist (292 buildings), from surveyed levels otherwise (773), and from a per-type default for the remaining 88% — with lidar available when you run that step yourself. It renders at sixty frames a second on a laptop and degrades to thirty on a phone by dropping quality tiers rather than detail you would notice.
 
-**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it — about 115 ms when the crowd is artificially scattered, which is the layout that sharing cannot help. It is sliced against an 8 ms budget, measured at about 11 ms in the worst hold; `docs/PRESENCE.md` records both runs. Positions are fuzzed, published one tick late, and never stored. Exactly two things read an exact position — a lead, and SOS dispatch — and both write an audit row. Opting out is symmetric: you neither appear nor see.
+**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it — about 115 ms when the crowd is artificially scattered, which is the layout that sharing cannot help. It is sliced against an 8 ms budget, measured at about 11 ms in the worst hold; `docs/PRESENCE.md` records both runs. Positions are fuzzed, published one tick late, and never stored. Exactly three things read an exact position — a lead's roster, a lead's `GET /presence`, and SOS dispatch — and every one of them writes an audit row. Opting out stops you appearing to other players and stops you seeing them; a lead reading the roster still counts you, which is what `docs/PRESENCE.md` calls the one asymmetry.
 
 **Distress calls that reach someone.** A hacker raises a ticket from their phone. Dispatch prefers a live position under thirty seconds old, falls back to the responder's shift venue, and keeps candidates with neither rather than silently skipping them. The ticket moves through a guarded lifecycle, and one nobody acknowledges within three minutes escalates to the floor with no location in the public copy.
 
@@ -74,6 +74,29 @@ The tests are the interesting part of the suite rather than coverage filler: ten
 ## Requirements
 
 Node 20 or newer. Python 3.11 with `shapely` and `numpy` only if you are rebaking a campus. MongoDB in production as a single-node replica set, because transactions need one; the demo starts its own in memory.
+
+## About this submission
+
+This is an answer to the **HackIllinois 2027 Systems Coding Challenge, API track** — "using
+TypeScript, Express and MongoDB, implement a volunteer backend API for creating and managing
+volunteer shift signups". It deliberately overshoots that brief: the scheduling core is the
+answer to the question asked, and the campus, the game layer and the presence system are there
+because the interesting engineering in a volunteering system is what makes people turn up.
+
+**Where to look if you are reviewing it.** The concurrency work is the part I would defend
+first: `src/services/registration.service.ts` (the atomic capacity guard and the waitlist
+cascade), `src/common/utils/cycleFinder.ts` and `src/services/swap.service.ts` (three-way trade
+rings), and `src/services/checkin.service.ts` (the ordering of the check-in gates, and why each
+one is where it is). `ARCHITECTURE.md` explains the primitives; `docs/WORKFLOWS.md` walks the
+journeys end to end.
+
+**On tooling.** This was built with AI assistance — Claude Code, used throughout for
+implementation and for adversarial review. The review process is not hidden: `docs/REVIEWS.md`
+is a full log of eleven review rounds run against three independent external models (muse,
+opencode, agy), every finding, which were real, which were wrong, and what each fix was. Several
+of the most interesting bugs in this repository were found that way, and the log says so. Every
+design decision, the calibration those reviewers were given, and every accept/reject on their
+findings is mine. External data and libraries are credited in [NOTICE](NOTICE).
 
 ## Licence
 

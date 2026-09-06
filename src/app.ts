@@ -39,6 +39,7 @@ import { apiRateLimiter, mutationLimiter, ipCeilingLimiter } from './middleware/
 import { requireOrganizerAuth } from './middleware/requireAuth';
 import { attachIdentity, enforceAuthMode, requireCsrf } from './middleware/identity';
 import { streamEventsHandler } from './routes/v1/stats.routes';
+import { isProvenLead } from './common/types/account';
 import { eventHub } from './common/sse/eventHub';
 import { presenceService } from './presence/service';
 import { presenceStore } from './presence/store';
@@ -209,16 +210,42 @@ app.use(
 //              connection state and returns 503 when it is not connected, so an
 //              orchestrator drains this pod during a database outage instead of routing
 //              requests that will hang.
-app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({
+/**
+ * Liveness for anyone; telemetry for a proved lead.
+ *
+ * This used to return the whole operational picture to any anonymous caller, and it is on
+ * `ANONYMOUS_ALLOW` because an orchestrator has to reach it without a cookie. On a laptop that
+ * is a debugging convenience. On a public URL it is a surveillance endpoint: connected stream
+ * counts and the exact number of tracked people (how busy is the event, right now), the slot
+ * ceilings (how much load it takes to exhaust them), presence tick timings, the plugin list,
+ * and `jobs[].lastError` — a background job's error text, which is the one field here that can
+ * carry an internal detail nobody chose to publish.
+ *
+ * A health check needs to say "the process is alive", and that is what an anonymous caller
+ * gets now. Everything a human actually debugs with is still here for a lead who has proved
+ * it, which is the same rule the roster and the SOS list draw.
+ *
+ * `attachIdentity` is mounted on this route specifically: it is otherwise scoped to `/api/v1`,
+ * so without it `req.account` here is always undefined and the lead branch would be dead code
+ * that reads as a working gate. `GET /api/v1/stats/events` mounts it the same way.
+ */
+app.get('/health', attachIdentity, (req: Request, res: Response) => {
+  const base = {
     status: 'HEALTHY',
     service: 'Nexus Quest',
     authMode: env.AUTH_MODE,
+    timestamp: new Date().toISOString(),
+  };
+  if (!isProvenLead(req.account)) {
+    res.status(200).json(base);
+    return;
+  }
+  res.status(200).json({
+    ...base,
     streams: eventHub.stats(),
     presence: { enabled: env.PRESENCE_ENABLED, ...presenceService.stats, tracked: presenceStore.size() },
     jobs: schedulerStats(),
     plugins: pluginRegistry.stats(),
-    timestamp: new Date().toISOString(),
   });
 });
 

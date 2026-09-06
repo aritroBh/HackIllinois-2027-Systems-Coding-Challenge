@@ -5,10 +5,16 @@
  * delegate. The interesting behaviour (HMAC verification, replay rejection, geofence,
  * pro-rata karma) lives in `CheckInService`.
  *
- * Note that token minting is currently unauthenticated — anyone who can name a
- * volunteer with a confirmed registration can obtain a valid token for them. The HMAC is
- * unforgeable, but the issuing endpoint will sign for any caller, so this route should
- * sit behind organiser auth before real use.
+ * `POST /token` mints for the **caller's own** registration: the route requires volunteer
+ * kind, and in `AUTH_MODE=required` the account comes from the session, so a volunteer can
+ * only ever obtain their own token. In `legacy` the id is claimed, which is the documented
+ * open-demo contract for actions.
+ *
+ * This comment used to say the endpoint was unauthenticated and "should sit behind organiser
+ * auth". That was true when it was written and is not now — and organiser-gating it would be
+ * the wrong fix anyway, because minting is what the volunteer's own phone does at the desk.
+ * The gate that mattered went on `/verify`, which is the scanner: `requireRole('SHIFT_LEAD')`,
+ * so the person being checked in cannot also be the one who scans them.
  */
 import { Request, Response, NextFunction } from 'express';
 import { CheckInService } from '../services/checkin.service';

@@ -148,7 +148,17 @@ meRouter.get('/shifts', requireSession, requireAccount, async (req: Request, res
 });
 
 /** Power-ups this account is holding. */
-meRouter.get('/inventory', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`, like `/shifts` and `/sos` above.
+ *
+ * This is a self-read, and in `legacy` a "self" is `?volunteerId=<public id>` while the
+ * leaderboard hands those ids to anonymous callers — so on `requireAccount` alone it answers
+ * "what is in *that named person's* bag / quest log / sticker book" to anyone who asks, with
+ * no session and no audit row. Two earlier rounds put this guard on the two siblings that
+ * carry a location; these three carry the rest of the account's game state and were missed
+ * because they read as harmless. The rule is about who is asking, not about which field.
+ */
+meRouter.get('/inventory', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const items = await PowerUpInventory.find({ volunteerId: req.account!.id }).lean();
     res.setHeader('Cache-Control', 'no-store');
@@ -166,7 +176,14 @@ meRouter.get('/inventory', requireAccount, async (req: Request, res: Response, n
  * may cache, so it holds nothing that would hurt if it were read from a shared device:
  * a short id, a display name, a faction and a sticker count. No email, no shift, no token.
  */
-meRouter.get('/card', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession` for the same reason as its three siblings above. The card is the offline
+ * trainer card — display name, short id, faction, karma, badges, prestige — keyed on an
+ * account id, so on `requireAccount` alone it is a lookup table from a public id to a named
+ * person's standing. The service worker's copy is written from an authenticated response and
+ * purged on handover, so nothing offline depends on this being open.
+ */
+meRouter.get('/card', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const account = await Volunteer.findById(req.account!.id).select('name kind role faction karmaPoints badges prestigeTier').lean();
     if (!account) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
@@ -255,7 +272,17 @@ meRouter.get('/sos', requireSession, requireAccount, async (req: Request, res: R
 });
 
 /** Quest progress for the current windows, and the sticker book. */
-meRouter.get('/quests', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`, like `/shifts` and `/sos` above.
+ *
+ * This is a self-read, and in `legacy` a "self" is `?volunteerId=<public id>` while the
+ * leaderboard hands those ids to anonymous callers — so on `requireAccount` alone it answers
+ * "what is in *that named person's* bag / quest log / sticker book" to anyone who asks, with
+ * no session and no audit row. Two earlier rounds put this guard on the two siblings that
+ * carry a location; these three carry the rest of the account's game state and were missed
+ * because they read as harmless. The rule is about who is asking, not about which field.
+ */
+meRouter.get('/quests', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const quests = await QuestService.forAccount(req.account!.id);
     res.setHeader('Cache-Control', 'no-store');
@@ -265,7 +292,17 @@ meRouter.get('/quests', requireAccount, async (req: Request, res: Response, next
   }
 });
 
-meRouter.get('/stickers', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`, like `/shifts` and `/sos` above.
+ *
+ * This is a self-read, and in `legacy` a "self" is `?volunteerId=<public id>` while the
+ * leaderboard hands those ids to anonymous callers — so on `requireAccount` alone it answers
+ * "what is in *that named person's* bag / quest log / sticker book" to anyone who asks, with
+ * no session and no audit row. Two earlier rounds put this guard on the two siblings that
+ * carry a location; these three carry the rest of the account's game state and were missed
+ * because they read as harmless. The rule is about who is asking, not about which field.
+ */
+meRouter.get('/stickers', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const owned = await StickerService.forAccount(req.account!.id);
     res.setHeader('Cache-Control', 'no-store');

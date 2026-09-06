@@ -140,14 +140,20 @@ export class AvatarService {
   }
 
   /** Bytes for `GET /avatars/:hash`, with the visibility rule applied. */
-  public static async fetch(hash: string, viewer: { id: string; role: string } | undefined): Promise<IAvatar> {
+  public static async fetch(hash: string, viewer: { id: string; role: string; source?: string } | undefined): Promise<IAvatar> {
     // Several rows can share a hash (same pixels, different owners). Any published one
     // makes the image public; otherwise the viewer needs their own row, or to be a lead.
     const rows = await Avatar.find({ hash }).limit(20);
     if (!rows.length) throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);
     const published = rows.find((d) => d.status === AvatarStatus.APPROVED && d.shareOptIn);
     if (published) return published;
-    const isLead = !!viewer && /SHIFT_LEAD|ORGANIZER|ADMIN/.test(viewer.role);
+    // A *proved* lead. These are the bytes of a face photo that is not published — either
+    // still pending review or never shared — and the hash is broadcast publicly on the
+    // presence wire and the roster. Trusting a claimed role meant
+    // `GET /avatars/<hash>?volunteerId=<any lead id>` returned somebody's unshared photograph
+    // to a caller with no cookie. `flag()` in this same service already checks both; `fetch()`
+    // is the one that hands over the image.
+    const isLead = !!viewer && viewer.source === 'session' && /SHIFT_LEAD|ORGANIZER|ADMIN/.test(viewer.role);
     const own = viewer ? rows.find((d) => String(d.ownerId) === viewer.id) : undefined;
     if (own) return own;
     if (isLead) return rows[0];

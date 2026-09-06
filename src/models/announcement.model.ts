@@ -57,10 +57,20 @@ AnnouncementSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const Announcement = mongoose.model<IAnnouncement>('Announcement', AnnouncementSchema);
 
 /** Whether an account of this kind/role should receive this announcement. */
-export function announcementReaches(audience: AnnouncementAudience, kind: string | undefined, role: string | undefined): boolean {
+export function announcementReaches(
+  audience: AnnouncementAudience,
+  kind: string | undefined,
+  role: string | undefined,
+  source?: string
+): boolean {
+  // `ALL` is public and needs no identity at all. Every other audience is a disclosure
+  // decision, so the kind or role it turns on has to have been *proved*: in `AUTH_MODE=legacy`
+  // both come from a `?volunteerId=` the caller chose, and account ids are public. A `STAFF`
+  // announcement — which carries the author's name and a venue — was readable by anyone who
+  // named a lead's id. `POST` and `DELETE` here already require a session; the read did not.
+  if (audience === AnnouncementAudience.ALL) return true;
+  if (source !== 'session') return false;
   switch (audience) {
-    case AnnouncementAudience.ALL:
-      return true;
     case AnnouncementAudience.VOLUNTEERS:
       return kind === 'VOLUNTEER';
     case AnnouncementAudience.HACKERS:

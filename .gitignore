@@ -7,7 +7,10 @@ coverage
 .gstack/
 
 # Cached OpenStreetMap extracts (~6.5 MB). The committed .overpass queries
-# refetch them; public/gl/uiuc-campus.json is the built artefact that ships.
+# refetch them; the built artefacts that ship are the tiles under content/<pack>/campus/.
+# (This comment used to name a single-file public/gl/uiuc-campus.json. That file was
+# replaced by the tiled bake and no longer exists — ARCHITECTURE.md 14.2 is the current
+# description. A reviewer reading only this line concluded the migration was incomplete.)
 design/osm/*.json
 design/osm/cache/
 

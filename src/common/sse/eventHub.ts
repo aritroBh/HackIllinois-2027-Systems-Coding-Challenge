@@ -53,7 +53,7 @@
  */
 import { Request, Response } from 'express';
 import { env } from '../../config/env';
-import { AccountContext, isLeadOrAbove } from '../types/account';
+import { AccountContext, isLeadOrAbove, isProvenLead, isProvenSession } from '../types/account';
 import { ErrorCode } from '../errors/errorCodes';
 import { streamLimits, SlotHandle } from '../streamLimits';
 import { refreshAccountContext } from '../../middleware/identity';
@@ -192,6 +192,11 @@ function audienceOf(data: unknown): string | null {
 /** Whether an account is in the named audience. No account means no targeted delivery. */
 function audienceReaches(audience: string, account: AccountContext | undefined): boolean {
   if (!account) return false;
+  // Audience is a disclosure decision, so the identity has to be proved rather than claimed.
+  // A `STAFF` announcement named a lead's public id and reached anyone who typed it; the two
+  // broad audiences are less interesting to impersonate but are the same mistake, and holding
+  // all three to one rule is what stops the next one being re-introduced.
+  if (!isProvenSession(account)) return false;
   if (audience === 'VOLUNTEERS') return account.kind === 'VOLUNTEER';
   if (audience === 'HACKERS') return account.kind === 'HACKER';
   if (audience === 'STAFF') return isLeadOrAbove(account);
@@ -373,7 +378,18 @@ class SSEBroadcastHub {
       account,
       channels: new Set(authorised),
       version,
-      fullSos: isLeadOrAbove(account) || (mode === 'legacy' && account === undefined),
+      // A *proved* lead, or the anonymous legacy demo viewer.
+      //
+      // This said `isLeadOrAbove(account)`, which trusts a claimed role — so in `legacy`
+      // `?channels=sos&volunteerId=<any lead id>` opened an unredacted SOS stream with no
+      // cookie: hacker names, table text, medical categories, and the full-ticket
+      // `SOS_ESCALATED_FULL` with coordinates. `listTickets` redacts exactly those fields for
+      // the same caller over REST, so the stream was undoing the REST fix in real time.
+      //
+      // The anonymous-legacy branch is deliberate and stays: with no account at all there is
+      // nobody to impersonate, and it is what makes the zero-setup demo dashboard show a
+      // distress queue. Naming somebody is the part that has to be proved.
+      fullSos: isProvenLead(account) || (mode === 'legacy' && account === undefined),
       slot: acquired.slot,
       lagging: false,
       lagSince: 0,
@@ -411,10 +427,20 @@ class SSEBroadcastHub {
   }
 
   private mayJoin(channel: Channel, account: AccountContext | undefined, mode: AuthMode): boolean {
+    // `presence:exact` is decided before the legacy blanket, and on a *proved* lead.
+    //
+    // Two things were wrong and they compounded. `mode === 'legacy'` returned true for every
+    // channel, so the one channel named for exact positions was open to an anonymous caller in
+    // the shipped default mode; and in `required` mode `isLeadOrAbove` trusted a claimed role.
+    //
+    // Nothing publishes to this channel today — there is no `broadcast` call site for it — so
+    // this was latent rather than leaking. That is exactly why it is worth fixing now: the
+    // first thing to write to it would have been an exact-position feed with no gate, and the
+    // gate would have looked present.
+    if (channel === 'presence:exact') return isProvenLead(account);
     if (mode === 'legacy') return true;
     if (channel === 'announce') return true;
     if (!account) return false;
-    if (channel === 'presence:exact') return isLeadOrAbove(account);
     return true;
   }
 
@@ -478,7 +504,10 @@ class SSEBroadcastHub {
       client.account = { ...current, source: previous.source };
 
       // Redaction follows the role as it is now, not as it was at connect.
-      client.fullSos = isLeadOrAbove(client.account) || (mode === 'legacy' && false);
+      // Same rule as `registerClient`, and it had the same bug: re-authorising on the
+      // heartbeat re-granted the unredacted stream to a *claimed* lead, so a connection that
+      // opened redacted was upgraded a minute later by the code written to downgrade it.
+      client.fullSos = isProvenLead(client.account);
 
       // And a channel the account may no longer join is dropped from under it.
       for (const ch of [...client.channels]) {

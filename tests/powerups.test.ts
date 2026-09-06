@@ -314,3 +314,107 @@ describe('the next shift is one you can still turn up to', () => {
     expect(profile.headers['cache-control']).toBe('no-store');
   });
 });
+
+describe('a claimed identity is not a session, on every self-read', () => {
+  /**
+   * The rule the whole codebase draws: an *action* may believe a claimed `?volunteerId=`,
+   * because `AUTH_MODE=legacy` is a documented open demo; a *disclosure* may not, because in
+   * legacy the id comes from the query string and `GET /volunteers` hands account ids to
+   * anonymous callers. Two rounds fixed the two `/me` routes that carry a location and left
+   * the four beside them, which carry the rest of the account's game state.
+   */
+  it.each([
+    ['/api/v1/me/inventory'],
+    ['/api/v1/me/quests'],
+    ['/api/v1/me/stickers'],
+    ['/api/v1/me/card'],
+  ])('refuses GET %s to a claimed identity', async (path) => {
+    const victim = await Volunteer.create({
+      name: 'Read Rhea', email: `rr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app).get(`${path}?volunteerId=${victim.id}`);
+      expect(claimed.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+    // The same account, having actually signed in, is answered.
+    const { agent } = await signIn(victim.id);
+    expect((await agent.get(path)).status).toBe(200);
+  });
+
+  it('refuses DELETE /presence to a claimed identity', async () => {
+    // The PATCH beside this was fixed for exactly this attack; the DELETE does the same
+    // thing more directly — drop them from the store, drop their SSE session — and was left.
+    const victim = await Volunteer.create({
+      name: 'Onmap Omar', email: `oo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER, presenceOptIn: true,
+    });
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app).delete(`/api/v1/presence?volunteerId=${victim.id}`);
+      expect(claimed.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+  });
+
+  it('does not hand a claimed volunteer the populated shift roster', async () => {
+    // Anonymous already got redacted counts. Naming any public volunteer id upgraded that to
+    // every rostered person's name, certifications, karma, prestige and avatar hash.
+    const vol = await Volunteer.create({
+      name: 'Roster Rosa', email: `rr2-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    const shift = await Shift.create({
+      title: 'Rostered shift', description: 'x', category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() + 3600_000), endTime: new Date(Date.now() + 7200_000),
+      capacity: 4, baseKarma: 10,
+    });
+    await Registration.create({
+      shiftId: shift._id, volunteerId: vol._id,
+      status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('roster'),
+    });
+
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app).get(`/api/v1/shifts/${shift.id}?volunteerId=${vol.id}`);
+      expect(claimed.status).toBe(200);
+      expect(JSON.stringify(claimed.body)).not.toContain('Roster Rosa');
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+  });
+});
+
+describe('health is liveness for anyone and telemetry for a lead', () => {
+  it('gives an anonymous caller no operational detail', async () => {
+    // On a public URL the full body is a live read on how busy the event is, how much load
+    // exhausts the slot ceilings, and whatever a failing job left in `jobs[].lastError`.
+    const res = await request(app).get('/health');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('HEALTHY');
+    expect(res.body.streams).toBeUndefined();
+    expect(res.body.presence).toBeUndefined();
+    expect(res.body.jobs).toBeUndefined();
+    expect(res.body.plugins).toBeUndefined();
+  });
+
+  it('gives a signed-in lead the whole picture', async () => {
+    const lead = await Volunteer.create({
+      name: 'Lead Lena', email: `ll-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.SHIFT_LEAD,
+    });
+    const { agent } = await signIn(lead.id);
+    const res = await agent.get('/health');
+    expect(res.status).toBe(200);
+    expect(res.body.streams).toBeDefined();
+    expect(res.body.jobs).toBeDefined();
+  });
+});

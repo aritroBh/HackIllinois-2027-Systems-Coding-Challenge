@@ -64,7 +64,7 @@ announcementRouter.get('/', async (req: Request, res: Response, next: NextFuncti
     const rows = await Announcement.find({ expiresAt: { $gt: now } }).sort({ createdAt: -1 }).limit(50).lean();
     // The filter is here, not in the client: an announcement for staff must not be
     // readable by a hacker who simply ignores the audience field.
-    const mine = rows.filter((r) => announcementReaches(r.audience, req.account?.kind, req.account?.role));
+    const mine = rows.filter((r) => announcementReaches(r.audience, req.account?.kind, req.account?.role, req.account?.source));
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
       success: true,

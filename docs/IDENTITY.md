@@ -54,8 +54,13 @@ somebody is guessing claim codes is telling the guesser their guessing is being 
 ## Adapter 2 — email magic link
 
 Enabled when `SMTP_URL` is set (always enabled in development, where the link is printed to
-the server log instead of being mailed). `POST /api/v1/auth/magic-link {email}` always
-answers 202 with an identical body in every environment (no enumeration oracle); if the address belongs to an account a 15-minute single-use link
+the server log instead of being mailed). `POST /api/v1/auth/magic-link {email}` answers 202 with an
+identical body whether or not the address belongs to an account, so it is not an enumeration
+oracle — and the send is dispatched rather than awaited, so the *clock* does not disclose what
+the body hides. When the adapter is disabled (production with no `SMTP_URL`) the route answers
+403 `PROVIDER_DISABLED` to everyone alike, which discloses nothing about any address;
+`GET /api/v1/auth/providers` advertises that state up front. If the address belongs to an
+account a 15-minute single-use link
 `<PUBLIC_URL>/dashboard/#magic=<token>` is mailed. The page exchanges it with
 `POST /api/v1/auth/magic {token}`.
 

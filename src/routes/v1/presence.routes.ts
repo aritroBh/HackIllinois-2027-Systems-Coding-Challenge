@@ -45,7 +45,15 @@ presenceRouter.post('/', requireAccount, validate(postPresenceSchema), async (re
   }
 });
 
-presenceRouter.delete('/', requireAccount, (req: Request, res: Response) => {
+/*
+ * `requireSession`, like `PATCH /me/presence`.
+ *
+ * On `requireAccount` alone this was the same one-request way to take a named person off the
+ * map: `DELETE /presence?volunteerId=<victim>` drops their entry and their SSE session, with
+ * no session and — because a claimed identity is not a session — no CSRF check. The PATCH was
+ * fixed for exactly this; the DELETE beside it does the same thing more directly and was left.
+ */
+presenceRouter.delete('/', requireSession, requireAccount, (req: Request, res: Response) => {
   const id = req.account!.id;
   dropSseSession(id);
   presenceStore.remove(id);

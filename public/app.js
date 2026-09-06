@@ -1412,8 +1412,17 @@ async function quickSignUp(shiftId, btn) {
 }
 
 async function loadSOSTickets() {
+  // Whose request this is. See `handoverGeneration`.
+  //
+  // A lead's copy of this list is the *unredacted* ticket — hacker name, table, description,
+  // medical category — so a response landing after the device has changed hands would paint a
+  // stranger's distress calls for somebody whose own session would be handed the redacted
+  // shape. The same guard the inventory carries, on more sensitive data.
+  const mine = handoverGeneration;
   try {
-    openSosTicketsCache = await apiGet('/api/v1/sos/tickets?status=OPEN');
+    const tickets = await apiGet('/api/v1/sos/tickets?status=OPEN');
+    if (mine !== handoverGeneration) return; // the lead this was for has left the device
+    openSosTicketsCache = tickets;
     renderSOSTicketsList(openSosTicketsCache);
     syncCampusActors();
   } catch (err) {
@@ -2277,6 +2286,19 @@ async function init() {
     // they happen to navigate to a tab that refetches. `me.js` and `quests.js` both reload
     // here for the same reason; this handler was the one that only cleared.
     void loadUserInventory();
+
+    // The distress queue too, and this one matters more than the bag.
+    //
+    // A lead reads `GET /sos/tickets` unredacted: seat numbers, hacker names, descriptions,
+    // medical categories. The handover cleared the inventory and left that list sitting in
+    // `openSosTicketsCache` and painted in the DOM, so the volunteer who sat down next was
+    // looking at the previous lead's open medical calls — data their own session would have
+    // been handed redacted. Cleared, repainted empty, then reloaded under the new session,
+    // which returns whatever the new account is actually entitled to.
+    openSosTicketsCache = [];
+    renderSOSTicketsList(openSosTicketsCache);
+    syncCampusActors();
+    void loadSOSTickets();
   });
   await fetchVolunteers();
   await fetchShifts();
