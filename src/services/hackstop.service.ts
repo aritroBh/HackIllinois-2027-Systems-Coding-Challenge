@@ -24,12 +24,17 @@
  */
 import { HackStop } from '../models/hackstop.model';
 import { PowerUpInventory, PowerUpType, POWER_UP_CATALOG, IPowerUpInventory } from '../models/powerup.model';
-import { Gym } from '../models/gym.model';
+import { Gym, Faction } from '../models/gym.model';
+import { Volunteer } from '../models/volunteer.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
+import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { KarmaService, KarmaSource } from './karma.service';
 import { domainEvents } from '../common/events/domainEvents';
+
+/** The one radius every place-bound action in the game uses, spins and battles included. */
+const GEOFENCE_RADIUS_METERS = 75;
 
 export interface ISpinResult {
   hackStopId: string;
@@ -63,8 +68,18 @@ export class HackStopService {
    * than an error: the beacon list is useful to a signed-out visitor and the field is simply
    * absent for them.
    */
-  public static async listBeacons(viewerId?: string): Promise<Array<Record<string, unknown>>> {
+  public static async listBeacons(viewer?: { id: string; source: string } | null): Promise<Array<Record<string, unknown>>> {
     const beacons = await HackStop.find({ isActive: true }).select('-lastSpunUsers').sort({ name: 1 }).lean();
+    // A PROVED caller, not a claimed one.
+    //
+    // Removing the whole `lastSpunUsers` map closed the bulk disclosure and left a per-caller
+    // oracle behind it, keyed on whatever identity the request carried. In `AUTH_MODE=legacy`
+    // — the shipped default — that identity is a query parameter, and account ids are public:
+    // `GET /pokeshift/hackstops?volunteerId=<anyone>` polled every few minutes rebuilds that
+    // person's last-spin time at every beacon, and beacon locations are public, so it is a
+    // position history with no session and no audit row. The same `source === 'session'`
+    // condition the presence and directory reads already use.
+    const viewerId = viewer && viewer.source === 'session' ? viewer.id : null;
     if (!viewerId) return beacons as Array<Record<string, unknown>>;
 
     // One extra read, projected to the single map entry that belongs to this caller. Asking
@@ -290,7 +305,8 @@ export class HackStopService {
   public static async usePowerUp(
     volunteerId: string,
     itemType: PowerUpType,
-    targetGymId?: string
+    targetGymId?: string,
+    coordinates?: IGeoCoordinates
   ): Promise<{ message: string; remainingQuantity: number }> {
     const itemMeta = POWER_UP_CATALOG[itemType];
 
@@ -306,6 +322,49 @@ export class HackStopService {
       const targetGym = await Gym.findById(targetGymId);
       if (!targetGym) {
         throw ApiError.badRequest('Target gym not found.');
+      }
+
+      // A gym is a place, and acting on one means standing at it.
+      //
+      // Spins and battles have both enforced the 75 m geofence here since the beginning;
+      // this path enforced nothing at all. `POST /pokeshift/inventory/use` took a gym id and
+      // no position, so a volunteer who had earned a core at the event could spend it from
+      // home: +250 CP and its karma bonus for an action nobody performed, or a two-hour
+      // shield dropped on any gym on campus, which makes every legitimate on-site attacker's
+      // battle throw. The client picks the nearest gym and sends where it is, but a client is
+      // not a check — the whole point of the geofence is that the server decides.
+      if (!coordinates) {
+        throw ApiError.badRequest(
+          `${itemMeta.name} acts on a gym, so it needs your position. Open Campus and place your trainer.`,
+          { code: ErrorCode.MISSING_REQUIRED_FIELD }
+        );
+      }
+      const geoCheck = GeoEngine.isWithinGeofence(
+        coordinates,
+        { latitude: targetGym.latitude, longitude: targetGym.longitude },
+        GEOFENCE_RADIUS_METERS
+      );
+      if (!geoCheck.allowed) {
+        throw ApiError.forbidden(
+          `Out of range: You are ${geoCheck.distanceMeters}m from ${targetGym.name}. Must be within ${GEOFENCE_RADIUS_METERS}m to deploy there.`
+        );
+      }
+
+      // And it must not be a rival's gym.
+      //
+      // Both gym-targeted items *help* their target: the core adds control points, the shield
+      // makes the gym uncontestable for two hours. Spending one on a stronghold another
+      // faction holds entrenches it — a way to hand a rival two hours of immunity, or to burn
+      // an ally's core doing it. Neutral is fair game, because taking neutral ground is the
+      // thing the game is about.
+      const holder = targetGym.controllingFaction;
+      const actor = await Volunteer.findById(volunteerId).select('faction');
+      const mine = actor?.faction ?? null;
+      if (holder && holder !== Faction.NEUTRAL && mine && holder !== mine) {
+        throw ApiError.conflict(
+          `${targetGym.name} is held by ${holder}. A ${itemMeta.name} strengthens the gym it is used on, so it cannot be spent on a rival's.`,
+          ErrorCode.FACTION_ALLEGIANCE_LOCKED
+        );
       }
     }
 

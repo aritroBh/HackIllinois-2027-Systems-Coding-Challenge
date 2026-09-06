@@ -126,6 +126,19 @@ export interface BoothScanResult {
 
 export class BoothService {
   /**
+   * Read the catalog now, so a bad pack fails at boot rather than at the first player.
+   *
+   * The cross-checks live inside the lazy read — that is the right place for them, since it
+   * is the only place that has the parsed file — but a lazy read runs when somebody scans a
+   * poster or finishes a quest, and by then the karma has been paid and the failure is a 404
+   * in one player's face. The docblocks say these vocabularies are refused at boot; this is
+   * what makes that true.
+   */
+  public static warm(): void {
+    boothCatalog();
+  }
+
+  /**
    * The code printed on a booth's poster. Deterministic for a given secret and booth id.
    *
    * Exported rather than private because posters have to be produced from somewhere, and the

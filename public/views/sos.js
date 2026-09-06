@@ -160,7 +160,15 @@
       <p id="sos-error" role="alert"></p>
       <div class="btn-row">
         ${t.status === 'OPEN' ? '<button class="pb pb-ghost" data-action="sos-cancel">Cancel this call</button>' : ''}
-        ${LIVE.has(t.status) ? '' : '<button class="pb pb-ghost" data-action="sos-clear">Clear</button>'}
+        ${LIVE.has(t.status)
+          // An escape from a live stage, always. Cancelling is refused once somebody has been
+          // dispatched — correctly, because a responder is walking towards you — but that left
+          // a DISPATCHED ticket with no button at all, and a ticket that had quietly finished
+          // server-side while the tab was shut could never be dismissed. This does not touch
+          // the ticket; it stops this browser showing it. `GET /me/sos` reconciles on the next
+          // load, so an actually-live call comes straight back.
+          ? '<button class="pb pb-ghost" data-action="sos-clear" title="Stops showing it here. The call itself is unaffected.">Hide this</button>'
+          : '<button class="pb pb-ghost" data-action="sos-clear">Clear</button>'}
       </div>`;
   }
 
@@ -265,24 +273,55 @@
     });
   }
 
-  // Staff accounts can read the ticket list, so for them the server is the truth. For a
-  // hacker the endpoint is forbidden and the remembered ticket stands in.
+  /**
+   * The remembered ticket, reconciled against the server where that is possible.
+   *
+   * Only hackers reach this — the tab is `roles: ['HACKER']` and `restore` is called from
+   * `session:ready` for them alone — and `GET /sos/tickets` is staff-only, so in practice the
+   * fetch below always 403s and the remembered ticket is what stands. The call is kept
+   * because it costs one refused request and is the right answer the moment a hacker-readable
+   * "my tickets" endpoint exists; the comment used to claim staff take this path, which they
+   * never have.
+   *
+   * The match is on ids, never on `hackerName`. A display name is not an identifier — the
+   * submit form defaults it to "A hacker" for an account that has not set one — so matching
+   * on it would have adopted a stranger's open ticket the first time two people left the name
+   * blank.
+   */
   async function restore(user) {
     const held = recall();
     if (held) state.ticket = held;
+    void user;
     try {
-      const { data } = await N.api('/api/v1/sos/tickets');
-      const mine = (Array.isArray(data) ? data : [])
-        .filter((t) => LIVE.has(t.status) && (sameId(t.createdById, user.id) || (held && sameId(t._id, held.id)) || t.hackerName === user.displayName))
-        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-      const t = mine[0];
-      state.ticket = t ? { id: String(t._id), hackerName: t.hackerName, status: t.status, category: t.category, tableLocation: t.tableLocation } : null;
+      // The server is the truth, and `GET /me/sos` is where a hacker can finally ask it.
+      //
+      // The remembered ticket is a starting point, not an answer. A ticket resolved or
+      // cancelled while the tab was closed left it stuck at DISPATCHED — a state with no
+      // Cancel (only OPEN may cancel) and no Clear (only a settled ticket may be cleared) —
+      // and no SSE would ever arrive for a call that had already finished. The result was a
+      // hacker with no button, unable to raise another call from that device for the rest of
+      // the event. A `null` here is the answer that unsticks them.
+      const { data } = await N.api('/api/v1/me/sos');
+      state.ticket = data
+        ? { id: String(data.id), hackerName: data.hackerName, status: data.status, category: data.category, tableLocation: data.tableLocation }
+        : null;
       remember(state.ticket);
     } catch (err) {
-      if (err.status !== 401 && err.status !== 403) console.debug('[sos] ticket list unavailable:', err.message);
+      // Offline or signed out: keep what was remembered rather than blanking a live call,
+      // and let the escape hatch in `liveHtml` cover the case where it is stale.
+      if (err.status !== 401 && err.status !== 403) console.debug('[sos] own ticket unavailable:', err.message);
     }
     show(state.ticket ? 'live' : 'idle');
   }
+
+  // The browser changed hands without a sign-out. `session.js` has cleared the stored ticket
+  // by now; this drops the copy held in memory, which is the one on the screen. Without it
+  // the next person sits down looking at a stranger's live distress call, seat number and
+  // all, with a Cancel button under it.
+  N.onEvent('session:handover', () => {
+    state.ticket = null;
+    show('idle');
+  });
 
   N.registerTab({
     id: 'tab-sos', label: 'SOS', order: 1, roles: ['HACKER'],

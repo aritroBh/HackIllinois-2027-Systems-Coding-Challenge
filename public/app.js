@@ -1651,28 +1651,50 @@ async function deployPowerUp(itemType, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
 
-  // The gym you are standing at, not whichever one the fetch happened to return first.
+  // Only two items act on a gym; the rest are drunk, squeezed or worn.
   //
-  // This was `gymsCache[0]`, and the Deploy button in the bag carries only the item — so an
-  // item inspected against one stronghold was spent on another, usually an enemy-held one,
-  // with no way to choose and nothing in the UI admitting which gym had been buffed. Nearest
-  // is the rule the rest of the game already uses for a place-bound action, and naming the
-  // target in the log is what makes it checkable.
-  const at = requirePlayerCoords('Deploying an item');
-  if (!at) return;
-  const placed = gymsCache.filter((g) => Number.isFinite(g.latitude) && Number.isFinite(g.longitude));
-  if (!placed.length) {
-    logChaosTerminal('[BLOCKED] No gyms loaded — refresh the territory list.');
-    return;
+  // Requiring a gym and a position for every item locked out the ones that need neither — a
+  // Cold Brew Elixir is not aimed at anything — and locked out lite mode entirely, where
+  // there is no renderer and so never a player position. The split is the same one the
+  // server makes, and the server is the one that enforces it: the geofence and the
+  // faction check on a gym-targeted deploy live in `hackstop.service.ts`, because a client
+  // choosing its own target is a convenience, not a check.
+  const GYM_ITEMS = new Set(['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD']);
+  let targetGym = null;
+  let at = null;
+  if (GYM_ITEMS.has(itemType)) {
+    // The gym you are standing at, not whichever one the fetch happened to return first.
+    // This was `gymsCache[0]`, and the Deploy button carries only the item — so an item
+    // inspected against one stronghold was spent on another, usually an enemy-held one, with
+    // no way to choose and nothing in the UI admitting which gym had been buffed.
+    at = requirePlayerCoords('Deploying this item');
+    if (!at) return;
+    const placed = gymsCache.filter((g) => Number.isFinite(g.latitude) && Number.isFinite(g.longitude));
+    if (!placed.length) {
+      logChaosTerminal('[BLOCKED] No gyms loaded — refresh the territory list.');
+      return;
+    }
+    targetGym = placed.reduce((best, g) => (metresBetween(at, g) < metresBetween(at, best) ? g : best), placed[0]);
   }
-  const targetGym = placed.reduce((best, g) => (metresBetween(at, g) < metresBetween(at, best) ? g : best), placed[0]);
 
   try {
-    const json = await Nexus.api('/api/v1/pokeshift/inventory/use', { method: 'POST', body: { volunteerId: vol._id, itemType, targetGymId: targetGym?._id }, lenient: true });
+    const json = await Nexus.api('/api/v1/pokeshift/inventory/use', {
+      method: 'POST',
+      body: {
+        volunteerId: vol._id,
+        itemType,
+        ...(targetGym ? { targetGymId: targetGym._id, coordinates: at } : {}),
+      },
+      lenient: true,
+    });
     if (json.success) {
       window.soundEngine?.playSonarPing();
       window.fx?.burstAt(btn, '#ffb020', 24);
-      logChaosTerminal(`[DEPLOYED @ ${targetGym.name || targetGym.locationName || targetGym._id}] ${json.data.message}`);
+      logChaosTerminal(
+        targetGym
+          ? `[DEPLOYED @ ${targetGym.name || targetGym.locationName || targetGym._id}] ${json.data.message}`
+          : `[USED] ${json.data.message}`
+      );
       loadUserInventory();
       loadGymsData();
       fetchStats();

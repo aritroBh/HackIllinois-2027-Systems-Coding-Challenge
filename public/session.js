@@ -180,22 +180,32 @@
     session.user = account || null;
 
     // A different person than the one this browser last carried: drop what the previous
-    // account left behind before anything reads it. Deliberately not on sign-*out* — that is
-    // `logout`'s job and it also clears the service-worker card — and deliberately not when
-    // the same account signs back in, which would cost somebody their sticker book for
-    // refreshing a session.
+    // account left behind before anything reads it. Deliberately not when the same account
+    // signs back in, which would cost somebody their sticker book for refreshing a session.
+    //
+    // The FULL teardown, not just the storage keys. This branch exists for the handoff that
+    // happens without a sign-out — somebody closes the lid, somebody else scans a badge —
+    // and in that path there is no reload either, so the service-worker card survives and
+    // `sessionStorage` survives with it. Clearing three `localStorage` keys and leaving the
+    // cached trainer card behind is the shape of a fix rather than a fix.
+    //
+    // Not awaited: nothing here is reloading the page, so there is no teardown to race, and
+    // `setUser` is called from synchronous paths that must not become asynchronous.
+    let handedOver = false;
     if (session.user && session.user.id) {
       let last = null;
       try { last = localStorage.getItem(DEVICE_ACCOUNT_KEY); } catch { /* storage disabled */ }
-      if (last && last !== String(session.user.id)) {
-        for (const key of ACCOUNT_KEYS) {
-          try { localStorage.removeItem(key); } catch { /* as above */ }
-        }
-      }
+      handedOver = !!last && last !== String(session.user.id);
+      if (handedOver) void clearDeviceState();
       try { localStorage.setItem(DEVICE_ACCOUNT_KEY, String(session.user.id)); } catch { /* as above */ }
     }
 
     if (prev !== session.user) N.emit('session', session.user);
+    // Storage is not the only place the previous account lives: the sticker book, the face
+    // and the open SOS ticket are all held in memory by views that loaded them once. They
+    // listen for this and forget. Emitted after `session` so a listener that wants both sees
+    // the new user first.
+    if (handedOver) N.emit('session:handover', session.user);
     return session.user;
   }
 

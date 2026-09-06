@@ -4,11 +4,15 @@
  * A spin is gated on both the 75 m geofence and a 5-minute per-volunteer cooldown, and
  * the loot roll happens server-side so the client cannot influence rarity.
  *
- * Worth knowing about the shipped client: it sends the campus player's real position
- * when one exists and falls back to the beacon's own coordinates when the player has not
- * been placed on the map yet. So the geofence is genuinely exercised once you walk the
- * avatar, and trivially satisfied before that. The server-side check is unconditional
- * either way — the fallback is a client convenience, not a bypass.
+ * Worth knowing about the shipped client: it sends the campus player's real position, and
+ * when it does not have one it refuses to send the request at all rather than substituting
+ * anything. It used to fall back to the *beacon's own coordinates*, which satisfied the
+ * geofence by measuring the distance from a point to itself — the check could not fail. That
+ * is gone; the button now stays disabled and says what would enable it.
+ *
+ * The server-side check was and is unconditional, which is why that was a defect in the game
+ * rather than a hole in the perimeter: the server always measured, it was simply handed a
+ * number that made the answer a foregone conclusion.
  */
 import { Request, Response, NextFunction } from 'express';
 import { HackStopService } from '../services/hackstop.service';
@@ -21,8 +25,11 @@ import { env } from '../config/env';
 export class HackStopController {
   public static async listBeacons(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // The caller's own cooldown is theirs to see; everybody else's is not. See the service.
-      const beacons = await HackStopService.listBeacons(resolveActorId(_req));
+      // The caller's own cooldown is theirs to see; everybody else's is not, and a *claimed*
+      // identity is not a caller. See the service.
+      const beacons = await HackStopService.listBeacons(
+        _req.account ? { id: _req.account.id, source: _req.account.source } : null
+      );
       res.status(200).json({ success: true, data: beacons });
     } catch (error) {
       next(error);
@@ -59,8 +66,8 @@ export class HackStopController {
 
   public static async usePowerUp(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { itemType, targetGymId } = req.body;
-      const result = await HackStopService.usePowerUp(resolveActorId(req) as string, itemType, targetGymId);
+      const { itemType, targetGymId, coordinates } = req.body;
+      const result = await HackStopService.usePowerUp(resolveActorId(req) as string, itemType, targetGymId, coordinates);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);

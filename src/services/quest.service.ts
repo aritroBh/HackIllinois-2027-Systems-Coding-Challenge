@@ -216,6 +216,19 @@ function distinctValue(quest: Quest, meta: Record<string, unknown>, at: Date): s
 
 export class QuestService {
   /**
+   * Read the catalog now, so a bad pack fails at boot rather than at the first player.
+   *
+   * The cross-checks live inside the lazy read — that is the right place for them, since it
+   * is the only place that has the parsed file — but a lazy read runs when somebody scans a
+   * poster or finishes a quest, and by then the karma has been paid and the failure is a 404
+   * in one player's face. The docblocks say these vocabularies are refused at boot; this is
+   * what makes that true.
+   */
+  public static warm(): void {
+    questCatalog();
+  }
+
+  /**
    * Advances every quest listening for `eventType`, and pays the ones that finish.
    *
    * `meta` is the domain event's payload. DISTINCT quests read one named field out of it;

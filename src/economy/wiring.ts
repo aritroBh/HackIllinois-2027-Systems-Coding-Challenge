@@ -18,6 +18,7 @@
  */
 import { domainEvents } from '../common/events/domainEvents';
 import { QuestService } from '../services/quest.service';
+import { BoothService } from '../services/booth.service';
 import { RaidService } from '../services/raid.service';
 
 let wired = false;
@@ -30,6 +31,18 @@ let unsubscribeRaids: (() => void) | null = null;
 export function wireEconomy(): void {
   if (wired) return;
   wired = true;
+
+  // Read every content-derived catalog before anything subscribes to anything.
+  //
+  // Each of these validates its own file's cross-references — a booth naming a sticker
+  // memorabilia.json does not declare, a quest that cannot advance — and each did it lazily,
+  // on the first scan or the first completion. Lazily is too late: the karma is paid before
+  // the sticker is granted, so a typo surfaced as a 404 in one player's face with the money
+  // already moved and nothing to repair it. Reading them here turns the same check into a
+  // boot failure, which is what every docblock involved already claimed it was.
+  BoothService.warm();
+  QuestService.warm();
+  RaidService.warm();
 
   // Completion pays its own karma and sticker inside QuestService, so this listener only
   // has to say that something happened and to whom.

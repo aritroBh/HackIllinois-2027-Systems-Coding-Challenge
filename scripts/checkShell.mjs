@@ -34,13 +34,37 @@ const sw = read('public/sw.js');
 /** `src="/dashboard/…"` in load order, deduped. */
 const loaded = [...new Set([...html.matchAll(/src="(\/dashboard\/[^"]+\.js)"/g)].map((m) => m[1]))];
 
-/** The string entries of one array literal in sw.js, by the name it is declared under. */
+/**
+ * The entries of one array literal in sw.js, by the name it is declared under.
+ *
+ * Quoted strings and bare identifiers both, because `SHELL` opens with `INDEX` — a `const`
+ * holding `'/dashboard/index.html'`. A string-only scan skipped it silently, so the two
+ * existence assertions below never covered the one file the whole offline shell is for: the
+ * page itself. An identifier that does not resolve to a string constant is an error rather
+ * than a skip, since skipping is exactly the failure being fixed.
+ */
 function arrayOf(name) {
   const start = sw.indexOf(`const ${name} = [`);
   if (start < 0) throw new Error(`checkShell: sw.js has no ${name}`);
   const end = sw.indexOf('];', start);
-  const body = sw.slice(start, end);
-  return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const body = sw.slice(start + `const ${name} = [`.length, end);
+
+  const out = [];
+  for (const raw of body.split(',')) {
+    // Strip comments and whitespace; an entry is then either a quoted path or an identifier.
+    const item = raw.replace(/\/\/[^\n]*/g, '').trim();
+    if (!item) continue;
+    const quoted = item.match(/^'([^']+)'$/);
+    if (quoted) { out.push(quoted[1]); continue; }
+    if (/^[A-Z_][A-Z0-9_]*$/.test(item)) {
+      const decl = sw.match(new RegExp(`const ${item}\\s*=\\s*'([^']+)'`));
+      if (!decl) throw new Error(`checkShell: ${name} references ${item}, which is not a string constant in sw.js`);
+      out.push(decl[1]);
+      continue;
+    }
+    throw new Error(`checkShell: ${name} has an entry this scan cannot read: ${item}`);
+  }
+  return out;
 }
 
 const shell = arrayOf('SHELL');

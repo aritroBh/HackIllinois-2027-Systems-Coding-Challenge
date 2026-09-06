@@ -53,5 +53,18 @@ export const usePowerUpSchema = z.object({
     volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
     itemType: z.nativeEnum(PowerUpType),
     targetGymId: objectId('Invalid Gym ObjectId').optional(),
+    /**
+     * Where the player is, for the two items that act on a gym.
+     *
+     * Optional in the schema and required in the service, because it is required only for a
+     * gym-targeted item: a Cold Brew Elixir is drunk, not aimed, and demanding a position for
+     * it would lock out anybody in lite mode who has no renderer at all.
+     */
+    coordinates: z
+      .object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+      })
+      .optional(),
   }),
 });

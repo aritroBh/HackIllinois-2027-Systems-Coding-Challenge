@@ -685,6 +685,34 @@
     for (const [name, fn] of Object.entries(ACTIONS)) window.Nexus.registerAction(name, fn);
   }
 
+  /**
+   * The browser changed hands without anybody signing out.
+   *
+   * `session.js` clears the storage; this clears the copy of it that has been sitting in
+   * `state` since boot, which is the copy the screen is drawn from. Without it the fix is
+   * only half done and looks complete: the sticker book, the walk flag and the face loaded
+   * from `nexus.avatar.v1` all survive in memory, so the next person sees the previous
+   * person's trainer — and the first `saveFlags()` after that (a walk toggle, an award)
+   * writes the old flags straight back into the key that was just emptied.
+   */
+  window.Nexus?.onEvent?.('session:handover', () => {
+    state.flags = {};
+    state.head = null;
+    state.sheet = null;
+    state.palette = 'SNES16';
+    state.earned = new Set();
+    state.fresh = new Set();
+    state.walking = false;
+    if (state.geoWatch !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(state.geoWatch);
+      state.geoWatch = null;
+    }
+    // Back to the default sprite, or the map keeps showing a face that is no longer anyone's.
+    if (has('setPlayerSprite')) { try { window.campus.setPlayerSprite(null); } catch { /* renderer may be down */ } }
+    renderTrainer();
+    updateHud(true);
+  });
+
   window.game = {
     state, init, renderTrainer, computeEarned, award, toast, tick,
     onCampusReady, onProximity, gateSpins, openEncounter, closeEncounter,

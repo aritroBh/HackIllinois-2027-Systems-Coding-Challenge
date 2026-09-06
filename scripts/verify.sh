@@ -188,6 +188,28 @@ else
 fi
 
 step "test suite"
-npm test --silent 2>&1 | grep -E "Tests:|Suites:|✕|FAIL" || true
+# The exit status of `npm test`, not of `grep`.
+#
+# This was `npm test … | grep -E … || true`, which cannot fail. `set -euo pipefail` is on,
+# and `|| true` discards the pipeline status it would have used: a run with red tests printed
+# `FAIL`, grep matched it, and the script walked on to "done" and exited 0. Every claim this
+# gate has ever made about the suite rested on somebody reading the summary it printed.
+#
+# The status is captured before the filter so the summary still gets printed either way — the
+# output is worth keeping, it just is not the verdict.
+TEST_LOG="$(mktemp)"
+set +e
+npm test --silent > "$TEST_LOG" 2>&1
+TEST_STATUS=$?
+set -e
+grep -E "Tests:|Suites:|✕|FAIL" "$TEST_LOG" || true
+if [ "$TEST_STATUS" -ne 0 ]; then
+  echo
+  echo "test suite FAILED (exit $TEST_STATUS) — full output:"
+  cat "$TEST_LOG"
+  rm -f "$TEST_LOG"
+  exit "$TEST_STATUS"
+fi
+rm -f "$TEST_LOG"
 
 step "done"

@@ -21,8 +21,11 @@ export const sosRouter = Router();
 // Raising a ticket needs an account, both so the creator can cancel their own and so the
 // per-day bounty budget has somebody to charge.
 sosRouter.post('/tickets', requireAccount, validate(createSOSTicketSchema), SOSController.createTicket);
-// The list carries every ticket's location, table text and description: staff only (a hacker's
-// own ticket reaches them over the `me` channel / GET /me in M5).
+// The list carries every ticket's location, table text and description: staff only. A hacker's
+// own ticket reaches them over the `me` SSE channel and, on a reload, from `GET /me/sos` —
+// which is where that promise actually lives now. It did not exist for two milestones while
+// this comment said it did, and the hacker view had nothing to reconcile a remembered ticket
+// against.
 sosRouter.get('/tickets', requireVolunteerKind, validate(listSOSTicketsSchema), SOSController.listTickets);
 // Anyone signed in may raise a ticket; dispatching and resolving are staff actions.
 sosRouter.post('/tickets/:id/dispatch', requireVolunteerKind, validate(dispatchSOSTicketSchema), SOSController.dispatchNearest);

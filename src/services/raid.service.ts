@@ -174,6 +174,19 @@ function isDuplicateKeyError(error: unknown): boolean {
 }
 
 export class RaidService {
+  /**
+   * Read the catalog now, so a bad pack fails at boot rather than at the first player.
+   *
+   * The cross-checks live inside the lazy read — that is the right place for them, since it
+   * is the only place that has the parsed file — but a lazy read runs when somebody scans a
+   * poster or finishes a quest, and by then the karma has been paid and the failure is a 404
+   * in one player's face. The docblocks say these vocabularies are refused at boot; this is
+   * what makes that true.
+   */
+  public static warm(): void {
+    raidCatalog();
+  }
+
   /** The raids that are open at `at`. Empty between windows; more than one when they overlap. */
   public static openAt(at: Date = new Date()): Raid[] {
     const nowMs = at.getTime();

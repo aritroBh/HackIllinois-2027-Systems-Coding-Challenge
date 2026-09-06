@@ -7,6 +7,7 @@ import { requireAccount } from '../../middleware/identity';
 import { Volunteer } from '../../models/volunteer.model';
 import { Registration } from '../../models/registration.model';
 import { PowerUpInventory } from '../../models/powerup.model';
+import { SOSTicket, SOSTicketStatus } from '../../models/sosTicket.model';
 import { QuestService } from '../../services/quest.service';
 import { StickerService } from '../../services/sticker.service';
 import { AuthService } from '../../services/auth.service';
@@ -138,6 +139,49 @@ meRouter.get('/card', requireAccount, async (req: Request, res: Response, next: 
         badges: (account.badges ?? []).length,
         tier: account.prestigeTier,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * The caller's own live SOS ticket, or null.
+ *
+ * `sos.routes.ts` has said since M5 that "a hacker's own ticket reaches them over the `me`
+ * channel / GET /me", and it did not: no route carried it, and the hacker SOS view had
+ * nothing to reconcile against. The consequences were not cosmetic. A hacker whose ticket was
+ * resolved or cancelled while their tab was closed came back to a remembered ticket stuck at
+ * DISPATCHED — a state with no Cancel (only OPEN may cancel) and no Clear (only a settled
+ * ticket may be cleared) — and no further SSE would ever arrive for a ticket that had already
+ * finished. No button, no escape, and no way to raise another call from that device.
+ *
+ * Full detail deliberately: this is the caller's own ticket, and the redaction on `/sos/tickets`
+ * exists to keep one hacker from reading another's. There is exactly one row here and it is
+ * theirs.
+ */
+meRouter.get('/sos', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ticket = await SOSTicket.findOne({
+      createdById: req.account!.id,
+      status: { $in: [SOSTicketStatus.OPEN, SOSTicketStatus.DISPATCHED, SOSTicketStatus.ACKNOWLEDGED, SOSTicketStatus.ON_SCENE] },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({
+      success: true,
+      data: ticket
+        ? {
+            id: String(ticket._id),
+            hackerName: ticket.hackerName,
+            status: ticket.status,
+            category: ticket.category,
+            tableLocation: ticket.tableLocation,
+            urgency: ticket.urgency,
+            createdAt: ticket.createdAt,
+          }
+        : null,
     });
   } catch (error) {
     next(error);
