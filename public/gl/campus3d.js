@@ -2,7 +2,7 @@
  * campus3d — a live WebGL2 model of the UIUC campus at night.
  *
  * The city comes from real OpenStreetMap footprints (design/build-campus.py →
- * gl/uiuc-campus.json): ~900 building outlines with OSM height/level tags, the
+ * the content pack's campus.json, served at /dashboard/content/): ~900 building outlines with OSM height/level tags, the
  * street network, the Quad lawns, and — derived from the footways and lawns —
  * the elm rows and street lamps. Fourteen landmarks are promoted to territory
  * gyms and drawn with their real materials and silhouettes: the Union's brick
@@ -1746,7 +1746,13 @@ export function createCampusRenderer(canvas, opts = {}) {
   /* ------------------------------- public API --------------------------- */
 
   const api = {
-    async loadCampus(url = '/dashboard/gl/uiuc-campus.json') {
+    /**
+     * Loads and bakes a campus model. The default is the active content pack's
+     * bake as served by the server (`/dashboard/content/`); app.js passes
+     * `Nexus.contentUrl('campus')`, which reads the same path from the pack
+     * descriptor when it is available.
+     */
+    async loadCampus(url = '/dashboard/content/campus.json') {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`campus model ${res.status}`);
       campus = await res.json();

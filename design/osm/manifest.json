@@ -1,0 +1,35 @@
+{
+ "source": "OpenStreetMap contributors (ODbL 1.0)",
+ "files": [
+  {
+   "file": "buildings.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "buildings.overpass",
+   "query_sha256": "0199e174af61b82f78e30031dac7c3e7b0fcc2890c663ab1e6e77cf7d7fa8220",
+   "fetched_at": "2026-09-06T00:44:04Z",
+   "bytes": 2542627,
+   "sha256": "4121cab463ed39d8111b158acafb19f56fd88affb20cb39884725a1e58cf69e5",
+   "elements": 2578
+  },
+  {
+   "file": "detail.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "detail.overpass",
+   "query_sha256": "a5130c40070ca64dfd63191472a1e1729d55d8d15f987c2c981fe8c120309232",
+   "fetched_at": "2026-09-06T00:44:09Z",
+   "bytes": 877568,
+   "sha256": "eb54672fb71c043f45bad643d30b762b72664a4c970c2319e6a21e6368bf53f3",
+   "elements": 3088
+  },
+  {
+   "file": "extra.json",
+   "url": "https://overpass-api.de/api/interpreter",
+   "query": "extra.overpass",
+   "query_sha256": "e9a08911a90593526602b614aba1645c6fc72e31d0eea2760ef864b27ace9d04",
+   "fetched_at": "2026-09-06T00:44:19Z",
+   "bytes": 4124413,
+   "sha256": "7a385c22aed96024c6ea33d8d6f7d3cea413aa41703bb45943d8a54d2c7c287e",
+   "elements": 6248
+  }
+ ]
+}

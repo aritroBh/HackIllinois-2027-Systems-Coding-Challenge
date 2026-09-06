@@ -19,7 +19,8 @@
   const escq = (v) => (typeof esc === 'function' ? esc(v) : String(v ?? ''));
 
   const STICKER_KEY = 'nexus.stickers.v1';
-  const WALK_KEY = 'nexus.walk.v1';
+  // Walk-mode persistence lives in `state.flags.__walk` (saved with the
+  // stickers); the old separate `nexus.walk.v1` key was never read.
   const PROX_RADIUS = 75;
 
   const state = {

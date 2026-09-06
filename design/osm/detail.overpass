@@ -1,4 +1,4 @@
-[out:json][timeout:120];
+[out:json][timeout:180];
 (
   node["natural"="tree"](40.0950,-88.2405,40.1175,-88.2195);
   way["natural"="tree_row"](40.0950,-88.2405,40.1175,-88.2195);

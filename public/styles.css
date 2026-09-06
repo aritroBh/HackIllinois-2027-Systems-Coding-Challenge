@@ -102,7 +102,9 @@
 
 /* ===================================================================
    NEXUS QUEST — "Neo-retro indie" pixel game UI.
-   Tokens mirror design/directions/neoretro.mjs.
+   The :root tokens (palette, fonts, shadows) live in tokens.css, generated
+   from design/tokens.mjs (`npm run tokens:build`) and linked before this file;
+   theme.js layers the content pack's event.json branding on top at runtime.
 
    Rules: flat saturated palette · 2px ink outlines · hard 4px offset shadows
    (zero blur) · 4px chamfer notches instead of radius · stickers as accents ·
@@ -110,56 +112,6 @@
    repeating-conic checker · every sprite canvas is image-rendering: pixelated
    · motion only for state change · reduced-motion honoured.
    =================================================================== */
-
-:root {
-  color-scheme: dark;
-  --ground: #13294B;
-  --panel: #1B3461;
-  --inset: #0E1F3A;
-  --ink: #08152B;
-  --edge: #2C4A85;
-  --orange: #FF5F05;
-  --orange-dk: #B8420A;
-  --harvest: #FCB316;
-  --patina: #007E8E;
-  --patina-lt: #35B8C4;
-  --prairie: #006230;
-  --prairie-lt: #3fc474;
-  --cream: #FFF3E0;
-  --cream-dim: #D8C4A6;
-  --mute: #8A9BC0;
-  --pink: #FF3E8C;
-  --white: #FFFFFF;
-  --gold: #FFD34D;
-  --kernel: #35B8C4;
-  --tensor: #B98CFF;
-  --silicon: #FCB316;
-  --neutral: #7C8DAA;
-
-  --live: var(--prairie-lt);
-  --danger: var(--pink);
-  --warn: var(--harvest);
-
-  /* Legacy aliases still referenced by older markup / the label layer. */
-  --text: var(--cream); --text-2: var(--cream-dim); --text-3: var(--mute); --text-4: #5C6E96;
-  --cyan: var(--kernel); --violet: var(--tensor); --amber: var(--silicon); --mint: var(--live);
-  --hazard: var(--danger); --dim: var(--cream-dim); --faint: var(--mute); --void: var(--ground);
-  --panel-hi: var(--edge); --text-main: var(--cream); --text-dim: var(--cream-dim);
-  --hazard-coral: var(--danger); --amber-surge: var(--orange); --neon-green: var(--live);
-  --bg-abyss: var(--ground); --bg-surface: var(--panel); --raised: var(--edge); --hairline: var(--edge);
-
-  --f-hud: 'Silkscreen', 'Courier New', monospace;
-  --f-num: 'Jersey 10', 'Silkscreen', monospace;
-  --f-head: 'Pixelify Sans', 'Silkscreen', sans-serif;
-  --f-body: 'VT323', 'Courier New', monospace;
-  --font-mono: var(--f-body);
-  --font-display: var(--f-head);
-
-  --shell: 1560px;
-  --shadow: 4px 4px 0 var(--ink);
-  --shadow-sm: 3px 3px 0 var(--ink);
-  --t: 120ms;
-}
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }

@@ -22,6 +22,7 @@ npx tsc --noEmit
 step "frontend syntax"
 node --check public/nexus.js
 node --check public/session.js
+node --check public/theme.js
 node --check public/views/onboarding.js
 node --check public/sprites.js
 node --check public/fx.js
@@ -29,6 +30,13 @@ node --check public/soundEngine.js
 node --check public/game.js
 node --check public/app.js
 node -e "import('$ROOT/public/gl/campus3d.js').then(()=>console.log('campus3d.js parses'))" 2>/dev/null
+
+step "design tokens (public/tokens.css is generated from design/tokens.mjs)"
+if ! diff -u public/tokens.css <(node design/tokens.mjs --css); then
+  echo "public/tokens.css is stale: run 'npm run tokens:build' and commit the result" >&2
+  exit 1
+fi
+echo "tokens.css matches design/tokens.mjs"
 
 step "geometry winding audit"
 node --input-type=module -e "

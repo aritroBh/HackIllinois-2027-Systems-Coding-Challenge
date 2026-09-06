@@ -1,40 +1,58 @@
 #!/usr/bin/env python3
 """
-Bake OpenStreetMap extracts of the UIUC campus into the compact model the
-WebGL renderer loads at runtime (public/gl/uiuc-campus.json).
+Bake OpenStreetMap extracts of a campus into the compact model the WebGL
+renderer loads at runtime (`<pack>/campus.json`).
 
-Source data is fetched once from the Overpass API (see FETCH below) and cached
-under design/osm/. Re-run this only when the cache is refreshed; the committed
-JSON is what ships.
+The frame (origin, bounding boxes, metres per unit) and the landmark list come
+from a content pack — `content/<event>/event.json` and `monuments.json` — so a
+fork points the script at its own pack and never edits this file. Source data
+is fetched from the Overpass API with `--fetch` and cached (gitignored) under
+design/osm/; the committed campus.json is what ships.
 
-Everything is projected to a local metric frame centred on the Main Quad, so
-the renderer never touches spherical maths.
+Everything is projected to a local metric frame centred on the pack's origin,
+so the renderer never touches spherical maths.
 
-    python3 design/build-campus.py
+    python3 design/build-campus.py --pack content/hackillinois-2027            # build
+    python3 design/build-campus.py --pack content/hackillinois-2027 --fetch    # refresh cache, then build
+    python3 design/build-campus.py --pack content/hackillinois-2027 --check    # rebuild to a temp file, compare hash
+    python3 design/build-campus.py --pack content/hackillinois-2027 --core-only  # preview: academic core only
+
+The build is deterministic: inputs are sorted by OSM id, floats are rounded,
+and `meta.hash` is the sha256 of the document with `meta.builtAt`/`meta.hash`
+removed. `--check` exits 1 when the committed hash drifts or a monument in
+monuments.json fails to resolve.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import math
 import os
+import subprocess
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 OSM_DIR = HERE / "osm"
-OUT = HERE.parent / "public" / "gl" / "uiuc-campus.json"
+MANIFEST = OSM_DIR / "manifest.json"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+DEFAULT_PACK = ROOT / "content" / "hackillinois-2027"
+SCHEMA = 1
 
 FETCH = """Refresh the cache with:
 
-  mkdir -p design/osm
-  curl -s -X POST --data-binary @design/osm/buildings.overpass \\
-       https://overpass-api.de/api/interpreter -o design/osm/buildings.json
-  curl -s -X POST --data-binary @design/osm/extra.overpass \\
-       https://overpass-api.de/api/interpreter -o design/osm/extra.json
+  python3 design/build-campus.py --fetch
+
+(one POST per design/osm/*.overpass query, results cached as design/osm/*.json
+with a manifest.json recording URL, query hash, size, sha256 and fetch time)
 """
 
-# --- Frame -----------------------------------------------------------------
+# --- Frame (defaults; the pack's event.json overrides) ----------------------
 # Main Quad centroid, confirmed against the OSM "Main Quad" park polygon.
 ORIGIN_LAT, ORIGIN_LNG = 40.10746, -88.22713
 METERS_PER_UNIT = 10.0
@@ -72,56 +90,57 @@ ROAD_WIDTH = {
 }
 
 # --- Territory gyms --------------------------------------------------------
-# `match` claims the OSM way with that name. `at` is a verified centroid used
-# when the building carries no name; the nearest unclaimed footprint within
-# 55 m wins. `synth` opts out of matching entirely and masses the monument from
-# its centroid — for the statue, and for the two buildings OSM does not map.
-MONUMENTS = [
-    dict(id="alma-mater",   short="ALMA",       name="Alma Mater", mat="bronze",
-         at=(40.10992, -88.22840), kind="statue", venue="Alma Mater",
-         synth=(20, 20, 0.5), blurb="Green & Wright. The statue every Illini graduates under."),
-    dict(id="illini-union", short="UNION",      name="Illini Union", mat="brick",
-         match="Illini Union", kind="hall", venue="Illini Union",
-         blurb="North head of the Main Quad. Registration and welcome desk."),
-    dict(id="foellinger",   short="FOELLINGER", name="Foellinger Auditorium", mat="limestone",
-         match="Foellinger Auditorium", kind="dome", venue="Foellinger",
-         blurb="The domed rotunda closing the south end of the Quad."),
-    dict(id="altgeld",      short="ALTGELD",    name="Altgeld Hall", mat="sandstone",
-         match="Altgeld Hall", kind="belltower", venue="Altgeld",
-         blurb="Romanesque hall and chime tower on the west walk."),
-    dict(id="siebel",       short="SIEBEL",     name="Siebel Center for CS", mat="brick",
-         match="Siebel Center for Computer Science", kind="tower", venue="Siebel",
-         blurb="Engineering campus HQ. Atrium check-in and hardware bench."),
-    # ECEB and the Main Library carry no building=* way in the OSM extract, so
-    # both are massed from their verified centroid instead of a real outline.
-    dict(id="eceb",         short="ECEB",       name="ECE Building", mat="glass",
-         at=(40.11493, -88.22806), kind="tower", venue="ECEB",
-         synth=(104, 46, 38), blurb="Net-zero glass hall. Second-floor labs and balcony."),
-    dict(id="grainger",     short="GRAINGER",   name="Grainger Library", mat="brick",
-         match="Grainger Engineering Library", kind="tower", venue="Grainger",
-         blurb="Engineering library. The 24-hour reading room."),
-    dict(id="dcl",          short="DCL",        name="Digital Computer Lab", mat="brick",
-         match="Digital Computer Laboratory", kind="tower", venue="DCL",
-         blurb="Loading dock and overnight supply runs."),
-    dict(id="kenney",       short="KENNEY",     name="Kenney Gym", mat="brick",
-         match="Kenney Gymnasium", kind="hall", venue="Kenney",
-         blurb="Main floor and bleachers. The largest hacking hall."),
-    dict(id="stadium",      short="STADIUM",    name="Memorial Stadium", mat="limestone",
-         match="Gies Memorial Stadium", kind="bowl", venue="Memorial Stadium",
-         blurb="South-west anchor. Shuttle staging and overflow parking."),
-    dict(id="state-farm",   short="ASSEMBLY",   name="State Farm Center", mat="concrete",
-         match="State Farm Center", kind="dome", venue="State Farm Center",
-         blurb="The folded-edge dome. Closing ceremony venue."),
-    dict(id="main-library", short="LIBRARY",    name="Main Library", mat="brick",
-         at=(40.10455, -88.22885), kind="hall", venue="Main Library",
-         synth=(112, 74, 28), blurb="Stacks and study halls south of the Quad."),
-    dict(id="beckman",      short="BECKMAN",    name="Beckman Institute", mat="glass",
-         match="Beckman Institute", kind="tower", venue="Beckman",
-         blurb="North campus research block."),
-    dict(id="krannert",     short="KRANNERT",   name="Krannert Center", mat="concrete",
-         match="Krannert Center for the Performing Arts", kind="hall",
-         venue="Krannert", blurb="Performing arts terraces on the east flank."),
-]
+# Read from `<pack>/monuments.json`. `match` claims the OSM way or multipolygon
+# relation with that name. `at` is a verified centroid used when the building
+# carries no name; the nearest unclaimed footprint within 55 m wins. `synth`
+# opts out of matching entirely and masses the monument from its centroid —
+# for the statue, which has no footprint to speak of.
+MONUMENTS: list[dict] = []
+
+
+# ---------------------------------------------------------------------------
+# Pack
+# ---------------------------------------------------------------------------
+
+def configure(pack_dir: Path, core_only: bool = False) -> dict:
+    """Load event.json + monuments.json and point the frame at that campus."""
+    global ORIGIN_LAT, ORIGIN_LNG, METERS_PER_UNIT, M_PER_DEG_LNG, BBOX, CORE_BBOX, MONUMENTS
+
+    event_path = pack_dir / "event.json"
+    mon_path = pack_dir / "monuments.json"
+    for p in (event_path, mon_path):
+        if not p.exists():
+            sys.exit(f"pack is missing {p}")
+    with open(event_path) as fh:
+        event = json.load(fh)
+    with open(mon_path) as fh:
+        monuments = json.load(fh)["monuments"]
+
+    campus = event.get("campus", {})
+    if "origin" in campus:
+        ORIGIN_LAT, ORIGIN_LNG = float(campus["origin"][0]), float(campus["origin"][1])
+        M_PER_DEG_LNG = 111320.0 * math.cos(math.radians(ORIGIN_LAT))
+    if "metersPerUnit" in campus:
+        METERS_PER_UNIT = float(campus["metersPerUnit"])
+    if "bbox" in campus:
+        BBOX = tuple(float(v) for v in campus["bbox"])
+    if "coreBbox" in campus:
+        CORE_BBOX = tuple(float(v) for v in campus["coreBbox"])
+    if core_only:
+        BBOX = CORE_BBOX
+
+    MONUMENTS = []
+    for m in monuments:
+        rec = dict(m)
+        if "at" in rec:
+            rec["at"] = (float(rec["at"][0]), float(rec["at"][1]))
+        if "synth" in rec:
+            rec["synth"] = tuple(float(v) for v in rec["synth"])
+        rec.setdefault("blurb", "")
+        MONUMENTS.append(rec)
+    if not MONUMENTS:
+        sys.exit(f"{mon_path} declares no monuments")
+    return event
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +239,39 @@ def parse_height(tags: dict) -> float | None:
     return None
 
 
+def assemble_rings(ways: list[list[dict]]) -> list[list[dict]]:
+    """
+    Chain multipolygon member ways into closed rings. OSM splits a relation's
+    outer boundary into any number of ways, in any order and direction; join
+    them end-to-end on shared node coordinates. Unclosable fragments are
+    dropped rather than guessed at.
+    """
+    segs = [list(w) for w in ways if len(w) >= 2]
+    rings: list[list[dict]] = []
+
+    def key(p: dict) -> tuple[float, float]:
+        return (p["lat"], p["lon"])
+
+    while segs:
+        cur = segs.pop(0)
+        while key(cur[0]) != key(cur[-1]):
+            end = key(cur[-1])
+            for i, s in enumerate(segs):
+                if key(s[0]) == end:
+                    cur += s[1:]
+                    segs.pop(i)
+                    break
+                if key(s[-1]) == end:
+                    cur += s[-2::-1]
+                    segs.pop(i)
+                    break
+            else:
+                break  # open fragment — nothing left to join
+        if len(cur) >= 4 and key(cur[0]) == key(cur[-1]):
+            rings.append(cur)
+    return rings
+
+
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
@@ -229,48 +281,91 @@ def load(name: str):
     if not path.exists():
         sys.exit(f"missing {path}\n\n{FETCH}")
     with open(path) as fh:
-        return json.load(fh)["elements"]
+        elements = json.load(fh)["elements"]
+    # Overpass returns elements in database order, which is not stable across
+    # fetches. Sort so the build is a pure function of the data.
+    elements.sort(key=lambda e: (e.get("type", ""), e.get("id", 0)))
+    return elements
+
+
+def footprint(geom: list[dict], tags: dict) -> dict | None:
+    """One building record from a closed lat/lon ring, or None if it is culled."""
+    if len(geom) < 4:
+        return None
+    lat, lng = centroid(geom)
+    if not in_bbox(lat, lng):
+        return None
+
+    # OSM closes rings by repeating the first node; drop the duplicate.
+    ring = [to_world(p["lat"], p["lon"]) for p in geom]
+    if len(ring) > 1 and math.dist(ring[0], ring[-1]) < 1e-6:
+        ring = ring[:-1]
+    if len(ring) < 3:
+        return None
+
+    ring = simplify(ring, SIMPLIFY_TOLERANCE_M / METERS_PER_UNIT)
+    if len(ring) < 3:
+        return None
+    area = ring_area_m2(ring)
+    if area < MIN_FOOTPRINT_M2:
+        return None
+
+    btype = tags.get("building", "yes")
+    height = parse_height(tags) or DEFAULT_HEIGHT.get(btype, 9.0)
+    # Nudge large unlevelled footprints taller so big halls do not read flat.
+    if not parse_height(tags) and area > 3000:
+        height = max(height, 16.0)
+
+    return {
+        "n": tags.get("name"),
+        "t": btype,
+        "h": round(height / METERS_PER_UNIT, 3),
+        "r": {"gabled": "g", "hipped": "h"}.get(tags.get("roof:shape"), ""),
+        "p": ensure_ccw(ring),
+        "_lat": lat, "_lng": lng, "_area": area,
+    }
 
 
 def build_buildings(elements):
+    """
+    Ways tagged building=* plus multipolygon relations tagged building=*. The
+    big campus halls — Main Library, ECEB, Holonyak — are relations whose outer
+    boundary is split across several untagged ways, so a way-only extract never
+    saw them. Each assembled outer ring becomes a footprint carrying the
+    relation's tags; inner rings (courtyards) are ignored for now.
+    """
+    relations = [e for e in elements
+                 if e.get("type") == "relation" and "building" in e.get("tags", {})
+                 and e.get("tags", {}).get("type", "multipolygon") == "multipolygon"]
+
+    # A way that is a member of a building relation is that relation's outline,
+    # not a second building — even when it also carries its own building tag.
+    member_ways: set[int] = set()
+    for r in relations:
+        for m in r.get("members", []):
+            if m.get("type") == "way":
+                member_ways.add(m.get("ref"))
+
     out = []
     for e in elements:
+        if e.get("type") != "way" or e.get("id") in member_ways:
+            continue
         geom = e.get("geometry")
         tags = e.get("tags", {})
-        if not geom or len(geom) < 4 or "building" not in tags:
+        if not geom or "building" not in tags:
             continue
-        lat, lng = centroid(geom)
-        if not in_bbox(lat, lng):
-            continue
+        rec = footprint(geom, tags)
+        if rec:
+            out.append(rec)
 
-        # OSM closes rings by repeating the first node; drop the duplicate.
-        ring = [to_world(p["lat"], p["lon"]) for p in geom]
-        if len(ring) > 1 and math.dist(ring[0], ring[-1]) < 1e-6:
-            ring = ring[:-1]
-        if len(ring) < 3:
-            continue
-
-        ring = simplify(ring, SIMPLIFY_TOLERANCE_M / METERS_PER_UNIT)
-        if len(ring) < 3:
-            continue
-        area = ring_area_m2(ring)
-        if area < MIN_FOOTPRINT_M2:
-            continue
-
-        btype = tags.get("building", "yes")
-        height = parse_height(tags) or DEFAULT_HEIGHT.get(btype, 9.0)
-        # Nudge large unlevelled footprints taller so big halls do not read flat.
-        if not parse_height(tags) and area > 3000:
-            height = max(height, 16.0)
-
-        out.append({
-            "n": tags.get("name"),
-            "t": btype,
-            "h": round(height / METERS_PER_UNIT, 3),
-            "r": {"gabled": "g", "hipped": "h"}.get(tags.get("roof:shape"), ""),
-            "p": ensure_ccw(ring),
-            "_lat": lat, "_lng": lng, "_area": area,
-        })
+    for r in relations:
+        outers = [m["geometry"] for m in r.get("members", [])
+                  if m.get("type") == "way" and m.get("role", "outer") == "outer" and m.get("geometry")]
+        recs = [footprint(ring, r.get("tags", {})) for ring in assemble_rings(outers)]
+        recs = [x for x in recs if x]
+        # Largest ring first so a name match lands on the main mass, not an annex.
+        recs.sort(key=lambda x: -x["_area"])
+        out.extend(recs)
     return out
 
 
@@ -531,18 +626,7 @@ def build_detail(elements):
     return trees, lamps, fountains, water, rail, parking
 
 
-def roof_shapes(elements):
-    """building:id -> roof:shape for the few OSM ways that carry one."""
-    out = {}
-    for e in elements:
-        shape = e.get("tags", {}).get("roof:shape")
-        if shape in ("gabled", "hipped") and e.get("geometry"):
-            lat, lng = centroid(e["geometry"])
-            out[(round(lat, 5), round(lng, 5))] = shape
-    return out
-
-
-def attach_monuments(buildings):
+def attach_monuments(buildings, strict: bool = True):
     """Resolve each monument to a real footprint, by name or by proximity."""
     by_name = {}
     for i, b in enumerate(buildings):
@@ -556,10 +640,10 @@ def attach_monuments(buildings):
         idx = None
 
         # A monument declaring its own footprint size is never matched against
-        # OSM: Alma Mater is a statue node, and ECEB and the Main Library have
-        # no building way in the extract. Matching them by proximity used to
-        # let them steal a neighbour's outline (Alma Mater took Altgeld Hall,
-        # ECEB took Beckman) and silently draw two monuments on one building.
+        # OSM: Alma Mater is a statue node with no building outline. Matching a
+        # synthetic monument by proximity used to let it steal a neighbour's
+        # outline (Alma Mater took Altgeld Hall) and silently draw two
+        # monuments on one building.
         if not mon.get("synth"):
             if mon.get("match"):
                 idx = by_name.get(mon["match"])
@@ -586,7 +670,7 @@ def attach_monuments(buildings):
         if idx is not None and idx in claimed:
             idx = None
 
-        rec = {k: mon[k] for k in ("id", "short", "name", "kind", "venue", "blurb", "mat")}
+        rec = {k: mon.get(k, "") for k in ("id", "short", "name", "kind", "venue", "blurb", "mat")}
 
         if idx is not None:
             b = buildings[idx]
@@ -621,8 +705,11 @@ def attach_monuments(buildings):
     # map, and nothing at runtime reports it.
     if len(monuments) != len(MONUMENTS):
         missing = {m["id"] for m in MONUMENTS} - {m["id"] for m in monuments}
-        sys.exit(f"only {len(monuments)}/{len(MONUMENTS)} monuments resolved; "
-                 f"missing: {', '.join(sorted(missing))}")
+        msg = (f"only {len(monuments)}/{len(MONUMENTS)} monuments resolved; "
+               f"missing: {', '.join(sorted(missing))}")
+        if strict:
+            sys.exit(msg)
+        print(f"  ! {msg}", file=sys.stderr)
     return monuments
 
 
@@ -630,13 +717,27 @@ def q(v: float) -> float:
     return round(v, 2)
 
 
-def main() -> None:
+def content_hash(doc: dict) -> str:
+    """sha256 of the document with the informational meta fields removed."""
+    meta = {k: v for k, v in doc["meta"].items() if k not in ("builtAt", "hash")}
+    body = {"meta": meta, **{k: v for k, v in doc.items() if k != "meta"}}
+    return hashlib.sha256(json.dumps(body, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def read_manifest() -> dict:
+    if not MANIFEST.exists():
+        return {}
+    with open(MANIFEST) as fh:
+        return {e["file"]: e for e in json.load(fh).get("files", [])}
+
+
+def build(event: dict, strict: bool = True) -> dict:
     extra = load("extra.json")
     # Stadium rings join the building pool so monument resolution sees them.
     buildings = build_buildings(load("buildings.json")) + stadium_footprints(extra)
     roads = build_roads(extra)
     lawns = build_lawns(extra)
-    monuments = attach_monuments(buildings)
+    monuments = attach_monuments(buildings, strict=strict)
 
     # Ambient mass excludes anything promoted to a monument — those are drawn
     # dynamically so they can change faction colour.
@@ -644,8 +745,7 @@ def main() -> None:
     gen_trees, gen_lamps = build_greenery(roads, lawns, buildings)
     detail_path = OSM_DIR / "detail.json"
     if detail_path.exists():
-        with open(detail_path) as fh:
-            detail = json.load(fh)["elements"]
+        detail = load("detail.json")
         trees, lamps, fountains, water, rail, parking = build_detail(detail)
         # Surveyed trees win. Generated ones only fill in more than 12 m from
         # any surveyed tree, so unsurveyed lawns still read as planted.
@@ -665,12 +765,21 @@ def main() -> None:
         trees, lamps, fountains, water, rail, parking = gen_trees, gen_lamps, [], [], [], []
     trees, lamps = trees[:3200], lamps[:360]
 
+    manifest = read_manifest()
+    fetched = sorted(e["fetched_at"] for e in manifest.values() if e.get("fetched_at"))
+    osm_source = {"name": "OpenStreetMap contributors, via Overpass API", "licence": "ODbL 1.0"}
+    if fetched:
+        osm_source["fetchedAt"] = fetched[-1]
+
     doc = {
         "meta": {
+            "schema": SCHEMA,
+            "pack": event.get("id", ""),
             "origin": [ORIGIN_LAT, ORIGIN_LNG],
             "metersPerUnit": METERS_PER_UNIT,
-            "bbox": BBOX,
+            "bbox": list(BBOX),
             "source": "OpenStreetMap contributors (ODbL 1.0), via Overpass API",
+            "sources": [osm_source],
             "counts": {
                 "buildings": len(ambient),
                 "monuments": len(monuments),
@@ -709,19 +818,162 @@ def main() -> None:
         "rail": [[[q(x), q(z)] for x, z in r] for r in rail],
         "parking": [[[q(x), q(z)] for x, z in r] for r in parking],
     }
+    doc["meta"]["hash"] = content_hash(doc)
+    doc["meta"]["builtAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return doc
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUT, "w") as fh:
+
+def write(doc: dict, out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as fh:
         json.dump(doc, fh, separators=(",", ":"))
 
-    size = os.path.getsize(OUT) / 1024
-    print(f"wrote {OUT.relative_to(HERE.parent)}  ({size:.0f} KB)")
+
+def report(doc: dict, out: Path) -> None:
+    size = os.path.getsize(out) / 1024
+    try:
+        shown = out.relative_to(ROOT)
+    except ValueError:
+        shown = out
+    print(f"wrote {shown}  ({size:.0f} KB)  hash {doc['meta']['hash'][:12]}")
     for k, v in doc["meta"]["counts"].items():
         print(f"  {k:11s} {v}")
+    print(f"  {'monument':11s} {'src':5s} {'kind':10s} {'centre (x, z)':18s} footprint (m)")
     for mo in doc["monuments"]:
+        xs = [p[0] for p in mo["poly"]]
+        zs = [p[1] for p in mo["poly"]]
+        span = f"{(max(xs) - min(xs)) * METERS_PER_UNIT:5.0f} x {(max(zs) - min(zs)) * METERS_PER_UNIT:3.0f}"
         print(f"  {mo['short']:11s} {mo['src']:5s} {mo['kind']:10s} "
-              f"({mo['c'][0]:7.1f}, {mo['c'][1]:7.1f})")
+              f"({mo['c'][0]:7.1f}, {mo['c'][1]:7.1f})   {span}   h {mo['h'] * METERS_PER_UNIT:.0f}")
+
+
+# ---------------------------------------------------------------------------
+# Fetch
+# ---------------------------------------------------------------------------
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch() -> None:
+    """Run every design/osm/*.overpass query against Overpass, one request each."""
+    queries = sorted(OSM_DIR.glob("*.overpass"))
+    if not queries:
+        sys.exit(f"no *.overpass queries in {OSM_DIR}")
+    OSM_DIR.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for qpath in queries:
+        out = OSM_DIR / (qpath.stem + ".json")
+        query = qpath.read_bytes()
+        print(f"fetching {qpath.name} -> {out.relative_to(ROOT)} ...", flush=True)
+        fd, tmp = tempfile.mkstemp(dir=OSM_DIR, suffix=".part")
+        os.close(fd)
+        try:
+            subprocess.run(
+                ["curl", "-sS", "-f", "--retry", "2", "--retry-delay", "20",
+                 "-X", "POST", "--data-binary", f"@{qpath}", OVERPASS_URL, "-o", tmp],
+                check=True,
+            )
+            with open(tmp) as fh:
+                data = json.load(fh)
+            if "elements" not in data:
+                raise ValueError(f"no 'elements' in response: {json.dumps(data)[:200]}")
+            if data.get("remark"):
+                print(f"  overpass remark: {data['remark']}", file=sys.stderr)
+            os.replace(tmp, out)
+        except (subprocess.CalledProcessError, ValueError, json.JSONDecodeError) as err:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            sys.exit(f"fetch of {qpath.name} failed: {err}")
+        entries.append({
+            "file": out.name,
+            "url": OVERPASS_URL,
+            "query": qpath.name,
+            "query_sha256": hashlib.sha256(query).hexdigest(),
+            "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "bytes": os.path.getsize(out),
+            "sha256": sha256_file(out),
+            "elements": len(data["elements"]),
+        })
+        print(f"  {entries[-1]['bytes'] / 1024:.0f} KB, {entries[-1]['elements']} elements")
+    with open(MANIFEST, "w") as fh:
+        json.dump({"source": "OpenStreetMap contributors (ODbL 1.0)", "files": entries}, fh, indent=1)
+    print(f"wrote {MANIFEST.relative_to(ROOT)}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--pack", default=str(DEFAULT_PACK),
+                    help="content pack directory holding event.json and monuments.json "
+                         "(default: content/hackillinois-2027)")
+    ap.add_argument("--check", action="store_true",
+                    help="rebuild to a temp file and compare meta.hash with the committed campus.json; exit 1 on drift")
+    ap.add_argument("--fetch", action="store_true",
+                    help="refresh design/osm/*.json from the Overpass API before building")
+    ap.add_argument("--core-only", action="store_true",
+                    help="preview build restricted to campus.coreBbox; written to <pack>/campus.core.json "
+                         "so the shipped model is never overwritten by a preview")
+    ap.add_argument("--out", default=None,
+                    help="override the output path (default: <pack>/campus.json)")
+    args = ap.parse_args(argv)
+
+    pack_dir = Path(args.pack)
+    if not pack_dir.is_absolute():
+        pack_dir = (Path.cwd() / pack_dir).resolve()
+    if not pack_dir.is_dir():
+        sys.exit(f"pack directory not found: {pack_dir}")
+
+    if args.fetch:
+        fetch()
+
+    event = configure(pack_dir, core_only=args.core_only)
+    out = pack_dir / ("campus.core.json" if args.core_only else "campus.json")
+    if args.out:
+        out = Path(args.out).resolve()
+    if args.check and args.core_only:
+        sys.exit("--check compares against the shipped campus.json; it cannot be combined with --core-only")
+    # A core-only preview legitimately loses monuments outside the core box.
+    doc = build(event, strict=not args.core_only)
+
+    if args.check:
+        if not out.exists():
+            print(f"check: {out} does not exist — run without --check to build it", file=sys.stderr)
+            return 1
+        with open(out) as fh:
+            committed = json.load(fh)
+        fd, tmp = tempfile.mkstemp(suffix=".campus.json")
+        os.close(fd)
+        try:
+            write(doc, Path(tmp))
+            report(doc, Path(tmp))
+        finally:
+            os.unlink(tmp)
+        want = committed.get("meta", {}).get("hash")
+        have = doc["meta"]["hash"]
+        recomputed = content_hash(committed)
+        if want != recomputed:
+            print(f"check: FAIL — committed meta.hash {str(want)[:12]} does not match its own content "
+                  f"({recomputed[:12]}); the file was edited by hand", file=sys.stderr)
+            return 1
+        if want != have:
+            print(f"check: FAIL — committed {want[:12]} != rebuilt {have[:12]}; "
+                  f"rebuild with: python3 design/build-campus.py --pack {args.pack}", file=sys.stderr)
+            return 1
+        print(f"check: OK — {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out} matches ({have[:12]})")
+        return 0
+
+    write(doc, out)
+    report(doc, out)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

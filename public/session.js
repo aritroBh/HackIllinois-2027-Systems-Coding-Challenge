@@ -20,6 +20,10 @@
  *
  * Every auth endpoint may 404 while the backend lands: that is treated as
  * legacy mode with no session, and the shell keeps working exactly as before.
+ *
+ * The content pack descriptor (`GET /api/v1/content`, plan A1) is fetched in
+ * parallel with `/me` and settled on `Nexus.content` before `ready` resolves;
+ * a 404 falls back to the static `/dashboard/content/*.json` paths.
  */
 
 (function () {
@@ -225,6 +229,53 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Content pack descriptor
+   * ------------------------------------------------------------------ */
+
+  const CONTENT_BASE = '/dashboard/content';
+
+  /** What the shell assumes when GET /api/v1/content is not there (yet). */
+  function contentFallback() {
+    return {
+      pack: null,
+      packVersion: 0,
+      event: null,
+      venues: {},
+      factions: [],
+      monuments: [],
+      contentBase: CONTENT_BASE,
+      files: {
+        campus: `${CONTENT_BASE}/campus.json`,
+        memorabilia: `${CONTENT_BASE}/memorabilia.json`,
+        'monuments-info': `${CONTENT_BASE}/monuments-info.json`,
+      },
+      fallback: true,
+    };
+  }
+
+  /** GET /api/v1/content → `Nexus.content`. Never throws: any failure means the fallback. */
+  async function loadContent() {
+    let content;
+    try {
+      const { data } = await api(`${API}/content`);
+      if (!data || typeof data !== 'object' || typeof data.files !== 'object') throw new ApiError('malformed content descriptor', { code: 'BAD_CONTENT' });
+      content = {
+        ...data,
+        contentBase: typeof data.contentBase === 'string' ? data.contentBase : CONTENT_BASE,
+        factions: Array.isArray(data.factions) ? data.factions : [],
+        monuments: Array.isArray(data.monuments) ? data.monuments : [],
+        venues: data.venues && typeof data.venues === 'object' ? data.venues : {},
+        files: { ...contentFallback().files, ...data.files },
+      };
+    } catch (err) {
+      console.warn(`[session] content descriptor unavailable (${err.status || err.code || err.message}); using ${CONTENT_BASE}/*.json`);
+      content = contentFallback();
+    }
+    N._settleContent(content);
+    return content;
+  }
+
+  /* ------------------------------------------------------------------ *
    * Boot
    * ------------------------------------------------------------------ */
 
@@ -233,7 +284,10 @@
     let user = null;
     let fragmentError = null;
 
+    // /me and the content descriptor are independent; one round trip, not two.
+    const contentLoading = loadContent();
     try { user = await session.refresh(); } catch (err) { console.warn('[session] /me failed:', err.message); }
+    await contentLoading;
 
     if (frag) {
       // A fresh credential wins over whatever session the browser already had
@@ -265,6 +319,7 @@
 
   boot().catch((err) => {
     console.error('[session] boot failed:', err);
+    if (!N.content) N._settleContent(contentFallback());
     session._settle(null);
     N.emit('session:ready', { user: null, providers: providersCache || { mode: 'legacy', providers: [], available: false }, fragment: null, fragmentError: null });
   });

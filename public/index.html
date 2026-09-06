@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#13294b">
   <title>Nexus Quest · HackIllinois 2027</title>
   <!-- Fonts are self-hosted (public/fonts, OFL 1.1) so the shell needs no third-party request; see styles.css. -->
+  <!-- tokens.css is generated: `npm run tokens:build` (design/tokens.mjs). theme.js applies the pack's palette on top at runtime. -->
+  <link rel="stylesheet" href="/dashboard/tokens.css">
   <link rel="stylesheet" href="/dashboard/styles.css">
 </head>
 <body>
@@ -17,8 +19,8 @@
       <div class="logo-group">
         <div class="logo-mark" aria-hidden="true"><img class="pxi" data-sprite="block-i" data-scale="3" alt=""></div>
         <div class="wordmark">
-          <h1>Nexus Quest</h1>
-          <span class="label">HackIllinois 2027 · Volunteer Ops</span>
+          <h1 data-brand="name">Nexus Quest</h1>
+          <span class="label" data-brand="event-chip">HackIllinois 2027 · Volunteer Ops</span>
         </div>
         <div class="rule-v" aria-hidden="true"></div>
         <span class="signal" id="sse-status" aria-live="polite">Online</span>
@@ -112,8 +114,8 @@
       <div class="view-head">
         <div>
           <div class="eyebrow">Overworld</div>
-          <h2>UIUC campus</h2>
-          <p>The real campus from OpenStreetMap. Fourteen landmarks are strongholds. Walk with WASD or your GPS, stand within 75 m of a HackStop to spin it, click a monument to inspect it.</p>
+          <h2 data-brand="campus-label">UIUC campus</h2>
+          <p>The real campus from OpenStreetMap. <span data-brand="monument-count">Fourteen landmarks</span> are strongholds. Walk with WASD or your GPS, stand within <span data-brand="geofence">75 m</span> of a HackStop to spin it, click a monument to inspect it.</p>
         </div>
         <div class="actions">
           <span class="signal" id="onduty-chip">— on duty</span>
@@ -285,7 +287,7 @@
 
         <div class="px">
           <div class="sticker-head">
-            <div><div class="eyebrow">Sticker book</div><h3>HackIllinois memorabilia</h3></div>
+            <div><div class="eyebrow">Sticker book</div><h3 data-brand="sticker-title">HackIllinois memorabilia</h3></div>
             <span class="sticker" id="sticker-count">0 / 16 FOUND</span>
           </div>
           <div id="sticker-book" class="sticker-book"></div>
@@ -352,10 +354,12 @@
     </div>
   </div>
 
-  <!-- Order matters: nexus.js (registry) → session.js (identity, Nexus.api) → onboarding view,
-       then the shell. All classic scripts; campus3d.js / avatar.js are the only ES modules. -->
+  <!-- Order matters: nexus.js (registry) → session.js (identity, Nexus.api, content pack) →
+       theme.js (pack palette via CSSOM) → onboarding view, then the shell. All classic scripts;
+       campus3d.js / avatar.js are the only ES modules. -->
   <script src="/dashboard/nexus.js"></script>
   <script src="/dashboard/session.js"></script>
+  <script src="/dashboard/theme.js"></script>
   <script src="/dashboard/views/onboarding.js"></script>
   <script src="/dashboard/sprites.js"></script>
   <script src="/dashboard/fx.js"></script>

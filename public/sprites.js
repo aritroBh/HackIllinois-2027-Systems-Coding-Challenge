@@ -152,7 +152,16 @@
   const items = new Map();       // id → { name, rarity, kind, drop, flavour, rows, pal }
   let gymBadges = {};
 
-  const ready = fetch('/dashboard/gl/memorabilia.json')
+  // The sticker sheet lives in the content pack. This script loads before
+  // session.js has fetched the pack descriptor, so the fetch waits for
+  // `Nexus.contentReady` (which resolves with the static fallback when the
+  // endpoint is missing) and only then asks `Nexus.contentUrl` where the file
+  // is. Without nexus.js at all (materials-demo, tests) it uses the static path.
+  const FALLBACK_URL = '/dashboard/content/memorabilia.json';
+  const N = window.Nexus;
+  const contentGate = N && N.contentReady ? N.contentReady : Promise.resolve(null);
+  const ready = contentGate
+    .then(() => fetch(N && typeof N.contentUrl === 'function' ? N.contentUrl('memorabilia') : FALLBACK_URL))
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
       if (!d) return;

@@ -82,6 +82,35 @@
   });
 
   /* ------------------------------------------------------------------ *
+   * Content pack (deferred; session.js fetches GET /api/v1/content)
+   * ------------------------------------------------------------------ */
+
+  // Where the active pack's files are served when the descriptor is not (yet)
+  // available: the server mounts the pack directory at /dashboard/content.
+  const CONTENT_BASE = '/dashboard/content';
+  const CONTENT_FALLBACK_FILES = {
+    campus: `${CONTENT_BASE}/campus.json`,
+    memorabilia: `${CONTENT_BASE}/memorabilia.json`,
+    'monuments-info': `${CONTENT_BASE}/monuments-info.json`,
+  };
+
+  let settleContent;
+  const contentReady = new Promise((resolve) => { settleContent = resolve; });
+
+  /**
+   * URL of a pack file by its basename without `.json` (`campus`,
+   * `memorabilia`, `monuments-info`, …). Reads `Nexus.content.files` when the
+   * descriptor has loaded and falls back to the static mount otherwise, so a
+   * script that runs before session.js settles still gets a usable path.
+   */
+  function contentUrl(name) {
+    const files = Nexus.content?.files;
+    if (files && typeof files[name] === 'string') return files[name];
+    if (CONTENT_FALLBACK_FILES[name]) return CONTENT_FALLBACK_FILES[name];
+    return `${Nexus.content?.contentBase || CONTENT_BASE}/${name}.json`;
+  }
+
+  /* ------------------------------------------------------------------ *
    * Actions: one delegated listener for every `[data-action]`
    * ------------------------------------------------------------------ */
 
@@ -434,7 +463,13 @@
     version: '2',
     session,
     flags,
-    content: null, // the content pack (A1) is attached here from M2
+    // The content pack descriptor (A1): `{ pack, packVersion, event, venues,
+    // factions, monuments, contentBase, files }`. null until session.js has
+    // fetched GET /api/v1/content; `contentReady` resolves with it (or with the
+    // static fallback when the endpoint is missing) before `session.ready`.
+    content: null,
+    contentReady,
+    contentUrl,
 
     registerTab, showTab, refreshNav: scheduleNav,
     tabs: () => orderedTabs().map(({ rendered, ...def }) => def),
@@ -457,6 +492,15 @@
     // session.js installs `api`; until then a call fails loudly rather than silently.
     api: async () => { throw new Error('Nexus.api is not available: session.js did not load'); },
   };
+
+  Object.defineProperty(Nexus, '_settleContent', {
+    enumerable: false,
+    value(content) {
+      Nexus.content = content || null;
+      settleContent(Nexus.content);
+      if (Nexus.content) emit('content', Nexus.content);
+    },
+  });
 
   Object.defineProperty(window, 'Nexus', { value: Nexus, writable: false, configurable: false, enumerable: true });
 

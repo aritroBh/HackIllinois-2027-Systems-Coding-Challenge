@@ -36,6 +36,8 @@ Object.defineProperties(window, {
   campus: { get: () => campus },
   toWorld: { get: () => toWorld },
   campusMeta: { get: () => campusMeta },
+  // game.js reads the dossiers in openEncounter for the first "fact" line.
+  monumentInfo: { get: () => monumentInfo },
 });
 
 /* ------------------------------------------------------------------ *
@@ -55,12 +57,88 @@ function esc(value) {
     .replace(/`/g, '&#96;');
 }
 
-const FACTION = {
+/**
+ * Faction table, keyed by faction id. Filled from the content pack
+ * (`Nexus.content.factions`, plan A1) by `applyFactions()` at boot; the
+ * literals are the fallback for a server that has no `/api/v1/content` yet.
+ * `FACTION` itself is mutated in place so every closure that captured it
+ * (labels, map colours, the gym list) sees the pack's values.
+ */
+const FACTION_DEFAULTS = {
   TEAM_KERNEL: { label: 'Team Kernel', short: 'Kernel', color: '#22d3ee', cls: 'c-cyan' },
   TEAM_TENSOR: { label: 'Team Tensor', short: 'Tensor', color: '#a78bfa', cls: 'c-violet' },
   TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24', cls: 'c-amber' },
   NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa', cls: 'c-dim' },
 };
+const FACTION_CLS = { TEAM_KERNEL: 'c-cyan', TEAM_TENSOR: 'c-violet', TEAM_SILICON: 'c-amber', NEUTRAL: 'c-dim' };
+const FACTION = Object.fromEntries(Object.entries(FACTION_DEFAULTS).map(([k, v]) => [k, { ...v }]));
+
+/** Rebuilds `FACTION` (and the faction picker) from the pack's list. Returns false when the list is unusable. */
+function applyFactions(list) {
+  if (!Array.isArray(list) || list.length === 0) return false;
+  const next = {};
+  for (const f of list) {
+    if (!f || typeof f.id !== 'string' || !f.id) continue;
+    const dflt = FACTION_DEFAULTS[f.id] || FACTION_DEFAULTS.NEUTRAL;
+    next[f.id] = {
+      label: f.label || dflt.label,
+      short: f.short || f.label || dflt.short,
+      color: typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : dflt.color,
+      cls: FACTION_CLS[f.id] || 'c-dim',
+      hqVenue: f.hqVenue || null,
+      theme: f.theme || null,
+    };
+  }
+  if (Object.keys(next).length === 0) return false;
+  // NEUTRAL is the unclaimed state; the pack schema requires it, but a missing
+  // entry must not leave `factionOf()` returning undefined.
+  if (!next.NEUTRAL) next.NEUTRAL = { ...FACTION_DEFAULTS.NEUTRAL };
+
+  for (const k of Object.keys(FACTION)) delete FACTION[k];
+  Object.assign(FACTION, next);
+
+  const playable = Object.keys(FACTION).filter((id) => id !== 'NEUTRAL');
+  if (!FACTION[currentVolunteerFaction] || currentVolunteerFaction === 'NEUTRAL') currentVolunteerFaction = playable[0] || 'NEUTRAL';
+
+  const sel = document.getElementById('user-faction-selector');
+  if (sel) {
+    sel.replaceChildren(...playable.map((id) => {
+      const o = document.createElement('option');
+      o.value = id;
+      o.textContent = FACTION[id].label;
+      return o;
+    }));
+    sel.value = currentVolunteerFaction;
+  }
+  return true;
+}
+
+/**
+ * Event branding from the pack's `event.json`: page title, the header chip,
+ * the campus heading and the sticker-book title. The HTML ships sensible
+ * defaults so nothing is blank before the descriptor arrives.
+ */
+function applyBranding(content) {
+  const ev = content?.event;
+  if (!ev || typeof ev !== 'object') return false;
+  const setAll = (key, text) => {
+    if (!text) return;
+    for (const el of document.querySelectorAll(`[data-brand="${key}"]`)) el.textContent = text;
+  };
+  const name = typeof ev.name === 'string' ? ev.name : '';
+  const eventName = typeof ev.eventName === 'string' ? ev.eventName : '';
+  const tagline = typeof ev.tagline === 'string' ? ev.tagline : '';
+  const title = [name, eventName].filter(Boolean).join(' · ');
+  if (title) document.title = title;
+  setAll('name', name);
+  setAll('event-chip', [eventName, tagline].filter(Boolean).join(' · '));
+  setAll('campus-label', ev.campus?.label);
+  setAll('sticker-title', ev.branding?.stickerBookTitle);
+  const n = Array.isArray(content.monuments) ? content.monuments.length : 0;
+  if (n) setAll('monument-count', `${n} landmarks`);
+  if (Number.isFinite(ev.campus?.geofenceMeters)) setAll('geofence', `${ev.campus.geofenceMeters} m`);
+  return true;
+}
 
 // The map wants a deeper neutral than the UI does: an unclaimed monument lit
 // with the panel's light slate blows out to white against the night city.
@@ -1448,7 +1526,7 @@ async function bootCampus() {
 
     setGlStatus('Baking campus…', 'c-amber');
     const t0 = performance.now();
-    const { meta } = await renderer.loadCampus('/dashboard/gl/uiuc-campus.json');
+    const { meta } = await renderer.loadCampus(Nexus.contentUrl('campus'));
     const ms = Math.round(performance.now() - t0);
 
     campus = renderer;
@@ -1820,13 +1898,14 @@ function paintWorldLabels(payload) {
  * Bootstrap
  * ------------------------------------------------------------------ */
 
-/** Per-monument history from gl/monuments-info.json, keyed by monument id. */
+/** Per-monument history from the pack's monuments-info.json, keyed by monument id. */
 let monumentInfo = {};
 
 async function loadMonumentInfo() {
   try {
-    const res = await fetch('/dashboard/gl/monuments-info.json');
-    if (!res.ok) return;
+    await Nexus.contentReady; // the descriptor says where the pack is served
+    const res = await fetch(Nexus.contentUrl('monuments-info'));
+    if (!res.ok) { console.warn(`Monument dossiers unavailable: HTTP ${res.status}`); return; }
     const data = await res.json();
     // The file carries a `_source` note alongside the entries; keep only ids.
     monumentInfo = Object.fromEntries(Object.entries(data).filter(([k]) => !k.startsWith('_')));
@@ -1851,6 +1930,12 @@ function onSessionChange(user) {
 }
 
 async function init() {
+  // The pack descriptor settles before `session.ready`, so factions and
+  // branding are in place before the first data-driven render below.
+  Nexus.contentReady.then((content) => {
+    applyFactions(content?.factions);
+    applyBranding(content);
+  }).catch((err) => console.warn('Content pack not applied:', err.message));
   loadMonumentInfo(); // independent of the API; no need to await
   hydrateSprites();
   window.Sprites?.ready.then(() => hydrateSprites()).catch(() => {});

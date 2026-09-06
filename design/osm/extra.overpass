@@ -1,4 +1,4 @@
-[out:json][timeout:90];
+[out:json][timeout:180];
 (
   way["leisure"~"^(stadium|pitch|park|garden)$"](40.0930,-88.2460,40.1200,-88.2150);
   way["landuse"~"^(grass|recreation_ground|forest)$"](40.0930,-88.2460,40.1200,-88.2150);
