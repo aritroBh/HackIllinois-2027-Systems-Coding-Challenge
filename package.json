@@ -24,6 +24,7 @@
     "csp:audit": "node scripts/cspAudit.mjs",
     "props:check": "node scripts/checkProps.mjs",
     "events:check": "node scripts/checkEvents.mjs",
+    "gates:check": "bash scripts/checkPlanGates.sh",
     "campus:fetch": "python3 -m design.pipeline fetch --pack content/${CONTENT_PACK:-hackillinois-2027}",
     "bench:presence": "NODE_ENV=development tsx scripts/loadPresence.ts"
   },
