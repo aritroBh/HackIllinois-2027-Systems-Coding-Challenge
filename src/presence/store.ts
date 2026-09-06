@@ -613,25 +613,48 @@ export class PresenceStore {
         const floorDistance = Math.max(0, ring - 1) * s * this.cfg.metersPerUnit;
         if (floorDistance > worstHeld) break;
       }
-      for (let i = cx - ring; i <= cx + ring; i++) {
-        for (let j = cz - ring; j <= cz + ring; j++) {
-          // Only the shell, not the filled square: the interior was walked on earlier rings.
-          if (ring > 0 && Math.abs(i - cx) !== ring && Math.abs(j - cz) !== ring) continue;
-          const set = this.cells.get(`${i}:${j}`);
-          if (!set) continue;
-          for (const id of set) {
-            if (seen.has(id)) continue;
-            seen.add(id);
-            const e = this.entries.get(id);
-            if (!e || e.kind !== 'VOLUNTEER' || !e.onDuty) continue;
-            const ageMs = nowMs - e.t;
-            if (ageMs > maxAgeMs) continue;
-            // Ranking uses the EXACT position, never the fuzzed one the grid indexes by. The
-            // cell is only a search structure; dispatch is one of the two audited exact reads.
-            out.push({ e, distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit, ageMs });
-          }
+      // The shell's perimeter, generated directly rather than filtered out of the square.
+      //
+      // Walking the whole (2R+1)² square and skipping its interior visits O(R³) cells across
+      // all rings — at the 9 km bound that is nearly eight million iterations for one dispatch
+      // on an empty campus, which is what turned a fuzz over two hundred populations into a
+      // twenty-second test. Emitting the 8R perimeter cells directly makes the whole search
+      // O(R²), which is the number of cells that exist.
+      const shell: Array<[number, number]> = [];
+      if (ring === 0) shell.push([cx, cz]);
+      else {
+        for (let i = cx - ring; i <= cx + ring; i++) {
+          shell.push([i, cz - ring], [i, cz + ring]);
+        }
+        // The two vertical edges, excluding the corners the horizontal edges already covered.
+        for (let j = cz - ring + 1; j <= cz + ring - 1; j++) {
+          shell.push([cx - ring, j], [cx + ring, j]);
         }
       }
+      for (const [i, j] of shell) {
+        const set = this.cells.get(`${i}:${j}`);
+        if (!set) continue;
+        for (const id of set) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const e = this.entries.get(id);
+          // Opted in, a volunteer, and on shift.
+          //
+          // The opt-in check is the one that used to be missing, and its absence contradicted
+          // the promise made to whoever opted out: their exact position was read and they were
+          // sent to a call they had declined to be findable for. The entry exists at all only
+          // because they were publishing when they last sampled — an opt-out mid-session
+          // leaves it behind until the next sample erases it — so the flag has to be read
+          // rather than inferred from the entry's existence.
+          if (!e || !e.optIn || e.kind !== 'VOLUNTEER' || !e.onDuty) continue;
+          const ageMs = nowMs - e.t;
+          if (ageMs > maxAgeMs) continue;
+          // Ranking uses the EXACT position, never the fuzzed one the grid indexes by. The
+          // cell is only a search structure; dispatch is one of the two audited exact reads.
+          out.push({ e, distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit, ageMs });
+        }
+      }
+
       // The furthest of the best `limit` so far — the bar a later shell has to beat.
       if (out.length >= limit) {
         const sorted = out.map((o) => o.distanceM).sort((a, b) => a - b);

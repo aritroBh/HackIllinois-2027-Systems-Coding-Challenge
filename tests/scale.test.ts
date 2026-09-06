@@ -269,6 +269,82 @@ describe('dispatch search expands rings and still finds the true nearest', () =>
     expect(found.some((f) => f.e.id === 'axis')).toBe(true);
   });
 
+  it('agrees with brute force across two hundred random populations', () => {
+    // The stopping rule is a geometry argument, and geometry arguments are exactly the kind
+    // that read as correct and are not. Two hand-built cases prove the two failures already
+    // found; this proves the rule itself, over populations nobody chose.
+    //
+    // A fixed seed rather than Math.random: a fuzz test that fails once and passes on the
+    // rerun tells you nothing, and this one has to be able to name the population it
+    // disagreed on.
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+    let mismatches = 0;
+    for (let trial = 0; trial < 200; trial++) {
+      const store = new PresenceStore();
+      const now = Date.now();
+      const n = 1 + Math.floor(rnd() * 60);
+      const spread = 5 + rnd() * 400;
+      for (let i = 0; i < n; i++) {
+        const x = (rnd() - 0.5) * 2 * spread;
+        const z = (rnd() - 0.5) * 2 * spread;
+        const e: PresenceEntry = {
+          id: `v${i}`, name: `v${i}`, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null,
+          avatarHash: null, onDuty: true, x, z, lat: 0, lng: 0, acc: 5, h: 0, fx: x, fz: z,
+          pendingFx: NaN, pendingFz: NaN, cell: '', t: now, version: 1, strikes: 0,
+          muteUntil: 0, lastSampleT: now, optIn: true,
+        };
+        (store as unknown as { entries: Map<string, PresenceEntry> }).entries.set(e.id, e);
+        (store as unknown as { reindex(e: PresenceEntry): void }).reindex(e);
+      }
+      const qx = (rnd() - 0.5) * 2 * spread;
+      const qz = (rnd() - 0.5) * 2 * spread;
+      const limit = 1 + Math.floor(rnd() * 12);
+      const dOf = (id: string) => { const e = store.get(id)!; return Math.hypot(e.x - qx, e.z - qz); };
+
+      const got = store.nearestVolunteers(qx, qz, 600_000, now, limit).map((r) => dOf(r.e.id).toFixed(6));
+      // Compared by distance, not by id: two candidates at the same range are legitimately
+      // either order, and asserting an order would be asserting an implementation detail.
+      const want = [...store.all()]
+        .map((e) => Math.hypot(e.x - qx, e.z - qz))
+        .sort((a, b) => a - b)
+        .slice(0, limit)
+        .map((d) => d.toFixed(6));
+
+      if (JSON.stringify(got) !== JSON.stringify(want)) mismatches += 1;
+    }
+    expect(mismatches).toBe(0);
+  });
+
+  it('never considers somebody who opted out, even with a fresh fix', () => {
+    // Opting out is a promise, and dispatch is the one place it is most tempting to break:
+    // the entry is sitting right there with a live position on it. It is also the place where
+    // breaking it does the most damage, because the person is then sent to a call at a
+    // location they explicitly declined to share.
+    //
+    // Pinned as a test rather than left to the reading, because this guard was silently
+    // reverted once already by a snapshot restored from before it landed.
+    const store = new PresenceStore();
+    const now = Date.now();
+    const put = (id: string, x: number, optIn: boolean) => {
+      const e: PresenceEntry = {
+        id, name: id, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null, avatarHash: null,
+        onDuty: true, x, z: 0, lat: 0, lng: 0, acc: 5, h: 0, fx: x, fz: 0,
+        pendingFx: NaN, pendingFz: NaN, cell: '', t: now, version: 1, strikes: 0,
+        muteUntil: 0, lastSampleT: now, optIn,
+      };
+      (store as unknown as { entries: Map<string, PresenceEntry> }).entries.set(id, e);
+      (store as unknown as { reindex(e: PresenceEntry): void }).reindex(e);
+    };
+    // The nearest by far, and opted out. The next nearest is ten times the distance.
+    put('hidden', 1, false);
+    put('willing', 10, true);
+
+    const found = store.nearestVolunteers(0, 0, 60_000, now, 5);
+    expect(found.map((f) => f.e.id)).toEqual(['willing']);
+  });
+
   it('terminates on an almost empty campus rather than walking the plane', () => {
     const store = new PresenceStore();
     seedStore(store, 2, 5);
