@@ -43,6 +43,8 @@ export interface PresenceEntry {
   strikes: number;
   muteUntil: number;
   lastSampleT: number;
+  /** Mirrors the account's `presenceOptIn`; false means the entry is on its way out. */
+  optIn: boolean;
 }
 
 export interface Sample {
@@ -144,7 +146,12 @@ export class PresenceStore {
     s: Sample,
     nowMs: number = Date.now()
   ): UpdateResult {
-    if (!who.optIn) return { ok: false, reason: 'OPT_OUT' };
+    if (!who.optIn) {
+      // Symmetric opt-out at the source: an entry left behind by an earlier sample would
+      // keep being broadcast until it expired, so the refusal also erases it.
+      this.remove(who.id);
+      return { ok: false, reason: 'OPT_OUT' };
+    }
     if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng) || !inBbox(s.lat, s.lng)) return { ok: false, reason: 'OFF_CAMPUS' };
     if (!Number.isFinite(s.acc) || s.acc > this.cfg.maxAccuracyMeters) return { ok: false, reason: 'INACCURATE' };
 
@@ -173,7 +180,7 @@ export class PresenceStore {
       e = {
         id: who.id, name: who.name, kind: who.kind, role: who.role, faction: who.faction, avatarHash: who.avatarHash, onDuty: who.onDuty,
         x, z, lat: s.lat, lng: s.lng, acc: s.acc, h: 0, fx: NaN, fz: NaN, pendingFx: NaN, pendingFz: NaN, cell: '', t: nowMs, version: 0, strikes: 0,
-        muteUntil, lastSampleT: nowMs,
+        muteUntil, lastSampleT: nowMs, optIn: true,
       };
       this.entries.set(who.id, e);
     }
@@ -230,7 +237,10 @@ export class PresenceStore {
 
   /** Visible to ordinary viewers: opted-in (they are here), on campus, and not an off-shift volunteer. */
   visible(e: PresenceEntry, viewerIsLead = false): boolean {
-    if (e.kind === 'VOLUNTEER' && !e.onDuty && !viewerIsLead && !/LEAD|ORGANIZER|ADMIN/.test(e.role)) return false;
+    if (!e.optIn) return false;
+    // Whether someone is hidden depends on the VIEWER's role, never on the subject's: an
+    // off-duty lead is off duty like anyone else, and used to stay on every player's map.
+    if (e.kind === 'VOLUNTEER' && !e.onDuty && !viewerIsLead) return false;
     return !Number.isNaN(e.fx);
   }
 

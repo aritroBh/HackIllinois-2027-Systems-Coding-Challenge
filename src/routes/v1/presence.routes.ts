@@ -11,7 +11,7 @@
  */
 import { Router, Request, Response, NextFunction } from 'express';
 import { validate } from '../../middleware/validate';
-import { requireAccount, requireRole } from '../../middleware/identity';
+import { requireAccount, requireRole, requireSession } from '../../middleware/identity';
 import { listPresenceSchema, postPresenceSchema } from '../../schemas/presence.schema';
 import { presenceService } from '../../presence/service';
 import { presenceStore } from '../../presence/store';
@@ -19,7 +19,7 @@ import { ensureSseSession, dropSseSession } from '../../presence/sseTransport';
 import { PresenceAudit } from '../../models/presenceAudit.model';
 import { ApiError } from '../../common/errors/apiError';
 import { ErrorCode } from '../../common/errors/errorCodes';
-import { fromLocal } from '../../content/loader';
+import { fromLocal, toLocal } from '../../content/loader';
 
 export const presenceRouter = Router();
 
@@ -52,18 +52,28 @@ presenceRouter.delete('/', requireAccount, (req: Request, res: Response) => {
   res.status(200).json({ success: true, data: { published: false } });
 });
 
-presenceRouter.get('/', requireAccount, requireRole('SHIFT_LEAD'), validate(listPresenceSchema), async (req: Request, res: Response, next: NextFunction) => {
+presenceRouter.get('/', requireSession, requireRole('SHIFT_LEAD'), validate(listPresenceSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const reader = req.account!.id;
     const now = Date.now();
+    // Same lazy sweep as the avatar limiter: one entry per lead who ever called this.
+    if (lastList.size > 256) for (const [id, at] of lastList) if (now - at > LIST_INTERVAL_MS * 10) lastList.delete(id);
     const last = lastList.get(reader) ?? 0;
     if (now - last < LIST_INTERVAL_MS) {
       throw new ApiError(429, ErrorCode.RATE_LIMITED, 'One presence listing per five seconds.');
     }
     lastList.set(reader, now);
 
+    // The schema accepts a centre and a radius; honour them rather than always dumping
+    // everyone. Filtering happens on the exact position, which is what this route returns.
+    const centre = req.query.lat !== undefined && req.query.lng !== undefined
+      ? toLocal(Number(req.query.lat), Number(req.query.lng))
+      : null;
+    const radiusUnits = centre ? Number(req.query.radiusMeters ?? 300) / presenceStore.cfg.metersPerUnit : Infinity;
+
     const rows = [...presenceStore.all()]
       .filter((e) => !Number.isNaN(e.fx))
+      .filter((e) => !centre || Math.hypot(e.x - centre.x, e.z - centre.z) <= radiusUnits)
       .map((e) => {
         const ll = fromLocal(e.x, e.z);
         return {

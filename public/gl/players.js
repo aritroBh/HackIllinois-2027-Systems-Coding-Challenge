@@ -35,6 +35,8 @@ const MAX_DR_SPEED = 0.2;   // world units per second (≈ 2 m/s)
 const LOD_SPRITE = 6;
 const LOD_PILL = 15;
 const CLUSTER_CELL = 5;
+/** The interest set is at most 60 detailed peers; 120 slots leaves room for churn. */
+const MAX_ATLAS_SLOTS = 120;
 
 export const PLAYER_VS = `#version 300 es
 precision highp float;
@@ -123,6 +125,8 @@ export function createPlayerLayer(gl, { program }) {
   /** hash → { slot, lastSeen } ; slot 0..SLOTS-1 */
   const slots = new Map();
   const freeSlots = Array.from({ length: SLOTS }, (_, i) => SLOTS - 1 - i);
+  /** Hashes belonging to players we are currently tracking — eviction candidates are the rest. */
+  const livePlayerHashes = () => new Set([...players.values()].map((p) => p.avatarHash).filter(Boolean));
   /** id → { x, z, h, faction, name, avatarHash, kind, stale, history: [{t,x,z}], lastT } */
   const players = new Map();
   let packed = new Float32Array(0);
@@ -143,9 +147,15 @@ export function createPlayerLayer(gl, { program }) {
    */
   function registerAvatar(hash, image) {
     if (!hash || slots.has(hash)) return slots.get(hash)?.slot ?? -1;
+    // The atlas only ever needs the interest set (the server sends at most 60 detailed
+    // peers, and the cap here is the documented 120).
+    if (slots.size >= MAX_ATLAS_SLOTS) {
+      const departed = [...slots.keys()].find((h) => !livePlayerHashes().has(h));
+      if (departed) { const rec = slots.get(departed); slots.delete(departed); freeSlots.push(rec.slot); }
+    }
     let slot = freeSlots.pop();
     if (slot === undefined) {
-      // Evict the least recently used slot that no near player needs.
+      // Nobody has departed: give the slot to the furthest player still on screen.
       let worst = null;
       for (const [h, rec] of slots) if (!worst || (rec.distance ?? 1e9) > (worst[1].distance ?? 1e9)) worst = [h, rec];
       if (!worst) return -1;
@@ -258,14 +268,23 @@ export function createPlayerLayer(gl, { program }) {
       rec.x = s.x; rec.z = s.z;
       const d = Math.hypot(s.x - camera.x, s.z - camera.z);
       if (d >= LOD_PILL) {
-        const cx = Math.round(s.x / CLUSTER_CELL) * CLUSTER_CELL;
-        const cz = Math.round(s.z / CLUSTER_CELL) * CLUSTER_CELL;
+        // Hysteresis: keep the cell we were in until we are clearly inside another one.
+        // Rounding alone makes a player standing on a boundary flip cells every frame,
+        // which reads as two dots blinking at each other.
+        let cx = Math.round(s.x / CLUSTER_CELL) * CLUSTER_CELL;
+        let cz = Math.round(s.z / CLUSTER_CELL) * CLUSTER_CELL;
+        if (rec.cell) {
+          const stuck = Math.abs(s.x - rec.cell[0]) < CLUSTER_CELL * 0.65 && Math.abs(s.z - rec.cell[1]) < CLUSTER_CELL * 0.65;
+          if (stuck) { cx = rec.cell[0]; cz = rec.cell[1]; }
+        }
+        rec.cell = [cx, cz];
         const key = `${cx},${cz}`;
         const c = clusters.get(key) ?? { x: cx, z: cz, n: 0, faction: rec.faction };
         c.n += 1;
         clusters.set(key, c);
         continue;
       }
+      rec.cell = null; // close enough to draw individually again
       const rgb = factionRGB(colourOf(rec.faction));
       const slot = d < LOD_SPRITE ? slotFor(rec.avatarHash, d) : -1;
       const frame = s.moving ? Math.floor(t * 8) % FRAMES : 0;

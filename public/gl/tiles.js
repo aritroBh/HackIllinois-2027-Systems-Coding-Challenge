@@ -13,7 +13,14 @@
 import { frustumPlanes, aabbVisible } from './glx-geometry.js';
 
 const LOD_NEAR = 100, LOD_MID = 250, HYST = 0.1;
-const RING_LOAD = 2, RING_KEEP = 3, UNLOAD_MS = 10000, MAX_INFLIGHT = 3;
+/**
+ * 3×3 resident around each centre, a prefetch ring beyond it, and a 7×7 keep ring before
+ * anything is unloaded (plan §B3). RING_LOAD 1 is the 3×3; RING_PREFETCH fetches the next
+ * ring at low priority so walking into it is not a stall.
+ */
+const RING_LOAD = 1, RING_PREFETCH = 2, RING_KEEP = 3, UNLOAD_MS = 10000, MAX_INFLIGHT = 3;
+/** Past this, camera and player are looking at different places (plan §B3). */
+const SPLIT_VIEW_UNITS = 100;
 
 export function createTileManager({ index, baseUrl, bake, upload, dispose, onTile, useWorker = true, workerUrl = '/dashboard/gl/bake-worker.js' }) {
   const tileUnits = index.meta.tileUnits || 50;
@@ -99,10 +106,14 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
     const centres = [target];
     if (player) centres.push(player);
     const wanted = wantedSet(centres, RING_LOAD);
+    const prefetch = wantedSet(centres, RING_PREFETCH);
     const keep = wantedSet(centres, RING_KEEP);
     for (const k of wanted.keys()) { const r = resident.get(k); if (r) r.lastWanted = now; }
-    // Fetch missing, nearest first, bounded in-flight.
-    const missing = [...wanted.entries()].filter(([k]) => !resident.has(k) && !inflight.has(k)).sort((a, b) => a[1].d - b[1].d);
+    // Fetch missing, nearest first, bounded in-flight. The 3×3 goes first; the prefetch
+    // ring fills whatever budget is left over.
+    const missing = [...wanted.entries(), ...[...prefetch.entries()].filter(([k]) => !wanted.has(k))]
+      .filter(([k]) => !resident.has(k) && !inflight.has(k))
+      .sort((a, b) => a[1].d - b[1].d);
     for (const [k, { entry }] of missing) {
       if (inflight.size >= MAX_INFLIGHT) break;
       fetchTile(k, entry, opts);
@@ -117,10 +128,14 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
     stats.resident = resident.size;
   }
 
-  function select(viewProj, target) {
+  function select(viewProj, target, player) {
     const planes = frustumPlanes(viewProj);
     const out = [];
     let tris = 0;
+    // Orbiting far from the player would otherwise hold two full L0 rings — one around the
+    // camera, one around the sprite — and blow the vertex budget. The player's ring is
+    // capped at L1 whenever the two are far apart.
+    const split = player ? Math.hypot(player[0] - target[0], player[1] - target[1]) > SPLIT_VIEW_UNITS : false;
     for (const r of resident.values()) {
       const b = r.bounds;
       if (!aabbVisible(planes, [b[0], b[1], b[2]], [b[3], b[4], b[5]])) continue;
@@ -133,6 +148,10 @@ export function createTileManager({ index, baseUrl, bake, upload, dispose, onTil
       if (lod === 1 && d > LOD_MID * (1 + HYST)) lod = 2;
       else if (lod === 2 && d < LOD_MID * (1 - HYST)) lod = 1;
       if (r.lod === 2 && d < LOD_NEAR * (1 - HYST)) lod = 0;
+      if (split && lod === 0) {
+        const dp = Math.hypot(cx - player[0], cz - player[1]);
+        if (dp < d) lod = 1; // this tile is the player's, not the camera's
+      }
       r.lod = lod;
       const range = r.meshes.solid ? r.meshes.solid.ranges[lod] : null;
       if (range) tris += range.count / 3;

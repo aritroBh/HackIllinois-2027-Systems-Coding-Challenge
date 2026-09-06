@@ -95,10 +95,15 @@ function clampI16(v: number): number {
   return Math.max(-32768, Math.min(32767, v));
 }
 
-/** JSON row for the SSE fallback and debugging: [idx, x, z, heading, factionIdx, stale]. */
-export type JsonRow = [number, number, number, number, number, 0 | 1];
+/**
+ * JSON row for the SSE fallback and debugging:
+ * `[idx, x, z, heading, factionIdx, stale, kind]` — the same six fields the binary row
+ * carries, `kind` included, so the fallback does not quietly render every hacker as a
+ * volunteer.
+ */
+export type JsonRow = [number, number, number, number, number, 0 | 1, 0 | 1];
 export function toJsonRow(r: WireRow): JsonRow {
-  return [r.idx, +r.x.toFixed(3), +r.z.toFixed(3), Math.round(r.h), r.faction, r.stale ? 1 : 0];
+  return [r.idx, +r.x.toFixed(3), +r.z.toFixed(3), Math.round(r.h), r.faction, r.stale ? 1 : 0, r.kind];
 }
 
 /**

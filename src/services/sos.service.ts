@@ -45,6 +45,10 @@ export interface ICreateSOSTicketDTO {
 /** A presence fix older than this is not a position any more; fall back to the venue. */
 const LIVE_POSITION_MAX_AGE_MS = 30_000;
 
+/** Distances shown to non-leads are rounded to this, so they cannot be used to range. */
+const DISTANCE_BUCKET_M = 10;
+const coarsen = (m: number): number | null => (Number.isFinite(m) ? Math.round(m / DISTANCE_BUCKET_M) * DISTANCE_BUCKET_M : null);
+
 export class SOSService {
   /**
    * Hacker creates an emergency logistics / hardware help ticket.
@@ -73,10 +77,10 @@ export class SOSService {
    * calculates Haversine distance to the ticket coordinates,
    * and dispatches the closest volunteer.
    */
-  public static async dispatchNearestVolunteer(ticketId: string): Promise<{
+  public static async dispatchNearestVolunteer(ticketId: string, viewer?: { role?: string }): Promise<{
     ticket: ISOSTicket;
     dispatchedVolunteer: Record<string, unknown>;
-    distanceMeters: number;
+    distanceMeters: number | null;
     positionSource: 'live' | 'venue' | 'unknown';
     positionAgeMs: number | null;
     candidates: Array<{ volunteerId: string; name: string; distanceMeters: number | null; positionSource: string; ageMs: number | null }>;
@@ -170,23 +174,25 @@ export class SOSService {
     const bestCandidate: IVolunteer | null = winner ? winner.vol : null;
     const shortestDistance = winner?.distanceMeters ?? Infinity;
 
-    // One audit document per dispatch — never one per scanned cell (plan §A4).
-    if (live.size) {
-      void PresenceAudit.create({
-        readerId: 'dispatch',
-        reason: 'dispatch',
-        ticketId: String(ticket._id),
-        candidatesScanned: candidates.length,
-        winnerId: bestCandidate ? String(bestCandidate._id) : undefined,
-        at: new Date(now),
-      }).catch(() => undefined);
-    }
+    // One audit document per dispatch — never one per scanned cell (plan §A4). Written
+    // even when no live fix was used: "we looked and found nobody publishing" is exactly
+    // the kind of read the log exists to record.
+    await PresenceAudit.create({
+      readerId: 'dispatch',
+      reason: 'dispatch',
+      ticketId: String(ticket._id),
+      candidatesScanned: candidates.length,
+      winnerId: bestCandidate ? String(bestCandidate._id) : undefined,
+      at: new Date(now),
+    });
 
     // ponytail: no skill-match wipeout fallback — assigning a random unqualified volunteer
     // is worse than no dispatch at all.
     if (!bestCandidate || !winner) {
       throw ApiError.conflict('No on-duty volunteer matches the required skill for this ticket.', ErrorCode.MISSING_SKILL_CERTIFICATION);
     }
+
+    const isLead = /SHIFT_LEAD|ORGANIZER|ADMIN/.test(viewer?.role ?? '');
 
     // 3. CAS the ticket OPEN -> DISPATCHED so concurrent dispatchers can't double-assign.
     const dispatched = await SOSTicket.findOneAndUpdate(
@@ -221,17 +227,26 @@ export class SOSService {
         role: bestCandidate.role,
         faction: (bestCandidate as { faction?: unknown }).faction,
       } as Record<string, unknown>,
-      distanceMeters: shortestDistance,
+      // Coarsened to 10 m for an ordinary caller: an exact metre distance from a chosen
+      // point is a ranging oracle, and repeated across tickets it trilaterates a live
+      // position that the fuzzed wire deliberately withholds. Leads already read exact
+      // positions through the audited `GET /presence`.
+      distanceMeters: isLead ? shortestDistance : coarsen(shortestDistance),
       positionSource: winner!.positionSource,
       positionAgeMs: winner!.ageMs,
-      /** Everyone considered, so the lead queue can show the runners-up and their location quality. */
-      candidates: candidates.slice(0, 10).map((c) => ({
-        volunteerId: String(c.vol._id),
-        name: c.vol.name,
-        distanceMeters: c.distanceMeters,
-        positionSource: c.positionSource,
-        ageMs: c.ageMs,
-      })),
+      /**
+       * The runners-up, for the lead queue's "who else could go" column. Ordinary callers
+       * get nothing here: they asked to dispatch, not to survey where everyone is.
+       */
+      candidates: isLead
+        ? candidates.slice(0, 10).map((c) => ({
+            volunteerId: String(c.vol._id),
+            name: c.vol.name,
+            distanceMeters: c.distanceMeters,
+            positionSource: c.positionSource,
+            ageMs: c.ageMs,
+          }))
+        : [],
     };
   }
 

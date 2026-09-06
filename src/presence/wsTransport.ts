@@ -120,6 +120,17 @@ class WsPresenceClient implements PresenceClient {
   }
 }
 
+/**
+ * slot id → the client holding it, so a replaced slot can close its socket rather than
+ * leaving it open and still ticking.
+ */
+const bySlot = new Map<number, WsPresenceClient>();
+
+/** Test/ops hook: how many live WebSocket clients this process is holding. */
+export function wsClientCount(): number {
+  return bySlot.size;
+}
+
 export function attachPresenceWs(server: http.Server): void {
   if (!env.PRESENCE_ENABLED) return;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
@@ -146,10 +157,20 @@ export function attachPresenceWs(server: http.Server): void {
     const ip = (req.socket.remoteAddress ?? 'unknown');
     const acquired = streamLimits.tryAcquire({ transport: 'ws', accountId: resolved.account.id, ip });
     if (!acquired.ok) return refuse(socket, 503, 'Service Unavailable');
+    // The slot table frees the replaced slot, but the SOCKET on the other end of it is
+    // still open and still receiving ticks. Without closing it, one authenticated account
+    // could open connections forever: the accounting says two, the process holds hundreds.
+    // (The SSE hub does the same thing through `evictBySlot`.)
+    if (acquired.evict) {
+      const stale = bySlot.get(acquired.evict.id);
+      bySlot.delete(acquired.evict.id);
+      stale?.close(1013, 'replaced by a newer connection');
+    }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       const id = `ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       const client = new WsPresenceClient(id, resolved.account, ws, acquired.slot);
+      bySlot.set(acquired.slot.id, client);
       const session = presenceService.add(client);
       let lastSeen = Date.now();
 
@@ -170,6 +191,7 @@ export function attachPresenceWs(server: http.Server): void {
       });
       ws.on('close', () => {
         clearInterval(ping);
+        bySlot.delete(acquired.slot.id);
         streamLimits.release(acquired.slot);
         presenceService.remove(id);
       });

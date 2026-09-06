@@ -30,11 +30,41 @@ export enum SOSTicketUrgency {
   CRITICAL = 'CRITICAL',
 }
 
+/**
+ * One vocabulary, used by the server, the pips in the hacker's SOS view and the tests
+ * (plan §A7). ACKNOWLEDGED and ON_SCENE are optional intermediate states, so the original
+ * OPEN → DISPATCHED → RESOLVED path still works exactly as it did.
+ */
 export enum SOSTicketStatus {
   OPEN = 'OPEN',
   DISPATCHED = 'DISPATCHED',
+  ACKNOWLEDGED = 'ACKNOWLEDGED',
+  ON_SCENE = 'ON_SCENE',
   RESOLVED = 'RESOLVED',
   CANCELLED = 'CANCELLED',
+}
+
+/** Terminal states have no outgoing edges; every other move must appear here. */
+export const SOS_TRANSITIONS: Readonly<Record<SOSTicketStatus, readonly SOSTicketStatus[]>> = {
+  [SOSTicketStatus.OPEN]: [SOSTicketStatus.DISPATCHED, SOSTicketStatus.RESOLVED, SOSTicketStatus.CANCELLED],
+  // Reassignment sends a ticket back to OPEN; a responder may also resolve without ever
+  // pressing acknowledge, which is what actually happens when someone is already standing there.
+  [SOSTicketStatus.DISPATCHED]: [SOSTicketStatus.ACKNOWLEDGED, SOSTicketStatus.ON_SCENE, SOSTicketStatus.RESOLVED, SOSTicketStatus.OPEN, SOSTicketStatus.CANCELLED],
+  [SOSTicketStatus.ACKNOWLEDGED]: [SOSTicketStatus.ON_SCENE, SOSTicketStatus.RESOLVED, SOSTicketStatus.OPEN, SOSTicketStatus.CANCELLED],
+  [SOSTicketStatus.ON_SCENE]: [SOSTicketStatus.RESOLVED, SOSTicketStatus.OPEN, SOSTicketStatus.CANCELLED],
+  [SOSTicketStatus.RESOLVED]: [],
+  [SOSTicketStatus.CANCELLED]: [],
+};
+
+export function canTransition(from: SOSTicketStatus, to: SOSTicketStatus): boolean {
+  return (SOS_TRANSITIONS[from] ?? []).includes(to);
+}
+
+export interface ISOSHistoryEntry {
+  status: SOSTicketStatus;
+  at: Date;
+  by?: Types.ObjectId | null;
+  note?: string;
 }
 
 export interface ISOSTicket extends Document {
@@ -52,7 +82,15 @@ export interface ISOSTicket extends Document {
   assignedVolunteerId?: Types.ObjectId | null;
   karmaBounty: number;
   dispatchedAt?: Date;
+  acknowledgedAt?: Date | null;
+  onSceneAt?: Date | null;
   resolvedAt?: Date;
+  /** Who raised it, when the creator is a signed-in account (hacker SOS). */
+  createdById?: Types.ObjectId | null;
+  /** Every state change, in order. */
+  history: ISOSHistoryEntry[];
+  /** Set once, when the 3-minute no-acknowledgement escalation fires. */
+  escalatedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -89,7 +127,20 @@ const SOSTicketSchema = new Schema<ISOSTicket>(
     assignedVolunteerId: { type: Schema.Types.ObjectId, ref: 'Volunteer', default: null },
     karmaBounty: { type: Number, default: 150, min: 50 },
     dispatchedAt: { type: Date },
+    acknowledgedAt: { type: Date, default: null },
+    onSceneAt: { type: Date, default: null },
     resolvedAt: { type: Date },
+    createdById: { type: Schema.Types.ObjectId, ref: 'Volunteer', default: null, index: true },
+    history: [
+      {
+        _id: false,
+        status: { type: String, enum: Object.values(SOSTicketStatus), required: true },
+        at: { type: Date, required: true, default: () => new Date() },
+        by: { type: Schema.Types.ObjectId, ref: 'Volunteer', default: null },
+        note: { type: String },
+      },
+    ],
+    escalatedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

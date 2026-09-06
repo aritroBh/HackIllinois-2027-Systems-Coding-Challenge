@@ -84,7 +84,7 @@
     return { kind, tick, rows };
   }
 
-  const jsonRow = (r) => ({ idx: r[0], x: r[1], z: r[2], h: r[3], faction: r[4], stale: !!r[5] });
+  const jsonRow = (r) => ({ idx: r[0], x: r[1], z: r[2], h: r[3], faction: r[4], stale: !!r[5], kind: r[6] ? 'HACKER' : 'VOLUNTEER' });
 
   /* ------------------------------------------------------------------ *
    * Applying frames
@@ -104,7 +104,7 @@
       const meta = state.slots.get(r.idx);
       if (!meta) { unknown += 1; continue; }
       state.peers.set(meta.id, {
-        id: meta.id, name: meta.name, kind: meta.kind, avatarHash: meta.avatarHash,
+        id: meta.id, name: meta.name, kind: meta.kind ?? r.kind, avatarHash: meta.avatarHash,
         faction: meta.faction ?? state.factions[r.faction] ?? 'NEUTRAL',
         x: r.x, z: r.z, h: r.h, stale: r.stale,
       });

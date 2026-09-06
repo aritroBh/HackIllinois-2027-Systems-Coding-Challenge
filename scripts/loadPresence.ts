@@ -16,11 +16,16 @@
  * that a reconnecting account never evicts its own other transport and that every client is
  * back at full detail within 60 s.
  *
- * The server must be running with PRESENCE_ENABLED=true and reachable at --url; point
- * TRUSTED_EGRESS_CIDRS at the load generator to test the trusted-egress configuration, and
- * run it once without to test the untrusted 800-streams-per-IP path.
+ * The server must be running with PRESENCE_ENABLED=true and reachable at --url.
+ *
+ * **Source addresses.** The untrusted leg of the gate (800 streams per IP against 2,400
+ * streams) cannot be exercised from one address: a single host would be refused at 800 and
+ * the run would prove only that the cap works. Either give this process several local
+ * addresses and pass them with `--from 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4` (each socket is
+ * bound round-robin), or run four copies with `--clients 300` on four hosts. With one
+ * address, pass those addresses in the server's TRUSTED_EGRESS_CIDRS — that is the trusted
+ * leg, and the harness says which leg it ran.
  */
-import crypto from 'crypto';
 import { WebSocket } from 'ws';
 
 interface Args {
@@ -30,6 +35,8 @@ interface Args {
   devices: number;
   seconds: number;
   stormPercent: number;
+  /** Local addresses to bind sockets to, round-robin. Empty means the default route. */
+  from: string[];
   organizerSecret?: string;
 }
 
@@ -46,6 +53,7 @@ function parseArgs(argv: string[]): Args {
     devices: Number(get('devices', '2')),
     seconds: Number(get('seconds', '120')),
     stormPercent: Number(get('storm', '0')),
+    from: get('from', '').split(',').map((s) => s.trim()).filter(Boolean),
     organizerSecret: process.env.ORGANIZER_SECRET,
   };
 }
@@ -125,9 +133,15 @@ async function makeClient(api: string, i: number, desk: { cookie: string; csrf: 
   };
 }
 
+let bindCursor = 0;
+
 function connect(args: Args, c: Client): Promise<WebSocket | null> {
   return new Promise((resolve) => {
-    const ws = new WebSocket(args.url, [`nexus.v1.${c.csrf}`], { headers: { cookie: c.cookie } });
+    const localAddress = args.from.length ? args.from[bindCursor++ % args.from.length] : undefined;
+    const ws = new WebSocket(args.url, [`nexus.v1.${c.csrf}`], {
+      headers: { cookie: c.cookie },
+      ...(localAddress ? { localAddress } : {}),
+    });
     const fail = () => resolve(null);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', v: 1, enc: 'bin' }));
@@ -232,20 +246,35 @@ async function main(): Promise<number> {
   await new Promise((r) => setTimeout(r, args.seconds * 1000));
 
   let stormOk = true;
+  let stormSurvivors = 0;
+  let stormFullDetail = 0;
+  let victimCount = 0;
   if (args.stormPercent > 0) {
     console.log(`\n[soak] reconnect storm: ${args.stormPercent}% of clients drop one socket`);
     const victims = clients.filter(() => Math.random() * 100 < args.stormPercent);
+    victimCount = victims.length;
+    // Remember the OTHER leg of each victim: it must survive its sibling's reconnect,
+    // which is the whole point of same-transport replacement.
+    const survivors = new Map<Client, WebSocket | undefined>();
     for (const c of victims) {
       const doomed = c.sockets.shift();
+      survivors.set(c, c.sockets[0]);
+      c.clusterNotices = 0;
+      c.fullNotices = 0;
       doomed?.close(1000, 'storm');
       const ws = await connect(args, c);
       if (ws) c.sockets.push(ws);
       else stormOk = false;
     }
     await new Promise((r) => setTimeout(r, 60_000));
-    // The other transport of a reconnecting account must survive.
     for (const c of victims) {
-      if (c.sockets.filter((w) => w.readyState === WebSocket.OPEN).length < Math.min(args.devices, 2)) stormOk = false;
+      const sibling = survivors.get(c);
+      // Cross-transport eviction is the failure this gate exists to catch.
+      if (sibling && sibling.readyState === WebSocket.OPEN) stormSurvivors += 1;
+      else if (sibling) stormOk = false;
+      // Back to full detail within the minute: either it never degraded, or it recovered.
+      if (c.clusterNotices === 0 || c.fullNotices > 0) stormFullDetail += 1;
+      else stormOk = false;
     }
   }
 
@@ -267,12 +296,15 @@ async function main(): Promise<number> {
   row('cluster-only fallback never triggered', String(clusterTriggered), !clusterTriggered);
   row('no 1013 closes inside the slot budget', String(closes1013), closes1013 === 0);
   row('sockets held', `${held}/${open}`, held >= open * 0.95);
-  if (args.stormPercent > 0) row('reconnect storm kept both transports', String(stormOk), stormOk);
+  if (args.stormPercent > 0) {
+    row('storm: sibling connection survived', `${stormSurvivors}/${victimCount}`, stormSurvivors === victimCount);
+    row('storm: full detail within 60 s', `${stormFullDetail}/${victimCount}`, stormFullDetail === victimCount);
+  }
+  console.log(`\n      leg: ${args.from.length > 1 ? `${args.from.length} source addresses (untrusted-capable)` : 'one source address (trusted-egress leg only)'}`);
 
   const passed = tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
   console.log(passed ? '\nM4b: PASS' : '\nM4b: FAIL');
   return passed ? 0 : 1;
 }
 
-void crypto; // reserved: the trusted-egress variant signs its own source addresses
 main().then((code) => process.exit(code), (err) => { console.error(err); process.exit(1); });

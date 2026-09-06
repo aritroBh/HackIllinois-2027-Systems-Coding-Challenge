@@ -44,7 +44,7 @@ export interface IAvatar extends Document {
 
 const AvatarSchema = new Schema<IAvatar>(
   {
-    hash: { type: String, required: true, unique: true, index: true },
+    hash: { type: String, required: true, index: true },
     bytes: { type: Buffer, required: true },
     width: { type: Number, required: true },
     height: { type: Number, required: true },
@@ -64,5 +64,12 @@ const AvatarSchema = new Schema<IAvatar>(
   },
   { timestamps: true }
 );
+
+/**
+ * One row per (image, owner). Two people who upload the same sheet get their own document:
+ * a shared row would mean one person's takedown clears the other's avatar, and a PENDING
+ * row owned by someone else would 404 for its own second uploader.
+ */
+AvatarSchema.index({ hash: 1, ownerId: 1 }, { unique: true });
 
 export const Avatar = mongoose.model<IAvatar>('Avatar', AvatarSchema);

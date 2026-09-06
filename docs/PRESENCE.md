@@ -42,7 +42,7 @@ Two readers, both audited once per read in `presenceAudit` (30-day TTL):
 - **SOS dispatch**, which prefers a live fix under 30 s old over the shift-venue estimate. Candidates with neither are kept and ranked last with `positionSource: "unknown"`, so the lead queue shows them greyed rather than silently dropping them.
 - **A lead**, through `GET /api/v1/presence` (one call per 5 s per lead, one audit document per call, never one per row).
 
-Aggregates are not exact reads: cluster counts and the roster's distance buckets name nobody and are not audited.
+Aggregates are not exact reads: cluster counts name nobody and are not audited. The roster is not an aggregate, though — its per-volunteer presence age and distance buckets are a disclosure about named people, so a roster view is audited once per view (plan §A4). It arrives with M5.
 
 Dispatch reads only opted-in, on-duty volunteers. Hackers are never dispatch candidates, and an opted-out volunteer falls back to their venue estimate, so opting out is honoured by dispatch too. The one exception to all of this is an SOS ticket's own coordinates: raising a ticket is the hacker's explicit request to share where they are.
 
@@ -50,7 +50,7 @@ Volunteers are additionally hidden from ordinary viewers while off shift; hacker
 
 ## Avatars
 
-A sheet is uploaded as a raw PNG (at most 64 KB, 20 per hour), decoded, and **re-encoded from its pixels** before anything is stored. The bytes served are ours, not the uploader's, so metadata chunks and polyglot files do not survive; anything trailing the `IEND` chunk is refused outright. The sha256 is taken over the re-encoded bytes, so it identifies the image rather than the file, and the same sheet uploaded twice deduplicates.
+A sheet is uploaded as a raw PNG (at most 64 KB, 20 per hour), decoded, and **re-encoded from its pixels** before anything is stored. The bytes served are ours, not the uploader's, so metadata chunks and polyglot files do not survive; anything trailing the `IEND` chunk is refused outright. The sha256 is taken over the re-encoded bytes, so it identifies the image rather than the file. The same person uploading the same sheet twice gets one row; two different people get one row each, so a takedown against one never clears the other's avatar.
 
 Sharing is opt-in and reviewed. An avatar is visible to its owner and to leads while `PENDING`, and to everyone once `APPROVED`. Three distinct reporters, or one lead, unpublish it immediately and emit `AVATAR_UNPUBLISHED` on the `game` channel, which is what evicts the texture from every connected renderer. Bytes are served `private, max-age=60, must-revalidate` with an ETag, never `immutable`, because that URL becomes a 404 the moment the avatar comes down.
 

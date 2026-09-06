@@ -202,6 +202,23 @@ export function requireAccount(req: Request, _res: Response, next: NextFunction)
 }
 
 /**
+ * A real, proven session — not a legacy claim.
+ *
+ * `legacy` mode lets a caller assert an identity with a body/query `volunteerId`, which is
+ * fine for the open demo's game actions but must never unlock privacy-sensitive reads: a
+ * stranger could otherwise name a lead's id and read everyone's exact position. Routes that
+ * disclose somebody else's location or moderate other people's content use this instead of
+ * `requireAccount`, so they behave identically in both modes.
+ */
+export function requireSession(req: Request, _res: Response, next: NextFunction): void {
+  if (req.account?.source === 'session') {
+    next();
+    return;
+  }
+  next(ApiError.unauthorized('This endpoint needs a signed-in session, not a claimed identity.'));
+}
+
+/**
  * Lead/organiser gate. ORGANIZER and ADMIN satisfy every check; asking for SHIFT_LEAD
  * accepts any lead-or-above role. Like `requireVolunteerKind`, an anonymous request in
  * `legacy` mode passes (open demo); in `required` mode `enforceAuthMode` has already

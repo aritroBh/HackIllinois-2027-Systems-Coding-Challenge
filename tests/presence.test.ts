@@ -22,7 +22,8 @@ import { Avatar, AvatarStatus } from '../src/models/avatar.model';
 import { PresenceStore } from '../src/presence/store';
 import { presenceStore } from '../src/presence/store';
 import { presenceService } from '../src/presence/service';
-import { encodeRows, decodeRows, IdxTable } from '../src/presence/protocol';
+import { wsClientCount } from '../src/presence/wsTransport';
+import { encodeRows, decodeRows, IdxTable, IDX_WRAP } from '../src/presence/protocol';
 import { __resetAvatarRate } from '../src/services/avatar.service';
 import { pack, toLocal } from '../src/content/loader';
 import { cookieNames } from '../src/common/utils/sessionToken';
@@ -113,6 +114,20 @@ describe('presence protocol', () => {
     // A released id is not handed straight back out.
     const [c] = t.assign('gamma', 4);
     expect(c).toBe(3);
+  });
+
+  it('a wrap clears the table and demands a full snapshot, so no slot is ever mis-bound', () => {
+    const t = new IdxTable();
+    t.needsFullSnapshot = false;
+    // Walk the counter to the wrap point. Every assignment is a distinct player.
+    for (let i = 1; i < IDX_WRAP; i++) t.assign(`p${i}`, 1);
+    expect(t.size()).toBe(IDX_WRAP - 1);
+    const [idx, isNew] = t.assign('after-the-wrap', 2);
+    expect(idx).toBe(1);          // counter restarted
+    expect(isNew).toBe(true);
+    expect(t.size()).toBe(1);     // everything else was forgotten
+    // The client must be told to rebind, or it would draw the previous holder of slot 1.
+    expect(t.needsFullSnapshot).toBe(true);
   });
 });
 
@@ -296,19 +311,46 @@ describe('SOS dispatch prefers a live position', () => {
     });
     expect(created.status).toBe(201);
 
-    const res = await request(app).post(`/api/v1/sos/tickets/${created.body.data._id}/dispatch`).send({});
+    const lead = await makeAccount({ role: VolunteerRole.SHIFT_LEAD });
+    const { agent: l, csrf } = await signIn(lead.id);
+    const res = await l.post(`/api/v1/sos/tickets/${created.body.data._id}/dispatch`).set('X-CSRF-Token', csrf).send({});
     expect(res.status).toBe(200);
     expect(res.body.data.dispatchedVolunteer.name).toBe('Near Nan');
     expect(res.body.data.positionSource).toBe('live');
     expect(res.body.data.positionAgeMs).toBeLessThan(30_000);
-    // Everyone considered is reported, including the one with no location.
+    // A lead sees everyone considered, including the one with no live location, and an
+    // exact distance — they can already read exact positions through the audited listing.
     const fay = res.body.data.candidates.find((c: { name: string }) => c.name === 'Far Fay');
     expect(fay.positionSource).toBe('venue');
+    expect(res.body.data.distanceMeters % 10).not.toBe(0); // exact, not bucketed
     // One audit document for the whole dispatch.
     const audits = await PresenceAudit.find({ reason: 'dispatch' });
     expect(audits).toHaveLength(1);
     expect(audits[0].winnerId).toBe(String(near._id));
     expect(audits[0].candidatesScanned).toBeGreaterThanOrEqual(2);
+  });
+
+  it('an ordinary caller gets a bucketed distance and no candidate list, so dispatch is not a ranging oracle', async () => {
+    const responder = await makeAccount({ name: 'Rae' });
+    const shift = await Shift.create({
+      title: 'Oracle pool', description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000), capacity: 5, baseKarma: 10,
+    });
+    await Registration.create({ shiftId: shift._id, volunteerId: responder._id, status: RegistrationStatus.CHECKED_IN, idempotencyKey: `o1_${Date.now()}` });
+    const ticketAt = at(0, 0);
+    const raeAt = at(37, 0); // a distance that is obviously not a multiple of ten
+    presenceStore.update(facts(String(responder._id)), { lat: raeAt.lat, lng: raeAt.lng, acc: 6 });
+
+    const created = await request(app).post('/api/v1/sos/tickets').send({
+      hackerName: 'Sam', tableLocation: 'T1', description: 'help', urgency: 'HIGH',
+      coordinates: { latitude: ticketAt.lat, longitude: ticketAt.lng },
+    });
+    const volunteer = await makeAccount();
+    const { agent: v, csrf } = await signIn(volunteer.id);
+    const res = await v.post(`/api/v1/sos/tickets/${created.body.data._id}/dispatch`).set('X-CSRF-Token', csrf).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data.candidates).toEqual([]);
+    expect(res.body.data.distanceMeters % 10).toBe(0);
   });
 });
 
@@ -494,9 +536,24 @@ describe('act-on-behalf is narrow', () => {
     // Whatever the outcome (geofence, cooldown), it is never an action taken as the victim.
     if (spin.status === 200) expect(String(spin.body.data.volunteerId ?? lead.id)).not.toBe(victim.id);
 
-    const checkout = await agent.post('/api/v1/attendance/check-out').set('X-CSRF-Token', csrf)
-      .send({ onBehalfVolunteerId: victim.id, volunteerId: victim.id, shiftId: String(victim._id) });
-    expect([400, 403, 404]).toContain(checkout.status);
+    // The real path (`POST /attendance/:id/checkout`); the earlier probe pointed at a route
+    // that does not exist, so it passed on a 404 without testing anything.
+    const shift = await Shift.create({
+      title: 'Checkout probe', description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000), capacity: 3, baseKarma: 10,
+    });
+    const victimReg = await Registration.create({
+      shiftId: shift._id, volunteerId: victim._id, status: RegistrationStatus.CHECKED_IN,
+      idempotencyKey: `victim_${Date.now()}`, checkInTime: new Date(Date.now() - 1800_000),
+    });
+    const before = (await Volunteer.findById(victim._id))!.karmaPoints;
+    const checkout = await agent.post(`/api/v1/attendance/${victimReg.id}/checkout`).set('X-CSRF-Token', csrf)
+      .send({ onBehalfVolunteerId: victim.id, volunteerId: victim.id });
+    // Whatever the status, the lead must not have closed the victim's shift and banked
+    // their karma: that is the delegation-as-impersonation case.
+    expect((await Volunteer.findById(victim._id))!.karmaPoints).toBe(before);
+    expect((await Registration.findById(victimReg.id))!.status).toBe(RegistrationStatus.CHECKED_IN);
+    expect(checkout.status).not.toBe(200);
   });
 });
 
@@ -570,6 +627,48 @@ describe('presence WebSocket transport', () => {
     expect(frames.some((f) => f.t === 'snapshot' || f.t === 'delta')).toBe(true);
     socket.close();
   });
+
+  it('a client that never says hello is closed with 4401', async () => {
+    const vol = await makeAccount();
+    const { cookie, csrf } = await signIn(vol.id);
+    const { ws } = await open({ cookie }, `nexus.v1.${csrf}`);
+    const closed = await new Promise<number>((resolve) => {
+      ws!.on('close', (code) => resolve(code));
+      setTimeout(() => resolve(0), 7000);
+    });
+    expect(closed).toBe(4401);
+  }, 15000);
+
+  it('more than five messages in two seconds closes the socket with 1008', async () => {
+    const vol = await makeAccount();
+    const { cookie, csrf } = await signIn(vol.id);
+    const { ws } = await open({ cookie }, `nexus.v1.${csrf}`);
+    const socket = ws!;
+    const closed = new Promise<number>((resolve) => socket.on('close', (code) => resolve(code)));
+    for (let i = 0; i < 12; i++) socket.send(JSON.stringify({ t: 'hello', v: 1, enc: 'json' }));
+    expect(await closed).toBe(1008);
+  }, 15000);
+
+  it('a third connection from one account closes the oldest socket, not just its slot accounting', async () => {
+    const vol = await makeAccount();
+    const { cookie, csrf } = await signIn(vol.id);
+    const first = await open({ cookie }, `nexus.v1.${csrf}`);
+    const second = await open({ cookie }, `nexus.v1.${csrf}`);
+    expect(first.ws && second.ws).toBeTruthy();
+    const firstClosed = new Promise<number>((resolve) => first.ws!.on('close', (code) => resolve(code)));
+
+    const before = wsClientCount();
+    const third = await open({ cookie }, `nexus.v1.${csrf}`);
+    expect(third.ws).toBeTruthy();
+    // The replaced socket is actually closed. Without this the process would hold three
+    // live sockets while the slot table believed it held two.
+    expect(await firstClosed).toBe(1013);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(wsClientCount()).toBe(before);
+
+    second.ws!.close();
+    third.ws!.close();
+  }, 15000);
 
   it('two clients see each other once both are publishing', async () => {
     presenceStore.clear();

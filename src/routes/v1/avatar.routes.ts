@@ -8,10 +8,14 @@
  *   POST   /avatars/:hash/flag    any account: report it
  *
  * The bytes are served `private, max-age=60, must-revalidate` with an ETag — deliberately
- * not `immutable`, because the same URL becomes a 404 the moment the avatar is unpublished.
+ * not `immutable`, because the same URL becomes a 404 once the avatar is unpublished. That
+ * makes 60 seconds the worst case for a browser that has the file cached and is not
+ * connected: a connected renderer drops the texture immediately on `AVATAR_UNPUBLISHED`,
+ * a reconnecting one revalidates on its next snapshot, and everyone else re-validates
+ * within the minute.
  */
 import express, { Router, Request, Response, NextFunction } from 'express';
-import { requireAccount, requireRole } from '../../middleware/identity';
+import { requireAccount, requireRole, requireSession } from '../../middleware/identity';
 import { AvatarService, MAX_UPLOAD_BYTES } from '../../services/avatar.service';
 import { AvatarStatus } from '../../models/avatar.model';
 
@@ -34,7 +38,7 @@ avatarRouter.post('/', requireAccount, rawPng, async (req: Request, res: Respons
   }
 });
 
-avatarRouter.get('/queue', requireAccount, requireRole('SHIFT_LEAD'), async (_req: Request, res: Response, next: NextFunction) => {
+avatarRouter.get('/queue', requireSession, requireRole('SHIFT_LEAD'), async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const rows = await AvatarService.pendingQueue();
     res.setHeader('Cache-Control', 'no-store');
@@ -58,7 +62,9 @@ avatarRouter.get('/:hash', async (req: Request, res: Response, next: NextFunctio
     }
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('ETag', etag);
-    // Never `immutable`: this URL 404s the moment the avatar is unpublished.
+    // Never `immutable`: this URL 404s once the avatar is unpublished, so a cached copy
+    // must expire. 60 s is the ceiling for a disconnected browser; connected ones are
+    // evicted by the AVATAR_UNPUBLISHED event long before that.
     res.setHeader('Cache-Control', 'private, max-age=60, must-revalidate');
     res.status(200).send(doc.bytes);
   } catch (error) {
@@ -66,7 +72,7 @@ avatarRouter.get('/:hash', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
-avatarRouter.post('/:hash/review', requireAccount, requireRole('SHIFT_LEAD'), async (req: Request, res: Response, next: NextFunction) => {
+avatarRouter.post('/:hash/review', requireSession, requireRole('SHIFT_LEAD'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const approve = req.body?.approve !== false;
     const doc = await AvatarService.review(String(req.params.hash), req.account!.id, approve);

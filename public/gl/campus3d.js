@@ -1139,7 +1139,7 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   function drawTiles(proj, view, t, sweep, fogNear, fogFar, now) {
     tiles.update({ target: [cam.cx, cam.cz], player: player.active ? [player.x, player.z] : null, now, opts: bakeOpts });
-    const selected = tiles.select(viewProj, [cam.cx, cam.cz]);
+    const selected = tiles.select(viewProj, [cam.cx, cam.cz], player.active ? [player.x, player.z] : null);
     frameStats.tilesDrawn = selected.length;
     frameStats.tris = tiles.stats.tris;
     let draws = 0;
