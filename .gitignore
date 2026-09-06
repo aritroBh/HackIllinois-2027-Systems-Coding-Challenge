@@ -19,3 +19,8 @@ design/.venv/
 # specific interpreter version and tells a reader nothing the .py does not.
 __pycache__/
 *.pyc
+
+# Compiled plugin sources. `npm run build` emits these into dist/; a stray copy beside
+# the .ts confuses nothing at runtime but is a build artefact in the source tree.
+plugins/**/*.js
+!plugins/**/public/*.js
