@@ -137,6 +137,16 @@ function isChannel(value: string): value is Channel {
  * What a non-lead subscriber sees of an `sos` event. Built from the fields common to the
  * ticket document (`_id`) and the dispatch/resolve payloads (`ticketId`). Everything
  * else — coordinates, table text, hacker name, assignee — is a lead's business.
+ *
+ * `karmaBounty` is on the list deliberately. It is the reward advertised to whoever might
+ * take the ticket, so withholding it from the people the ticket is advertised to would leave
+ * the queue offering an unspecified amount of karma for an unspecified job. It says nothing
+ * about the person who raised the ticket or about where they are, which is what the rest of
+ * this function exists to withhold.
+ *
+ * The whitelist is a whitelist rather than a blacklist because that is the direction that
+ * fails safe: a field added to a payload later is absent from a redacted copy until somebody
+ * decides otherwise, rather than present until somebody remembers.
  */
 export function redactSos(data: unknown): {
   ticketId: unknown;
@@ -144,6 +154,7 @@ export function redactSos(data: unknown): {
   venueKey: unknown;
   category: unknown;
   urgency: unknown;
+  karmaBounty: unknown;
 } {
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   return {
@@ -152,6 +163,7 @@ export function redactSos(data: unknown): {
     venueKey: d.venueKey,
     category: d.category,
     urgency: d.urgency,
+    karmaBounty: d.karmaBounty,
   };
 }
 

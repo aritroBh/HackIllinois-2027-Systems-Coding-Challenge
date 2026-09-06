@@ -39,12 +39,15 @@
     return () => { set.delete(fn); };
   }
 
-  function emit(channel, payload) {
+  function emit(channel, payload, meta) {
     const set = channels.get(channel);
     if (!set || set.size === 0) return 0;
     // Copy: a handler may unsubscribe itself (or others) while we iterate.
     for (const fn of [...set]) {
-      try { fn(payload); } catch (err) { console.error(`[nexus] "${channel}" handler threw:`, err); }
+      // `meta` is the second argument the SSE bridge passes: the whole v2 envelope, so a
+      // handler that needs the channel or the server timestamp can have them without every
+      // handler having to unwrap a payload it does not care about.
+      try { fn(payload, meta); } catch (err) { console.error(`[nexus] "${channel}" handler threw:`, err); }
     }
     return set.size;
   }

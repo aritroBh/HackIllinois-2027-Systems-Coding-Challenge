@@ -340,22 +340,31 @@ export class SOSService {
     // resolved venue key and never the free-text table location. "Table 9, back left" is
     // exactly the detail the redaction exists to withhold; a venue key is a building.
     const venue = resolveVenue(ticket.tableLocation);
-    eventHub.broadcast({
-      type,
-      data: {
-        ticketId: ticket._id,
-        status: ticket.status,
-        venueKey: venue.matched ? venue.key : null,
-        category: ticket.category,
-        urgency: ticket.urgency,
-        hackerName: ticket.hackerName,
-        tableLocation: ticket.tableLocation,
-        assignedVolunteerId: ticket.assignedVolunteerId,
-      },
-    });
+    const summary = {
+      ticketId: ticket._id,
+      status: ticket.status,
+      venueKey: venue.matched ? venue.key : null,
+      category: ticket.category,
+      urgency: ticket.urgency,
+      hackerName: ticket.hackerName,
+      tableLocation: ticket.tableLocation,
+      assignedVolunteerId: ticket.assignedVolunteerId,
+      // The reward is advertised to responders on purpose — it is the reason to take the
+      // ticket — and the hub's redaction whitelist drops it for callers who may not see the
+      // rest. Leaving it out entirely meant the dispatch queue offered "+undefined karma".
+      karmaBounty: ticket.karmaBounty,
+    };
+    eventHub.broadcast({ type, data: summary });
+
     // The creator and the assignee always get the full ticket on their own channel.
+    //
+    // The same shape as the broadcast, with the whole ticket added. It used to carry only the
+    // id and the status, which meant a client subscribed to both `sos` and `me` — which is
+    // every dashboard — received two frames of the same type with different fields, and any
+    // handler written against one of them printed undefined for the other. A superset is
+    // the shape that lets one handler serve both.
     for (const party of [ticket.createdById, ticket.assignedVolunteerId]) {
-      if (party) eventHub.sendToAccount(String(party), { type, data: { ticketId: ticket._id, status: ticket.status, ticket } });
+      if (party) eventHub.sendToAccount(String(party), { type, data: { ...summary, ticket } });
     }
   }
 

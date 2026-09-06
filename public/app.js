@@ -879,16 +879,53 @@ function connectSSE() {
     setTimeout(connectSSE, wait);
   };
 
+  /**
+   * Subscribe to one server event type.
+   *
+   * The stream is requested at `v=2`, whose frame body is an envelope — `{v, ts, ch, data}` —
+   * and the handler wants what is inside it. Passing the envelope straight through is how the
+   * SOS terminal came to print "undefined reported undefined at undefined": every field the
+   * handlers read lives one level down. The v1 shape is the bare payload, so a frame without
+   * an envelope is passed as it is and a client that asked for v1 still works.
+   */
   const on = (name, fn) => eventSource.addEventListener(name, (e) => {
-    let payload = {};
-    try { payload = JSON.parse(e.data); } catch { /* keep-alive or malformed frame */ }
-    fn(payload);
+    let frame = {};
+    try { frame = JSON.parse(e.data); } catch { /* keep-alive or malformed frame */ }
+    const payload = frame && frame.v === 2 && Object.prototype.hasOwnProperty.call(frame, 'data') ? frame.data : frame;
+    fn(payload, frame);
   });
 
-  // Multiplayer presence over the fallback transport, and avatar takedowns.
-  on('PRESENCE_FRAME', (p) => Nexus.emit('PRESENCE_FRAME', p));
+  /**
+   * Every type the server can publish, forwarded onto the Nexus bus under its own name.
+   *
+   * A view that wants to react to something subscribes with `Nexus.onEvent('ANNOUNCEMENT')`
+   * and expects it to arrive. Before this list existed, only the dozen types with a bespoke
+   * handler below were ever bridged, so the announcement banner, the SOS status bar's later
+   * pips, the quest board and the sticker book all listened to a bus nobody published on —
+   * each of them silently, because subscribing to an event that never fires looks exactly
+   * like an event that has not happened yet.
+   *
+   * Keeping the list here rather than deriving it means adding a server event needs a line
+   * here too. That is the right trade: the alternative is a wildcard the EventSource API does
+   * not offer, and a list that is visibly incomplete beats a bridge that is invisibly so.
+   */
+  const FORWARDED = [
+    'ADONIX_EVENTS_SYNCED', 'ANNOUNCEMENT', 'ANNOUNCEMENT_CLEARED', 'AVATAR_UNPUBLISHED',
+    'BOOTH_SCANNED', 'CLAIM_BRUTE_FORCE', 'CYCLIC_TRADE_EXECUTED',
+    'GYM_ATTACKED', 'GYM_CAPTURED', 'GYM_REINFORCED', 'HACKSTOP_SPUN', 'POWERUP_CONSUMED',
+    'PRESENCE_FRAME', 'QUEST_COMPLETED', 'RAID_CLOSED', 'RAID_JOINED', 'RAID_OPENED',
+    'SHIFT_CREATED', 'SHIFT_DELETED', 'SHIFT_UPDATED',
+    'SLOT_RESERVED', 'SOS_ESCALATED', 'SOS_ESCALATED_FULL',
+    'SOS_TICKET_ACKNOWLEDGED', 'SOS_TICKET_CANCELLED', 'SOS_TICKET_CREATED',
+    'SOS_TICKET_DISPATCHED', 'SOS_TICKET_ON_SCENE', 'SOS_TICKET_REASSIGNED',
+    'SOS_TICKET_RESOLVED', 'STICKER_AWARDED', 'SWAP_EXECUTED', 'SWAP_PROPOSED',
+    'VOLUNTEER_CHECKED_IN', 'VOLUNTEER_CHECKED_OUT', 'WAITLIST_JOINED', 'WAITLIST_PROMOTED',
+  ];
+  for (const name of FORWARDED) on(name, (payload, frame) => Nexus.emit(name, payload, frame));
+
+  // Handlers with side effects of their own, on top of the forwarding above. Both listeners
+  // fire for the same frame; the forwarder tells the views, these drive the war-room chrome.
   on('AVATAR_UNPUBLISHED', (p) => {
-    Nexus.emit('AVATAR_UNPUBLISHED', p);
     logChaosTerminal(`[MODERATION] Avatar ${String(p.hash || '').slice(0, 8)} unpublished (${p.reason || 'takedown'}).`);
   });
 
@@ -919,19 +956,40 @@ function connectSSE() {
 
   on('VOLUNTEER_CHECKED_OUT', () => { refresh.stats(); refresh.leaderboard(); });
 
+  /**
+   * A dashboard subscribes to both `sos` and `me`, so its own tickets arrive twice: once as
+   * the channel broadcast and once as the targeted copy carrying the full document. Both are
+   * wanted — the views use the full one — but the terminal should not narrate the same
+   * transition twice. Keyed on the ticket and the status, which is exactly what a transition
+   * is; a later, genuinely new status for the same ticket logs normally.
+   */
+  const loggedSos = new Set();
+  const firstTimeFor = (p, tag) => {
+    const key = `${tag}:${p.ticketId ?? p._id}:${p.status}`;
+    if (loggedSos.has(key)) return false;
+    loggedSos.add(key);
+    // The set is bounded rather than allowed to grow for the length of a thirty-six hour
+    // event; a few hundred entries is far more history than a duplicate can arrive across.
+    if (loggedSos.size > 400) loggedSos.delete(loggedSos.values().next().value);
+    return true;
+  };
+
   on('SOS_TICKET_CREATED', (p) => {
+    if (!firstTimeFor(p, 'created')) return;
     window.soundEngine?.playSosAlarm();
     logSosTerminal(`[SOS] ${p.hackerName} reported ${p.category} at ${p.tableLocation} (+${p.karmaBounty} karma)`);
     refresh.sos();
   });
 
   on('SOS_TICKET_DISPATCHED', (p) => {
+    if (!firstTimeFor(p, 'dispatched')) return;
     window.soundEngine?.playDispatchChime();
     logSosTerminal(`[DISPATCH] ${p.volunteerName} en route to ${p.hackerName} (${p.distanceMeters}m away)`);
     refresh.sos();
   });
 
   on('SOS_TICKET_RESOLVED', (p) => {
+    if (!firstTimeFor(p, 'resolved')) return;
     logSosTerminal(`[RESOLVED] Ticket ${String(p.ticketId).slice(-6)} closed by ${p.volunteerName}. +${p.karmaAwarded} karma`);
     refresh.sos();
     refresh.leaderboard();
