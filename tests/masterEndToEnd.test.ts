@@ -379,12 +379,19 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     });
     expect(invItem?.quantity).toBe(1);
 
+    // A gym item is place-bound and a personal one is not, so the call shape depends on what
+    // the loot roll gave us. Ada is standing at Siebel — she captured this gym two systems
+    // ago — which is what the geofence and the rival-faction check both want to see.
+    //
+    // This block used to pass a gym id and no coordinates, which made the test fail only on
+    // the runs where the roll happened to produce a gym item: an intermittent failure whose
+    // cause was a real rule doing its job.
+    const gymItem = ['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD'].includes(spinRes.awardedPowerUp);
     const useRes = await HackStopService.usePowerUp(
       volAda._id.toString(),
       spinRes.awardedPowerUp,
-      ['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD'].includes(spinRes.awardedPowerUp)
-        ? siebelGym._id.toString()
-        : undefined
+      gymItem ? siebelGym._id.toString() : undefined,
+      gymItem ? HACKILLINOIS_VENUES.SIEBEL_ATRIUM : undefined
     );
     expect(useRes.remainingQuantity).toBe(0);
 
@@ -399,9 +406,8 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       HackStopService.usePowerUp(
         volAda._id.toString(),
         spinRes.awardedPowerUp,
-        ['OVERCLOCK_SOLDER_CORE', 'INSOMNIA_COOKIE_SHIELD'].includes(spinRes.awardedPowerUp)
-          ? siebelGym._id.toString()
-          : undefined
+        gymItem ? siebelGym._id.toString() : undefined,
+        gymItem ? HACKILLINOIS_VENUES.SIEBEL_ATRIUM : undefined
       )
     ).rejects.toThrow(/Insufficient inventory/i);
   }, 45000);

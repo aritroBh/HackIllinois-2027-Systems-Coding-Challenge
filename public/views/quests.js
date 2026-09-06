@@ -119,15 +119,32 @@
     return { title: row.title || 'The weekend', blurb: row.blurb || '', endsAt: at(row.endsAt), scores };
   }
 
+  /**
+   * Which account's data the state currently belongs to.
+   *
+   * A `load()` that is already in flight when the browser changes hands resolves *after* the
+   * handover has cleared everything, and writes the previous account's answer into the state
+   * it just emptied — the one window the synchronous clear cannot close, because the response
+   * is already on its way. Bumping this on handover makes a stale response identifiable, and
+   * a stale response is dropped rather than painted.
+   *
+   * A counter rather than the account id: it is also correct for two handovers in quick
+   * succession, and it needs no identity to compare against.
+   */
+  let generation = 0;
+
   async function load() {
     if (state.loading || !N.session.user) return;
     state.loading = true;
+    const mine = generation;
     const [quests, raids, objectives] = await Promise.all([
       N.api('/api/v1/me/quests', { lenient: true }),
       N.api('/api/v1/game/raids', { lenient: true }),
       N.api('/api/v1/game/objectives', { lenient: true }),
     ]).catch((err) => { console.debug('[quests] load failed', err.message); return [null, null, null]; });
     state.loading = false;
+    // Somebody else's answer, arriving after the browser changed hands.
+    if (mine !== generation) return;
     if (quests?.success) state.quests = Array.isArray(quests.data) ? quests.data : [];
     state.raid = raids?.success ? pickRaid(raids.data) : null;
     state.objective = objectives?.success ? readObjective(objectives.data) : null;
@@ -558,12 +575,19 @@
   });
 
   N.onEvent('session:ready', ({ user }) => { if (user) void load(); else paint(); });
-  N.onEvent('session', () => paint());
+  // Paint on any session change; *load* when somebody signs in at runtime.
+  //
+  // `session:ready` fires once, at boot. A user who lands signed out and then signs in — a
+  // badge scan at the desk, the only path in `AUTH_MODE=required` — got a repaint of empty
+  // state and nothing else, so this tab sat blank until they navigated away and back.
+  N.onEvent('session', (user) => { if (user) void load(); else paint(); });
 
   // Same as Me, plus the camera: a scanner stream opened by the previous person keeps
   // running through a handover, because `stopCamera` otherwise only fires when the tab hides
   // or the session goes empty — and neither happens when one account replaces another.
   N.onEvent('session:handover', () => {
+    generation += 1;
+    state.loading = false;
     stopCamera();
     state.quests = [];
     state.raid = null;

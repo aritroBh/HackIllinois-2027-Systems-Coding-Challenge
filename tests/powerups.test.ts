@@ -223,3 +223,28 @@ describe('an account that never picked a side cannot buff every side', () => {
     expect((await Gym.findById(open._id))!.isShielded).toBe(true);
   });
 });
+
+describe('a rota is a position with a timetable attached', () => {
+  it('refuses GET /me/shifts to a claimed identity', async () => {
+    // Same shape as /me/sos, and the earlier reasoning that only /sos carried a position was
+    // too narrow: this returns the venue, the building and the window of every shift a named
+    // person holds. In legacy mode an "account" is a query parameter and account ids are
+    // public, so it was a schedule and a location history for a caller with no cookie.
+    const victim = await Volunteer.create({
+      name: 'Rota Rae', email: `rr-${Date.now()}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app).get(`/api/v1/me/shifts?volunteerId=${victim.id}`);
+      expect(claimed.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+
+    const { agent } = await signIn(victim.id);
+    const mine = await agent.get('/api/v1/me/shifts');
+    expect(mine.status).toBe(200);
+  });
+});

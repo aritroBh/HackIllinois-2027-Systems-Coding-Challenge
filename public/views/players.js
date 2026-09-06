@@ -342,7 +342,21 @@
     return connectWs();
   };
 
-  api.stop = function stop() {
+  /**
+   * Tear the transport down locally, and — unless told not to — ask the server to forget us.
+   *
+   * `tellServer: false` exists for one caller: the handover. By the time `session:handover`
+   * is emitted, `session.user` and the session cookie already belong to the NEW account —
+   * that is what makes the event detectable at all — so a `DELETE /presence` fired from here
+   * is authenticated as *them*. It lands after their socket has connected and removes them
+   * from the store: opted in, publishing, and invisible to everyone, from the very code
+   * meant to hand the device over cleanly.
+   *
+   * The departing account is not left publishing. Their socket is closed here, and the store
+   * drops an entry whose sender has gone quiet — the same path a closed laptop takes, and one
+   * that needs no request signed by somebody else.
+   */
+  api.stop = function stop({ tellServer = true } = {}) {
     if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
     if (state.ws) { try { state.ws.send(JSON.stringify({ t: 'bye' })); state.ws.close(1000, 'opt out'); } catch { /* closing */ } }
     state.ws = null;
@@ -351,7 +365,7 @@
     state.slots.clear();
     state.clusters = [];
     pushToMap();
-    void N.api('/api/v1/presence', { method: 'DELETE', lenient: true });
+    if (tellServer) void N.api('/api/v1/presence', { method: 'DELETE', lenient: true });
     N.emit('presence:transport', { mode: 'off' });
   };
 
@@ -421,7 +435,15 @@
    * Boot
    * ------------------------------------------------------------------ */
 
-  N.onEvent('session:ready', async ({ user }) => {
+  /**
+   * Boot, and every sign-in after it.
+   *
+   * `session:ready` fires once. Somebody who lands signed out and then scans a badge — the
+   * ordinary path at a registration desk, and the only path in `AUTH_MODE=required` — never
+   * saw it again, so `api.start()` was never called and they stayed off the map with
+   * `presenceOptIn: true`. The same shape as the SOS view's reconcile, and the same answer.
+   */
+  const onSignedIn = async ({ user }) => {
     if (!user) return;
     state.optIn = !!user.presenceOptIn;
     // Faction colours so remote pills and clusters match the map.
@@ -435,7 +457,13 @@
     paintChip();
     if (state.optIn) api.start();
     renderNearby();
-  });
+  };
+
+  N.onEvent('session:ready', onSignedIn);
+  // `session` carries the user directly rather than as `{ user }`. Guarded on `mode === 'off'`
+  // so a handover — which has its own listener below and restarts the socket itself — does
+  // not start a second one.
+  N.onEvent('session', (user) => { if (user && state.mode === 'off') void onSignedIn({ user }); });
 
   /**
    * The browser changed hands without a sign-out, so the socket has to as well.
@@ -451,7 +479,9 @@
    * must not inherit a live publisher from whoever sat here before.
    */
   N.onEvent('session:handover', (user) => {
-    api.stop();
+    // See `api.stop`: the cookie is already the new account's, so a DELETE from here would
+    // erase the person who has just sat down.
+    api.stop({ tellServer: false });
     state.optIn = !!(user && user.presenceOptIn);
     paintChip();
     renderNearby();

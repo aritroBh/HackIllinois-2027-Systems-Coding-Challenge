@@ -118,15 +118,32 @@
    * Data
    * ------------------------------------------------------------------ */
 
+  /**
+   * Which account's data the state currently belongs to.
+   *
+   * A `load()` that is already in flight when the browser changes hands resolves *after* the
+   * handover has cleared everything, and writes the previous account's answer into the state
+   * it just emptied — the one window the synchronous clear cannot close, because the response
+   * is already on its way. Bumping this on handover makes a stale response identifiable, and
+   * a stale response is dropped rather than painted.
+   *
+   * A counter rather than the account id: it is also correct for two handovers in quick
+   * succession, and it needs no identity to compare against.
+   */
+  let generation = 0;
+
   async function load() {
     if (state.loading || !N.session.user) return;
     state.loading = true;
+    const mine = generation;
     const [shifts, inventory, card] = await Promise.all([
       N.api('/api/v1/me/shifts', { lenient: true }),
       N.api('/api/v1/me/inventory', { lenient: true }),
       N.api('/api/v1/me/card', { lenient: true }),
     ]).catch((err) => { console.debug('[me] load failed', err.message); return [null, null, null]; });
     state.loading = false;
+    // Somebody else's answer, arriving after the browser changed hands.
+    if (mine !== generation) return;
     if (shifts?.success) { state.shifts = shifts.data.shifts || []; state.next = shifts.data.next || null; }
     if (inventory?.success) state.inventory = Array.isArray(inventory.data) ? inventory.data : [];
     if (card?.success) state.card = card.data;
@@ -347,7 +364,12 @@
   });
 
   N.onEvent('session:ready', ({ user }) => { if (user) void load(); else paint(); });
-  N.onEvent('session', () => paint());
+  // Paint on any session change; *load* when somebody signs in at runtime.
+  //
+  // `session:ready` fires once, at boot. A user who lands signed out and then signs in — a
+  // badge scan at the desk, the only path in `AUTH_MODE=required` — got a repaint of empty
+  // state and nothing else, so this tab sat blank until they navigated away and back.
+  N.onEvent('session', (user) => { if (user) void load(); else paint(); });
 
   /**
    * The browser changed hands. Drop everything before repainting, not after the fetch lands.
@@ -356,8 +378,15 @@
    * shifts, venues and inventory counts — and over their live attendance token, which is a
    * credential a scanner accepts. The window is short, one round trip, and it is a window in
    * which the screen is showing one person's badge under another person's name.
+   *
+   * Two things beyond the clear. `state.loading` is released, or the corrective `load()`
+   * below is dropped by its own latch and the tab sits empty; and `generation` is bumped, so
+   * a `load()` that was already in flight cannot land afterwards and repaint what was just
+   * cleared. That is the only part of this the synchronous clear cannot reach on its own.
    */
   N.onEvent('session:handover', () => {
+    generation += 1;
+    state.loading = false;
     clearToken();
     state.shifts = [];
     state.next = null;

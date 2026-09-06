@@ -116,18 +116,41 @@ async function makeClient(api: string, i: number, desk: { cookie: string; csrf: 
   let accountId = ((created.body.data as { _id?: string } | undefined)?._id) ?? '';
   if (!accountId && created.status === 429) {
     // The desk session has a 90-mutations-per-minute bucket, which a 1,200-account
-    // provisioning run walks straight into. Wait it out rather than under-provisioning.
-    await new Promise((r) => setTimeout(r, 2000));
-    const retry = await json(`${api}/api/v1/volunteers`, {
-      method: 'POST',
-      cookie: desk?.cookie,
-      headers: desk ? { 'x-csrf-token': desk.csrf } : {},
-      body: JSON.stringify({ name: `Soak ${i}`, email: `soak.${Date.now()}.${i}.r@load.test`, kind: 'HACKER', certifications: [] }),
-    });
-    accountId = ((retry.body.data as { _id?: string } | undefined)?._id) ?? '';
+    // provisioning run walks straight into. Wait it out rather than under-provisioning —
+    // which took more than the one attempt this used to make: the bucket refills over a
+    // minute, so a single two-second retry only helps when the run happens to be at the
+    // boundary of the window.
+    for (let attempt = 0; !accountId && attempt < 30; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const retry = await json(`${api}/api/v1/volunteers`, {
+        method: 'POST',
+        cookie: desk?.cookie,
+        headers: desk ? { 'x-csrf-token': desk.csrf } : {},
+        body: JSON.stringify({ name: `Soak ${i}`, email: `soak.${Date.now()}.${i}.r${attempt}@load.test`, kind: 'HACKER', certifications: [] }),
+      });
+      if (retry.status !== 429) {
+        accountId = ((retry.body.data as { _id?: string } | undefined)?._id) ?? '';
+        break;
+      }
+    }
   }
   if (!accountId) return null;
-  const login = await json(`${api}/api/v1/auth/dev-login`, { method: 'POST', body: JSON.stringify({ accountId }) });
+  // Sign-in is rate-limited too, and it is the binding one.
+  //
+  // `POST /auth/dev-login` is a credential exchange: 30 a minute per address, ten times that
+  // on trusted egress. The create above retried its 429 and this did not, so past the first
+  // thirty accounts of each minute every client was dropped on the floor — two out of three
+  // of them across a 1,200-account run. The count printed while provisioning showed it and
+  // nothing acted on it, which is how a soak comes to report a verdict for a third of the
+  // load it was asked for.
+  //
+  // Waits and retries rather than giving up, up to a minute in total: the limiter window is
+  // a minute, so anything shorter is a coin toss and anything longer is not the limiter.
+  let login = await json(`${api}/api/v1/auth/dev-login`, { method: 'POST', body: JSON.stringify({ accountId }) });
+  for (let attempt = 0; login.status === 429 && attempt < 30; attempt++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    login = await json(`${api}/api/v1/auth/dev-login`, { method: 'POST', body: JSON.stringify({ accountId }) });
+  }
   if (login.status !== 200) return null;
   const cookie = login.setCookie.map((c) => c.split(';')[0]).join('; ');
   const csrfCookie = login.setCookie.find((c) => c.includes('nexus_csrf'));
@@ -307,13 +330,22 @@ async function main(): Promise<number> {
   row('cluster-only fallback never triggered', String(clusterTriggered), !clusterTriggered);
   row('no 1013 closes inside the slot budget', String(closes1013), closes1013 === 0);
   row('sockets held', `${held}/${open}`, held >= open * 0.95);
+  // The load the gate was asked for, asserted rather than assumed.
+  //
+  // Every threshold above is a function of how many clients actually connected, and the run
+  // that produced this file provisioned 370 of 1,200 while printing PASS-shaped numbers for
+  // all of them. A soak that quietly measures a third of the event is not a soak that failed
+  // — it is one that answered a different question, which is worse, because the answer looks
+  // like the one you asked for.
+  row('provisioned what was asked for', `${clients.length}/${args.clients}`, clients.length >= args.clients * 0.98);
   if (args.stormPercent > 0) {
     row('storm: sibling connection survived', `${stormSurvivors}/${victimCount}`, stormSurvivors === victimCount);
     row('storm: full detail within 60 s', `${stormFullDetail}/${victimCount}`, stormFullDetail === victimCount);
   }
   console.log(`\n      leg: ${args.from.length > 1 ? `${args.from.length} source addresses (untrusted-capable)` : 'one source address (trusted-egress leg only)'}`);
 
-  const passed = tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
+  const provisionedEnough = clients.length >= args.clients * 0.98;
+  const passed = provisionedEnough && tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
   console.log(passed ? '\nM4b: PASS' : '\nM4b: FAIL');
   return passed ? 0 : 1;
 }

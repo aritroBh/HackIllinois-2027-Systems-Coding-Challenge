@@ -2195,6 +2195,22 @@ async function init() {
     if (sel && [...sel.options].some((o) => o.value === me.faction)) sel.value = me.faction;
   }
   Nexus.onEvent('session', onSessionChange);
+
+  /**
+   * The browser changed hands without a sign-out.
+   *
+   * `onSessionChange` already reloads the inventory, but it does so asynchronously — and
+   * between the handover and that request landing, `userInventoryCache` still holds the
+   * previous account's items. The bag renders from it, and so does the sticker book:
+   * `computeEarned` derives four stickers from inventory item names, and the handover reset
+   * in game.js calls `renderTrainer()` immediately. Empty first, reload second, so the
+   * window shows nothing rather than somebody else's things.
+   */
+  Nexus.onEvent('session:handover', () => {
+    userInventoryCache = [];
+    currentVolunteerFaction = 'NEUTRAL';
+    renderUserInventory();
+  });
   await fetchVolunteers();
   await fetchShifts();
   await fetchStats();

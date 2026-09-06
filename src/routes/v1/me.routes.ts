@@ -66,7 +66,16 @@ meRouter.patch('/presence', requireAccount, validate(patchPresencePrefSchema), a
  * The shifts this account holds, newest first, with just enough of each shift to render
  * the "next shift" card: title, venue, window, and the registration's own status.
  */
-meRouter.get('/shifts', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`, for the same reason `/sos` has it.
+ *
+ * A shift is where a named person will be and when — venue, building, start and end. In the
+ * shipped legacy posture an "account" can be a `?volunteerId=` in the query string and
+ * account ids are public, so `GET /me/shifts?volunteerId=<anyone>` was a schedule and a
+ * location history for a caller with no cookie. The earlier reasoning that only `/sos`
+ * carried a position was too narrow: a rota is a position with a timetable attached.
+ */
+meRouter.get('/shifts', requireSession, requireAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rows = await Registration.find({ volunteerId: req.account!.id })
       .populate('shiftId', 'title description category location startTime endTime capacity filledSlots baseKarma')

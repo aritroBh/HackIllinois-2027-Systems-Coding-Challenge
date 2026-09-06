@@ -112,6 +112,9 @@ for (const name of fs.existsSync(root) ? fs.readdirSync(root) : []) {
 console.log(checked + ' plugin asset digest(s) convert cleanly from hex to SRI base64');
 "
 
+step "event bridge in lockstep (server emits ⇔ client forwards ⇔ views subscribe)"
+node scripts/checkEvents.mjs
+
 step "offline shell in lockstep (index.html ⇔ sw.js SHELL)"
 node scripts/checkShell.mjs
 
