@@ -19,8 +19,15 @@ In production, `src/config/env.ts` checks five things and exits rather than star
 | `ORGANIZER_SECRET` | `openssl rand -hex 32`. It is also the bootstrap credential for printing badge claim codes |
 | `AUTH_MODE` | `required` |
 
-Outside production these are replaced by random per-boot values so a fresh clone runs with
-no setup. That convenience is exactly what the production guard exists to remove.
+Outside production all three are replaced by random per-boot values so a fresh clone runs
+with no setup. That convenience is exactly what the production guard exists to remove.
+
+`ORGANIZER_SECRET` is the one you have to read off the console rather than ignore: it is
+also the bootstrap credential for printing the first badge claim codes, so the ephemeral
+value is printed at start-up. It was for a long time the one secret *not* randomised here,
+which meant the string committed to this repository was a live credential on every staging
+box, container and self-hosted deployment — and it mints claim codes, and a claim code is a
+session. If you are running an older build, set it explicitly.
 
 Set `PUBLIC_URL` to the https origin the browser sees. It is used for the WebSocket
 `Origin` check, the magic-link URLs and the Adonix redirect, so a wrong value shows up as

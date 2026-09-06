@@ -17,13 +17,13 @@ No configuration, no Docker, no secrets. That command starts an in-memory single
 
 **Scheduling that holds under contention.** Fifty simultaneous requests for two slots produce exactly two confirmed registrations and forty-eight waitlist places, every time, because the check and the increment are one atomic operation rather than a read followed by a write. The same discipline covers cancellations, the waitlist cascade that promotes the next person, three-way swap rings resolved by cycle detection, rest buffers between shifts, and daily fatigue caps. `npm run demo` ships a Chaos Lab that fires the fifty-worker race at a live server and reports whether the invariant held.
 
-**Attendance that cannot be screenshotted.** Check-in tokens are HMAC-signed, rotate every thirty seconds, are single-use, and are bound to a shift and a person. A photograph of one in Discord is worthless twenty seconds later.
+**Attendance that cannot be screenshotted.** Check-in tokens are HMAC-signed, rotate every thirty seconds, are single-use, and are bound to a shift and a person. A photograph of one in Discord is worthless: the token is single-use, so the second scan of it is a 409 whoever presents it. The rotation itself gives about a ninety-second envelope — thirty seconds a slice, one slice of clock drift either way.
 
-**Identity with three ways in.** A badge claim code needs nothing but the badge. A magic link needs an email. HackIllinois SSO needs Adonix. All three mint the same signed session, carried only in an HttpOnly cookie, with a CSRF nonce echoed on every mutation. Adapters are the extension point: writing a fourth is one file.
+**Identity with three ways in.** A badge claim code needs nothing but the badge. A magic link needs an email. HackIllinois SSO needs Adonix. All three mint the same signed session, carried only in an HttpOnly cookie, with a CSRF nonce echoed on every mutation. Adapters are the extension point: a fourth is one file in `src/auth/` plus three small edits — a login method, an entry in `providers()`, and a route.
 
-**A campus you can walk.** Five by five kilometres of Urbana-Champaign, nine thousand buildings, baked from OpenStreetMap into five-hundred-metre tiles that stream as the camera moves. Fourteen landmarks are territory gyms with hand-written silhouettes. Heights come from tags where they exist, from surveyed levels otherwise, and from lidar when you run that step yourself. It renders at sixty frames a second on a laptop and degrades to thirty on a phone by dropping quality tiers rather than detail you would notice.
+**A campus you can walk.** Five by five kilometres of Urbana-Champaign, nine thousand buildings, baked from OpenStreetMap into five-hundred-metre tiles that stream as the camera moves. Fourteen landmarks are territory gyms with hand-written silhouettes. Heights come from OSM tags where they exist (292 buildings), from surveyed levels otherwise (773), and from a per-type default for the remaining 88% — with lidar available when you run that step yourself. It renders at sixty frames a second on a laptop and degrades to thirty on a phone by dropping quality tiers rather than detail you would notice.
 
-**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it, and it is sliced so it never holds the event loop for more than about ten milliseconds. Positions are fuzzed, published one tick late, and never stored. Exactly two things read an exact position — a lead, and SOS dispatch — and both write an audit row. Opting out is symmetric: you neither appear nor see.
+**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it — about 115 ms when the crowd is artificially scattered, which is the layout that sharing cannot help. It is sliced against an 8 ms budget, measured at about 11 ms in the worst hold; `docs/PRESENCE.md` records both runs. Positions are fuzzed, published one tick late, and never stored. Exactly two things read an exact position — a lead, and SOS dispatch — and both write an audit row. Opting out is symmetric: you neither appear nor see.
 
 **Distress calls that reach someone.** A hacker raises a ticket from their phone. Dispatch prefers a live position under thirty seconds old, falls back to the responder's shift venue, and keeps candidates with neither rather than silently skipping them. The ticket moves through a guarded lifecycle, and one nobody acknowledges within three minutes escalates to the floor with no location in the public copy.
 
@@ -35,7 +35,7 @@ Read [docs/FORK_GUIDE.md](docs/FORK_GUIDE.md). The short version:
 
 ```sh
 cp -r content/example-campus content/my-event    # then edit event.json
-CONTENT_PACK=my-event npm run content:validate
+npm run content:validate -- content/my-event
 python3 -m design.pipeline fetch --pack content/my-event
 python3 -m design.pipeline build --pack content/my-event
 CONTENT_PACK=my-event npm run demo
@@ -65,8 +65,8 @@ npm run build
 npm run content:validate
 npm run campus:check   # schema, per-tile hashes, monument ids — offline
 npm run csp:audit      # no inline scripts, no external origins
-scripts/verify.sh full # the above plus the geometry winding audit
-npm run bench:presence -- --clients 5000 --devices 2 --seconds 120
+scripts/verify.sh full # typecheck, frontend imports, token/material lockstep, winding audit, campus check, suite
+npm run bench:presence -- --clients 5000 --devices 2 --seconds 120   # needs `npm run demo` running
 ```
 
 The tests are the interesting part of the suite rather than coverage filler: ten concurrent bounty reservations against a budget for three granting exactly three, fifty racing registrations against two slots, a lead who cannot spin another player's HackStop, a roster that reports presence as buckets and never a coordinate.

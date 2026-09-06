@@ -2,7 +2,9 @@
 
 A pack is a directory of JSON files describing one event on one campus. The server reads
 `${CONTENT_DIR}/${CONTENT_PACK}` once at import, validates it, and exports a typed `pack`
-object; nothing in `src/` hardcodes a building, a faction or a colour. `CONTENT_DIR`
+object; almost nothing in `src/` hardcodes a building, a faction or a colour — the exception is
+the venue gazetteer in `src/common/utils/geo.ts`, which check-in geofencing still reads
+instead of the pack (see docs/FORK_GUIDE.md). `CONTENT_DIR`
 defaults to `<repo>/content` and `CONTENT_PACK` to `hackillinois-2027`.
 
 The contract is `src/content/schema.ts`. This page explains it. Where the two disagree, the
@@ -57,7 +59,9 @@ work in it:
   (footways, lamps) is baked. Both are optional; `detailBbox` defaults to `coreBbox`.
 * `metersPerUnit` is the world scale. `10` is what the renderer is tuned for.
 * `vscale` exaggerates height (default `2.6`).
-* `geofenceMeters` is the default capture radius (default `75`).
+* `geofenceMeters` is the default capture radius (default `75`). **Declared but not yet
+  read:** the check-in geofence (`checkin.service.ts`) and gym capture (`gym.service.ts`)
+  both use a hard-coded `75`. Setting this today changes nothing.
 
 `branding.palette` is a map of names to `#rrggbb`. Five keys reach the UI: `orange`,
 `blue`, `patina`, `harvest` and `prairie`; `orangeDk` is derived from `orange` unless you
@@ -84,7 +88,8 @@ A flat map of venue key to venue. This is the gazetteer, and every other file re
 
 Keys are `SCREAMING_SNAKE_CASE`. `hints` are the uppercase fragments that let a free-text
 venue name resolve to this key, so put the abbreviations people actually type in there.
-`radiusMeters` overrides `campus.geofenceMeters` for a large or awkward building.
+`radiusMeters` is declared for a large or awkward building, but **nothing reads it yet** —
+see the note on `geofenceMeters` above.
 
 Rejected: a key that is not `SCREAMING_SNAKE_CASE`, a venue entry that is a string rather
 than an object, an underscore key whose value is not a string, a latitude or longitude out
@@ -123,7 +128,8 @@ and `hqVenue` is optional but must exist when present.
 
 `{ "beacons": [ … ] }`, the geofenced HackStops people spin. `id` is
 `SCREAMING_SNAKE_CASE` and must be unique across the file, `venue` must exist, and
-`radiusMeters` overrides the campus default.
+`radiusMeters` is declared here too and is **not yet read**; seeded HackStops carry a
+hard-coded 75 m radius on the document, which is what `hackstop.service.ts` checks.
 
 ## loot.json
 

@@ -57,7 +57,14 @@ second, which is exactly what happens when a shift is announced.
    that retries on a flaky connection gets the original answer rather than a second seat.
 2. The seat is claimed with **one atomic update**, not a read followed by a write:
 
-       findOneAndUpdate({ _id, filledSlots: { $lt: capacity } }, { $inc: { filledSlots: 1 } })
+       findOneAndUpdate(
+         { _id, $expr: { $lt: ['$filledSlots', '$capacity'] } },
+         { $inc: { filledSlots: 1 } }
+       )
+
+   `$expr`, not `{ filledSlots: { $lt: capacity } }` — the latter compares a field to a
+   JavaScript literal captured before the query, which is the read-then-write this exists
+   to avoid. Two fields of the same document can only be compared inside `$expr`.
 
    The condition and the increment are the same operation, so there is no window between
    checking and taking. Fifty simultaneous requests against two seats produce exactly two
@@ -71,9 +78,12 @@ second, which is exactly what happens when a shift is announced.
    A's — is found with cycle detection and executed in one transaction, so either everybody
    moves or nobody does.
 
-**See it happen:** the Chaos Lab tab fires the fifty-worker race at the live server and reports
-the result. A recent run: two confirmed, thirty-one waitlisted, seventeen refused, zero
-oversold, settled in 532 ms.
+**See it happen:** the Chaos Lab tab fires the fifty-worker race at the live server and
+reports the result, and `npm run e2e` does the same from the command line with fifty real
+signed-in sessions. The invariant is what to watch — exactly two confirmed, the rest
+waitlisted or refused, never oversold. Refusals are the rate limiter, not the scheduler, so
+their number moves with how the run is driven; `tests/concurrency.test.ts` runs it in-process
+where no limiter applies and gets two confirmed and forty-eight waitlisted, every time.
 
 ---
 
@@ -94,7 +104,7 @@ oversold, settled in 532 ms.
    a full hour earns the full award and a one-minute presence earns a sixtieth of it.
 5. Check-out is idempotent. Ten simultaneous requests settle it once and pay once.
 
-**Worth knowing:** check-out is final. The registration moves to `CHECKED_OUT` and the token
+**Worth knowing:** check-out is final. The registration moves to `COMPLETED` and the token
 endpoint refuses it, so a volunteer who steps out and scans back in is refused and needs a
 lead. That closes the obvious farm at a real cost in convenience; the pro-rata payout is what
 makes the farm worthless, so that is the rule to keep if this one is ever relaxed.

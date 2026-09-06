@@ -27,9 +27,10 @@ rather than a hostile one:
   Express cannot unmount a router at runtime, so every plugin route and every plugin asset
   path runs through the same `registry.enabled(name)` guard rather than being removed.
 
-**Untrusted content does not become a plugin.** If you want to embed a sponsor's widget or
-anything else you have not read, use the sandboxed iframe slot described at the end of this
-page. Do not enable it as a plugin.
+**Untrusted content does not become a plugin.** A plugin runs with the shell's trust. If you
+want to embed a sponsor's widget or anything else you have not read, there is currently no
+supported way to do it — the sandboxed slot at the end of this page is designed and not
+built. Do not enable it as a plugin instead.
 
 ## Activation
 
@@ -104,14 +105,20 @@ else:
 Escape everything you inject into HTML. A plugin runs with the page's full privileges, and
 the review that lets it do so assumes you did.
 
-## The sandboxed slot for untrusted embeds
+## The sandboxed slot for untrusted embeds — **not built**
 
-For content you have not reviewed, the shell offers an iframe slot instead. The frame is
-`sandbox="allow-scripts"` **without** `allow-same-origin`, so it has an opaque origin: no
-cookies, no access to the page's DOM, no fetches carrying the session. It communicates only
-by `postMessage`, and the host side validates every message against a small schema and
-drops anything it does not recognise.
+> **This section describes a design, not code.** There is no iframe anywhere in `public/` or
+> `src/`, no host-side `postMessage` handler, and no `frame-src`/`child-src` in the CSP — so
+> with `default-src 'self'` a third-party embed could not load even if the slot existed. It
+> is written down here because it is the intended answer to "how do I embed a sponsor
+> widget", and the honest answer today is: **you cannot, and you should not enable it as a
+> plugin instead.**
 
-This is strictly less capable than a plugin. It cannot register a tab, it cannot draw on
-the campus canvas, and it cannot read anything about the person looking at it. That is the
-point.
+The intended shape, when it is built: an iframe with `sandbox="allow-scripts"` and
+**without** `allow-same-origin`, so it has an opaque origin — no cookies, no access to the
+page's DOM, no fetches carrying the session. It would communicate only by `postMessage`,
+with the host validating every message against a small schema and dropping anything it does
+not recognise.
+
+That is strictly less capable than a plugin: it could not register a tab, draw on the
+campus canvas, or read anything about the person looking at it. That is the point.

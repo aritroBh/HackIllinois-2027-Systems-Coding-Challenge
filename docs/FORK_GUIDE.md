@@ -1,13 +1,23 @@
 # Forking this for your own hackathon
 
-Nothing in `src/` names a building, a faction or an event. The campus, the landmarks, the
-loot table, the palette and the fonts all live in a **content pack** under `content/`, and
-the server reads the pack rather than a literal. Forking is therefore mostly writing your
-own pack and baking your own campus. This page is the order to do it in.
+Almost nothing in `src/` names a building, a faction or an event. The campus, the landmarks,
+the loot table, the palette and the fonts all live in a **content pack** under `content/`,
+and the server reads the pack rather than a literal. Forking is therefore mostly writing
+your own pack and baking your own campus. This page is the order to do it in.
+
+> **The one exception, and it will bite you.** Shift-location resolution does **not** read
+> the pack. `resolveVenue()` in `src/common/utils/geo.ts` matches against a hard-coded
+> `HACKILLINOIS_VENUES` table and a hard-coded keyword list, and `src/services/checkin.service.ts`
+> refuses any check-in whose shift location does not match. So a fork that follows this page
+> exactly gets a system where **every check-in is rejected** and SOS escalation reports a
+> null venue. Until `resolveVenue` reads `pack.venues` and its `hints`, you must edit that
+> gazetteer too. Everything else on this page — content, branding, the campus bake, the game
+> layer — works from the pack alone.
 
 `content/hackillinois-2027/` is the real HackIllinois pack, and
-`content/example-campus/` is a two-venue minimum that CI boots. Copy the second, read the
-first when you want to see what a finished one looks like.
+`content/example-campus/` is a two-venue minimum that CI **validates** (`content:validate`);
+nothing in CI boots a server against it. Copy the second, read the first when you want to
+see what a finished one looks like.
 
 ## 1. Run the demo before you change anything
 
@@ -122,7 +132,9 @@ The pack is data, but somebody has to author it.
 
 **The gazetteer.** `venues.json` is every place a shift can be at, with coordinates and the
 `hints` that let free-text venue names resolve. Nothing else in the pack is valid until
-these keys exist.
+these keys exist. Note the caveat at the top of this page: the pack's gazetteer is what the
+*client* and the cross-validator read, while check-in geofencing still resolves against the
+hard-coded table in `src/common/utils/geo.ts`. Both need your venues.
 
 **Landmarks.** `monuments.json` is the list of buildings that become territory gyms. Each
 one needs an OSM `name` to match or a verified centroid. Expect to iterate: the build
