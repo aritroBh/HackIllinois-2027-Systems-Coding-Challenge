@@ -76,8 +76,39 @@ const CONTROL = new Set(['CONNECTED', 'EVICTED', 'RESYNC', 'HEARTBEAT']);
 const missing = [...server].filter((t) => !forwarded.has(t) && !CONTROL.has(t)).sort();
 const orphan = [...forwarded].filter((t) => !server.has(t)).sort();
 
+/**
+ * And the other end: a view that subscribes to a name nobody publishes.
+ *
+ * Forwarding is only half the bridge. `views/quests.js` waited on `RAID_STARTED` and
+ * `OBJECTIVE_UPDATED` — both plausible, neither ever emitted — so the quest board did not
+ * move through a single raid window and looked exactly like a raid that had not started.
+ * Subscriptions are scanned across every view rather than only the one that was wrong.
+ */
+const clientFiles = [];
+for (const dir of ['public', 'public/views']) {
+  const full = path.join(ROOT, dir);
+  if (!fs.existsSync(full)) continue;
+  for (const f of fs.readdirSync(full)) if (f.endsWith('.js')) clientFiles.push(path.join(dir, f));
+}
+const subscribed = new Map();
+for (const file of clientFiles) {
+  const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+  // Names inside a comment are prose, not code. Stripping them first stops a comment that
+  // names a retired event from failing the build.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const m of code.matchAll(/onEvent\(\s*'([A-Z][A-Z0-9_]*)'/g)) subscribed.set(m[1], file);
+  // The array-of-types form: `for (const type of [ 'A', 'B' ]) N.onEvent(type, ...)`.
+  for (const list of code.matchAll(/for \(const \w+ of \[([^\]]*)\]\)\s*\{?\s*N?\.?onEvent/g)) {
+    for (const m of list[1].matchAll(/'([A-Z][A-Z0-9_]*)'/g)) subscribed.set(m[1], file);
+  }
+}
+const phantom = [...subscribed].filter(([t]) => !server.has(t) && !CONTROL.has(t)).sort();
+if (phantom.length) {
+  console.error(`subscribed by a view, never emitted by the server: ${phantom.map(([t, f]) => `${t} (${f})`).join(', ')}`);
+}
+
 if (missing.length) console.error(`emitted by the server, never forwarded to the views: ${missing.join(', ')}`);
 if (orphan.length) console.error(`forwarded by the client, never emitted by the server: ${orphan.join(', ')}`);
-if (missing.length || orphan.length) process.exit(1);
+if (missing.length || orphan.length || phantom.length) process.exit(1);
 
-console.log(`event bridge: ${server.size} server type(s), all forwarded, none invented`);
+console.log(`event bridge: ${server.size} server type(s) forwarded, ${subscribed.size} view subscription(s), none invented on either side`);

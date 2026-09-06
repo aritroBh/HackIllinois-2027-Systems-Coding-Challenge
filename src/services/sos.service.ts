@@ -256,10 +256,24 @@ export class SOSService {
       throw ApiError.conflict('Ticket was already dispatched by another coordinator.', ErrorCode.CONCURRENT_MUTATION_IN_PROGRESS);
     }
 
+    // An unresolvable location is null, never the fallback venue.
+    //
+    // `resolveVenue` answers with SIEBEL_ATRIUM and `matched: false` when it recognises
+    // nothing, which is the right default for a geofence — somewhere is better than nowhere
+    // when you are deciding whether a check-in is plausible. It is the wrong answer on a
+    // dispatch frame, where it reads as a fact: a ticket whose location the table cannot
+    // parse was broadcast as being in Siebel Atrium, and a responder acting on that walks to
+    // the wrong building while somebody waits somewhere else.
+    const dispatchVenue = resolveVenue(ticket.tableLocation);
     eventHub.broadcast({
       type: 'SOS_TICKET_DISPATCHED',
       data: {
         ticketId: ticket._id,
+        // `status` is on the redaction whitelist, so including it is what makes the copy an
+        // ordinary subscriber receives a coherent statement rather than an id and a venue.
+        status: SOSTicketStatus.DISPATCHED,
+        urgency: ticket.urgency,
+        category: ticket.category,
         hackerName: ticket.hackerName,
         tableLocation: ticket.tableLocation,
         volunteerId: bestCandidate._id,
@@ -268,7 +282,7 @@ export class SOSService {
         // lead-visible frame is not a reason to put an exact range on the wire.
         distanceMeters: coarsen(shortestDistance),
         positionSource: winner!.positionSource,
-        venueKey: resolveVenue(ticket.tableLocation).key,
+        venueKey: dispatchVenue.matched ? dispatchVenue.key : null,
       },
     });
 
@@ -553,16 +567,28 @@ export class SOSService {
       venueKey: resolveVenue(resolved.tableLocation).key,
     });
 
-    eventHub.broadcast({
-      type: 'SOS_TICKET_RESOLVED',
-      data: {
-        ticketId: resolved._id,
-        volunteerId,
-        volunteerName: vol ? vol.name : 'Volunteer',
-        karmaAwarded: resolved.karmaBounty,
-        totalKarma: vol ? vol.karmaPoints : 0,
-      },
-    });
+    const resolvedVenue = resolveVenue(resolved.tableLocation);
+    const resolvedSummary = {
+      ticketId: resolved._id,
+      status: SOSTicketStatus.RESOLVED,
+      urgency: resolved.urgency,
+      category: resolved.category,
+      venueKey: resolvedVenue.matched ? resolvedVenue.key : null,
+      karmaBounty: resolved.karmaBounty,
+      volunteerId,
+      volunteerName: vol ? vol.name : 'Volunteer',
+      karmaAwarded: resolved.karmaBounty,
+      totalKarma: vol ? vol.karmaPoints : 0,
+    };
+    eventHub.broadcast({ type: 'SOS_TICKET_RESOLVED', data: resolvedSummary });
+
+    // The creator and the responder get the full record on their own channel, as every other
+    // transition does. Resolution was the one that did not, so the hacker who raised the
+    // ticket — the person most entitled to know it is closed — learned nothing from the wire
+    // and had to poll for it.
+    for (const party of [resolved.createdById, resolved.assignedVolunteerId]) {
+      if (party) eventHub.sendToAccount(String(party), { type: 'SOS_TICKET_RESOLVED', data: { ...resolvedSummary, ticket: resolved } });
+    }
 
     return resolved;
   }

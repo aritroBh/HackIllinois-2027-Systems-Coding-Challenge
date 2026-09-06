@@ -35,6 +35,7 @@ import { Volunteer, computePrestigeTier } from '../models/volunteer.model';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { pack } from '../content/loader';
+import { RaidService } from './raid.service';
 
 /** Source keys used by the shipped pack. A fork may award against any string it likes. */
 export const KarmaSource = {
@@ -53,6 +54,13 @@ export interface IKarmaAward {
   capped: boolean;
   /** The account's balance after this award. */
   total: number;
+  /**
+   * The raid multiplier in force when this was awarded, or 1.
+   *
+   * Reported so a caller can say "150 karma, tripled for the midnight raid" rather than
+   * leaving the player to wonder why the number differs from the one on the shift card.
+   */
+  multiplier: number;
 }
 
 export type AccountRef = string | Types.ObjectId;
@@ -64,6 +72,16 @@ export type AccountRef = string | Types.ObjectId;
  * case fails loudly rather than spinning against the database.
  */
 const CAP_CAS_ATTEMPTS = 5;
+
+/**
+ * The sources a raid window multiplies: the ones that are somebody doing work.
+ *
+ * A raid is an hour the event wants staffed, so it pays more for turning up, closing a call
+ * and holding ground. It deliberately does not multiply a sponsor booth scan or a one-off
+ * sticker: those are fixed rewards for a thing you do once, and tripling them makes a raid
+ * window a scavenging hour rather than a shift.
+ */
+const MULTIPLIED_SOURCES = new Set(['SHIFT', 'CHECKOUT', 'QUEST', 'SOS', 'GYM', 'HACKSTOP']);
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (
@@ -113,17 +131,31 @@ export class KarmaService {
     // or a document id. Two spellings of one account would be two rows, and two caps.
     const id = new Types.ObjectId(accountId);
 
+    // The raid multiplier, applied here or nowhere.
+    //
+    // `RaidService.multiplierAt` existed with no caller, so the banner promised "3x karma"
+    // during a raid window and every award paid 1x. This is the one place karma is minted, so
+    // it is the only place a multiplier can be applied without the two disagreeing.
+    //
+    // Applied BEFORE the daily cap, deliberately. A cap is a ceiling on what a source may pay
+    // in a day, and a raid is meant to make an hour worth more rather than to raise the
+    // ceiling; multiplying after the clamp would do the latter. It is also skipped for the
+    // sources that are not work — a booth scan is a fixed sponsor reward, not an hour of
+    // effort — because tripling those turns a raid window into a scavenging hour.
+    const multiplier = MULTIPLIED_SOURCES.has(source) ? RaidService.multiplierAt() : 1;
+    const requested = multiplier > 1 ? Math.round(amount * multiplier) : amount;
+
     const day = eventDay();
     const cap = capFor(source);
     const granted =
       cap === null
-        ? await KarmaService.spendUncapped(id, source, day, amount, meta)
-        : await KarmaService.spendUnderCap(id, source, day, amount, cap, meta);
+        ? await KarmaService.spendUncapped(id, source, day, requested, meta)
+        : await KarmaService.spendUnderCap(id, source, day, requested, cap, meta);
 
     if (granted === 0) {
       const balance = await Volunteer.findById(id).select('karmaPoints').lean();
       if (!balance) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
-      return { awarded: 0, capped: true, total: balance.karmaPoints };
+      return { awarded: 0, capped: true, total: balance.karmaPoints, multiplier };
     }
 
     const account = await Volunteer.findOneAndUpdate(
@@ -145,7 +177,7 @@ export class KarmaService {
       await Volunteer.updateOne({ _id: id }, { $set: { prestigeTier: tier } });
     }
 
-    return { awarded: granted, capped: granted < amount, total: account.karmaPoints };
+    return { awarded: granted, capped: granted < requested, total: account.karmaPoints, multiplier };
   }
 
   /**

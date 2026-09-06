@@ -374,10 +374,21 @@
   // Live nudges, for whenever app.js re-emits the SSE frames onto the bus. Repainting is
   // cheap and only happens while the console is the visible tab.
   const onFrame = (loader) => () => { if (N.activeTab() === 'tab-lead') void loader(); };
-  N.onEvent('SOS_TICKET_CREATED', onFrame(loadTickets));
-  N.onEvent('SOS_TICKET_UPDATED', onFrame(loadTickets));
-  N.onEvent('SOS_TICKET_DISPATCHED', onFrame(loadTickets));
-  N.onEvent('SOS_TICKET_RESOLVED', onFrame(loadTickets));
+  // Every transition, by the name the server actually publishes.
+  //
+  // `transition()` names its event after the status it moved to, so acknowledging a ticket is
+  // `SOS_TICKET_ACKNOWLEDGED` and reassigning one — which puts it back to OPEN — is
+  // `SOS_TICKET_OPEN`. This list waited on a single `SOS_TICKET_UPDATED` that nothing has
+  // ever emitted, so the lead's queue did not move when a responder acknowledged, arrived,
+  // cancelled or was reassigned: the three states in the middle of the lifecycle, which are
+  // exactly the ones a lead is watching for.
+  for (const type of [
+    'SOS_TICKET_CREATED', 'SOS_TICKET_OPEN', 'SOS_TICKET_DISPATCHED',
+    'SOS_TICKET_ACKNOWLEDGED', 'SOS_TICKET_ON_SCENE', 'SOS_TICKET_CANCELLED',
+    'SOS_TICKET_RESOLVED', 'SOS_ESCALATED',
+  ]) {
+    N.onEvent(type, onFrame(loadTickets));
+  }
   N.onEvent('ANNOUNCEMENT', onFrame(loadAnnouncements));
   N.onEvent('ANNOUNCEMENT_CLEARED', onFrame(loadAnnouncements));
 })();

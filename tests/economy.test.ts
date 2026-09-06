@@ -11,6 +11,7 @@ import { KarmaLedger } from '../src/models/karmaLedger.model';
 import { StickerLedger } from '../src/models/stickerLedger.model';
 import { BountyLedger } from '../src/models/bountyLedger.model';
 import { KarmaService } from '../src/services/karma.service';
+import { RaidService } from '../src/services/raid.service';
 import { StickerService } from '../src/services/sticker.service';
 import { BountyService } from '../src/services/bounty.service';
 import { domainEvents } from '../src/common/events/domainEvents';
@@ -93,6 +94,61 @@ describe('karma is minted in exactly one place', () => {
     } finally {
       delete caps.CONCURRENCY_PROBE;
     }
+  });
+});
+
+describe('a raid window multiplies what work is worth', () => {
+  it('pays the raid multiplier on effort and leaves fixed rewards alone', async () => {
+    // `RaidService.multiplierAt` existed with no caller: the banner promised "3x karma"
+    // during a raid window and every award paid 1x. The multiplier is applied where karma is
+    // minted, which is the only place it can be applied without the promise and the payment
+    // disagreeing.
+    const spy = jest.spyOn(RaidService, 'multiplierAt').mockReturnValue(3);
+    try {
+      const worker = await makeAccount();
+      const scanner = await makeAccount();
+
+      // SHIFT is work, so it is multiplied.
+      const shift = await KarmaService.awardKarma(worker.id, 50, 'SHIFT');
+      expect(shift.multiplier).toBe(3);
+      expect(shift.awarded).toBe(150);
+      expect((await Volunteer.findById(worker.id))!.karmaPoints).toBe(150);
+
+      // BOOTH is a fixed sponsor reward for a thing you do once, so it is not: tripling it
+      // would make a raid window a scavenging hour rather than a shift.
+      const booth = await KarmaService.awardKarma(scanner.id, 60, 'BOOTH');
+      expect(booth.multiplier).toBe(1);
+      expect(booth.awarded).toBe(60);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('multiplies before the daily cap, so a raid does not raise the ceiling', async () => {
+    // A cap is a ceiling on what a source may pay in a day. A raid is meant to make an hour
+    // worth more, not to lift that ceiling — multiplying after the clamp would do the latter.
+    const CAP = 100;
+    const caps = pack.event.karmaCaps as Record<string, number>;
+    caps.SHIFT = CAP;
+    const spy = jest.spyOn(RaidService, 'multiplierAt').mockReturnValue(3);
+    try {
+      const vol = await makeAccount();
+      const res = await KarmaService.awardKarma(vol.id, 50, 'SHIFT');
+      // 50 x 3 = 150 requested, clamped to the 100 ceiling.
+      expect(res.awarded).toBe(CAP);
+      expect(res.capped).toBe(true);
+      expect((await Volunteer.findById(vol.id))!.karmaPoints).toBe(CAP);
+    } finally {
+      spy.mockRestore();
+      delete caps.SHIFT;
+    }
+  });
+
+  it('is a no-op outside a raid window', async () => {
+    const vol = await makeAccount();
+    const res = await KarmaService.awardKarma(vol.id, 40, 'SHIFT');
+    expect(res.multiplier).toBe(1);
+    expect(res.awarded).toBe(40);
   });
 });
 

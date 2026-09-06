@@ -983,23 +983,45 @@ function connectSSE() {
     return true;
   };
 
+  /**
+   * What this viewer is allowed to know about a ticket.
+   *
+   * The same event reaches a lead with the whole ticket and an ordinary player with a
+   * redacted copy — id, status, venue, category, urgency, bounty and nothing else. Reading
+   * the privileged fields unconditionally printed "undefined reported undefined at undefined"
+   * on every non-lead dashboard in `AUTH_MODE=required`, which is the tests-pass-production-
+   * fails shape: the demo runs in legacy mode, where an anonymous viewer gets the full
+   * payload and the line reads correctly.
+   *
+   * A redacted line is not a degraded line. "A HIGH LOGISTICS call at Siebel" is what that
+   * viewer is entitled to and is genuinely useful; the name and the seat are not theirs.
+   */
+  const whereOf = (p) => (p.tableLocation ? p.tableLocation : p.venueKey ? String(p.venueKey).replace(/_/g, ' ').toLowerCase() : 'an unknown location');
+  const bountyOf = (p) => (typeof p.karmaBounty === 'number' ? ` (+${p.karmaBounty} karma)` : '');
+
   on('SOS_TICKET_CREATED', (p) => {
     if (!firstTimeFor(p, 'created')) return;
     window.soundEngine?.playSosAlarm();
-    logSosTerminal(`[SOS] ${p.hackerName} reported ${p.category} at ${p.tableLocation} (+${p.karmaBounty} karma)`);
+    logSosTerminal(p.hackerName
+      ? `[SOS] ${p.hackerName} reported ${p.category} at ${p.tableLocation}${bountyOf(p)}`
+      : `[SOS] a ${p.urgency} ${p.category} call at ${whereOf(p)}${bountyOf(p)}`);
     refresh.sos();
   });
 
   on('SOS_TICKET_DISPATCHED', (p) => {
     if (!firstTimeFor(p, 'dispatched')) return;
     window.soundEngine?.playDispatchChime();
-    logSosTerminal(`[DISPATCH] ${p.volunteerName} en route to ${p.hackerName} (${p.distanceMeters}m away)`);
+    logSosTerminal(p.volunteerName
+      ? `[DISPATCH] ${p.volunteerName} en route to ${p.hackerName} (${p.distanceMeters}m away)`
+      : `[DISPATCH] a responder is en route to the ${p.urgency} call at ${whereOf(p)}`);
     refresh.sos();
   });
 
   on('SOS_TICKET_RESOLVED', (p) => {
     if (!firstTimeFor(p, 'resolved')) return;
-    logSosTerminal(`[RESOLVED] Ticket ${String(p.ticketId).slice(-6)} closed by ${p.volunteerName}. +${p.karmaAwarded} karma`);
+    logSosTerminal(p.volunteerName
+      ? `[RESOLVED] Ticket ${String(p.ticketId).slice(-6)} closed by ${p.volunteerName}. +${p.karmaAwarded} karma`
+      : `[RESOLVED] Ticket ${String(p.ticketId).slice(-6)} closed at ${whereOf(p)}.`);
     refresh.sos();
     refresh.leaderboard();
   });

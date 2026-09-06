@@ -564,7 +564,12 @@
   for (const type of [
     'QUEST_COMPLETED', 'STICKER_AWARDED', 'SLOT_RESERVED', 'VOLUNTEER_CHECKED_IN', 'VOLUNTEER_CHECKED_OUT',
     'HACKSTOP_SPUN', 'GYM_CAPTURED', 'SOS_TICKET_RESOLVED',
-    'RAID_STARTED', 'RAID_ENDED', 'OBJECTIVE_UPDATED', 'OBJECTIVE_CLOSED',
+    // The names the server actually publishes. `RAID_STARTED`, `RAID_ENDED`,
+    // `OBJECTIVE_UPDATED` and `OBJECTIVE_CLOSED` are plausible and are not among them, so
+    // this view sat inert through every raid window — no live banner, no roster, nothing
+    // until somebody pressed Refresh. `scripts/checkEvents.mjs` now fails the build on a
+    // name either side has invented.
+    'RAID_OPENED', 'RAID_CLOSED', 'RAID_JOINED', 'REGISTRATION_CANCELLED',
   ]) {
     N.onEvent(type, () => { if (state.section) void load(); });
   }

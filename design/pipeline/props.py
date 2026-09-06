@@ -328,6 +328,16 @@ def _nearest_tangent(grid, x: float, z: float):
     return best_t
 
 
+def _bearing(tx: float, tz: float) -> float:
+    """Heading in degrees for a direction vector, clockwise from +x (east).
+
+    The single definition of the convention this file uses. Both halves of the module — the
+    surveyed props and the generated ones — go through it, because they disagreed for a while
+    by exactly ninety degrees and neither looked wrong on its own.
+    """
+    return math.degrees(math.atan2(tz, tx))
+
+
 def _rotation(kind: str, osm_id: str, x: float, z: float, grid) -> float:
     """Heading in degrees, measured clockwise from +x (east) in the xz plane.
 
@@ -338,7 +348,7 @@ def _rotation(kind: str, osm_id: str, x: float, z: float, grid) -> float:
     tan = _nearest_tangent(grid, x, z) if kind in ALIGNED_KINDS or kind in CROSS_KINDS else None
     if tan is None:
         return _spin(osm_id, x, z) % 360.0
-    heading = math.degrees(math.atan2(tan[1], tan[0]))
+    heading = _bearing(tan[0], tan[1])
     if kind in CROSS_KINDS:
         return (heading + 90.0) % 360.0
     # Which side of the path the bench sits on is not recorded, and a whole avenue of benches
@@ -646,8 +656,13 @@ def generate_props(frame: Frame, roads, lawns, buildings):
     for pts in walks:
         for x, z, tx, tz in walk(pts, BENCH_SPACING_M / mpu):
             nx, nz = -tz, tx
-            # A bench faces the path, so its long axis runs along it: the tangent heading.
-            heading = math.degrees(math.atan2(tx, -tz))
+            # The same convention as `_rotation` above: clockwise from +x, `atan2(z, x)`.
+            #
+            # This used to be `atan2(tx, -tz)`, which is the same angle rotated by ninety
+            # degrees, so every generated bench sat across the path it serves while every
+            # surveyed one sat along it. Two conventions in one file is how that survives
+            # review: each looks right beside itself. There is one now, and `_bearing` is it.
+            heading = _bearing(tx, tz)
             for side in (1, -1):
                 px = x + nx * (BENCH_OFFSET_M / mpu) * side
                 pz = z + nz * (BENCH_OFFSET_M / mpu) * side
@@ -701,7 +716,8 @@ def generate_props(frame: Frame, roads, lawns, buildings):
                 break
         px += dx * (RACK_OFFSET_M / mpu)
         pz += dz * (RACK_OFFSET_M / mpu)
-        emit("bikerack", px, pz, math.degrees(math.atan2(dz, dx)) + 90.0)
+        # A rack stands across the approach so its hoops face the door, hence the quarter turn.
+        emit("bikerack", px, pz, _bearing(dx, dz) + 90.0)
 
     out.sort(key=lambda p: p["id"])
     return out
