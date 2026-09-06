@@ -13,6 +13,8 @@ npm run demo          # http://localhost:3000/dashboard/
 
 No configuration, no Docker, no secrets. That command starts an in-memory single-node replica set, seeds it, serves the dashboard against the same database, and signs the browser in.
 
+That is the intended way to see this running, including at an interview: it needs no network, has no cold start, and the parts worth showing — the fifty-way registration race, the three-way trade ring, the campus map — all work. To put it on a URL instead, `render.yaml` is a one-click Render Blueprint and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) has the free path, including why this needs a container host rather than a serverless one.
+
 ## What is actually here
 
 **Scheduling that holds under contention.** Fifty simultaneous requests for two slots produce exactly two confirmed registrations and forty-eight waitlist places, every time, because the check and the increment are one atomic operation rather than a read followed by a write. The same discipline covers cancellations, the waitlist cascade that promotes the next person, three-way swap rings resolved by cycle detection, rest buffers between shifts, and daily fatigue caps. `npm run demo` ships a Chaos Lab that fires the fifty-worker race at a live server and reports whether the invariant held.
