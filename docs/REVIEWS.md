@@ -545,3 +545,72 @@ confident comment about a mechanism nobody re-read.
 The second: `--url localhost` resolves to `::1` first on macOS while `TRUSTED_EGRESS_CIDRS`
 is IPv4-only, so the two together silently leave the *stream* ceilings on the untrusted path.
 Use the IPv4 literal. Both notes are now in `docs/PRESENCE.md`.
+
+---
+
+## Round nine — the first clean verdict, and six more from the round before, 2026-09-06
+
+**muse: clean.** The first empty round of the loop, and not an empty read: it traced every
+round-eight change and reported each sound with the reasoning — `requireSession` running
+before `requireAccount` on `/me/sos`, `holder !== mine` refusing a factionless actor
+deterministically, the `setPlayerSprite` null branch, the handover event ordering in all three
+cases (fresh sign-in, handover, same-account refresh). Its verdict: *"nothing left in what I
+read."*
+
+**agy: six**, two of them serious, and the pattern held — both were in round-eight code.
+
+### The handover deleted the presence of the person who had just sat down
+
+`api.stop()` ends with `DELETE /api/v1/presence`. By the time `session:handover` is emitted,
+`session.user` and the session cookie already belong to the **new** account — that is what
+makes the event detectable at all — so the stop was authenticated as *them*. It landed after
+their socket had connected and removed them from the store: opted in, publishing, and
+invisible to everybody, caused by the code written to hand the device over cleanly.
+
+The handover now stops without telling the server. The departing account is not left
+publishing: their socket is closed locally and the store drops an entry whose sender has gone
+quiet, which is the same path a closed laptop takes and needs no request signed by somebody
+else.
+
+### A rota is a position with a timetable attached
+
+Round eight gated `GET /me/sos` and I reasoned explicitly that the other `/me` routes carried
+less — opencode had said the same. `GET /me/shifts` returns the venue, the building and the
+window of every shift a named person holds, and in legacy mode an "account" is a query
+parameter while account ids are public. It is now `requireSession` too.
+
+### Closed
+
+| Finding | Source | Fix |
+|---|---|---|
+| The handover's `api.stop()` issued `DELETE /presence` under the new account's cookie, erasing them from the presence store while their socket was live. | agy | 1da4401 |
+| `GET /me/shifts` disclosed a named volunteer's schedule and locations to a claimed identity. | agy | 1da4401 |
+| `players.js` listened only to `session:ready`, which fires once at boot — so a runtime sign-in (a badge scan at the desk; the only path in `AUTH_MODE=required`) never started presence. | agy | 1da4401 |
+| `me.js` and `quests.js` painted but never loaded on `session`, leaving both tabs empty after a runtime sign-in until the user navigated away and back. | agy | 1da4401 |
+| `checkEvents.mjs` was not in `verify.sh`, although it is one of the lockstep audits that gate exists to run. | agy | 1da4401 |
+| A `load()` already in flight when the browser changed hands could land afterwards and repaint what the handover had just cleared. muse declined to rank it; a generation counter removes the class. | muse | 1da4401 |
+
+### The M4b soak, and what running it found
+
+The soak had never been executed despite being a plan gate. Running it found that the harness
+**silently under-provisions**: `POST /auth/dev-login` is a credential exchange at 30/min per
+address and had no 429 retry at all, so past the first thirty accounts of each minute the
+client was dropped. A 1,200-account run provisioned about 370 and printed gate rows for all of
+them — a gate that cannot fail, in the one place nobody had thought to look.
+
+Both provisioning calls wait the limiter out now, and the gate asserts the count. Measured
+after the fix, provisioning succeeds 1:1 (101/101, 201/201, 301/301) where it had been roughly
+1:3. The full 1,200-client measurement was not completed in this session; the harness defect
+and its fix are the result recorded here.
+
+Two documentation corrections came out of the same exercise, and one of them is mine twice
+over: I wrote the wrong cause for the throttle into `docs/PRESENCE.md`, checked before it
+shipped, and found the harness's own comment naming the real one — then found *that* was also
+incomplete, because two different buckets bite and only one of them is the desk account's.
+
+### Reviewers that could not run
+
+`codex` and `cursor-agent` are both installed. `codex` reaches the API and returns *"You have
+no credits remaining"*; `cursor-agent` requires a login. Neither has produced a verdict in this
+session, and earlier rounds' note that they were unavailable "until credentials exist" remains
+accurate — the blocker is an account, not a missing tool.
