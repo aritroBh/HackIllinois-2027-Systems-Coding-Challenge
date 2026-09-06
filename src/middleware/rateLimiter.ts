@@ -70,7 +70,7 @@ export interface Limiters {
   authExchangeLimiter: RateLimitRequestHandler;
   mutationLimiter: RateLimitRequestHandler;
   ipCeilingLimiter: RateLimitRequestHandler;
-  /** `req.account ? accountLimiter : anonymousLimiter` — the general API limiter. */
+  /** A proved session gets `accountLimiter`; everything else, including a legacy-claimed identity, gets `anonymousLimiter`. */
   apiRateLimiter: RequestHandler;
 }
 
@@ -79,6 +79,35 @@ const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 function ipOf(req: Request): string {
   return req.ip ?? req.socket?.remoteAddress ?? 'unknown';
 }
+
+/**
+ * A *proved* identity — a session cookie this server minted — not a claimed one.
+ *
+ * The per-account buckets and the per-IP skips exist because a signed-in caller has already
+ * been rationed by the credential that got them in. That reasoning does not survive `legacy`
+ * mode, where `attachIdentity` believes a `volunteerId` in the body or query: an account id
+ * is not a credential, it is a public string handed out by `GET /volunteers` and the
+ * leaderboard.
+ *
+ * Keyed on `req.account` alone, an attacker rotated public ids and got a fresh 300/min
+ * account bucket for each while the per-IP ceiling — the anti-abuse stop that exists for
+ * exactly this — skipped them for having an "account". N ids bought N × 300/min from one
+ * address with no credential at all. A claimed identity is now treated as anonymous by the
+ * limiters, which is what it is.
+ */
+function isProvenSession(req: Request): boolean {
+  return req.account?.source === 'session';
+}
+
+/**
+ * Wrapped rather than passed by reference at each call site below.
+ *
+ * `express-rate-limit` treats the *same function instance* appearing as `skip` on more than
+ * one limiter as a configuration to be validated, and the limiter then silently stops
+ * applying — no headers, no counting. Handing each limiter its own closure is one character
+ * of noise and the difference between a rate limiter and a decoration.
+ */
+const skipProvenSession = () => (req: Request): boolean => isProvenSession(req);
 
 function isMutation(req: Request): boolean {
   return MUTATING_METHODS.has(req.method);
@@ -118,7 +147,7 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     limit: ceiling(opts.accountMax),
     requestPropertyName: 'rateLimitAccount',
     keyGenerator: (req) => `acct:${req.account?.id}`,
-    skip: (req) => !req.account,
+    skip: (req) => !isProvenSession(req),
     message: envelope('for this account', opts.windowMs),
   });
 
@@ -128,7 +157,7 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     limit: ceiling(opts.anonymousMax),
     requestPropertyName: 'rateLimitAnonymous',
     keyGenerator: (req) => `ip:${ipOf(req)}`,
-    skip: (req) => !!req.account,
+    skip: skipProvenSession(),
     message: envelope('from this IP', MINUTE_MS),
   });
 
@@ -153,7 +182,9 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     keyGenerator: (req) => `mut:${req.account?.id}`,
     // Reads pass through; anonymous mutations pass through too — the identity middleware
     // rejects them in `required` mode, and in `legacy` mode they fall under the IP bucket.
-    skip: (req) => !req.account || !isMutation(req),
+    // A legacy-claimed identity counts as anonymous here for the same reason it does above:
+    // otherwise naming a different id each time buys a fresh mutation budget each time.
+    skip: (req) => !isProvenSession(req) || !isMutation(req),
     message: envelope('for this account (mutations)', MINUTE_MS),
   });
 
@@ -164,12 +195,12 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     limit: (req) => ceiling(trusted(req) ? opts.ipCeilingMax * 10 : opts.ipCeilingMax),
     requestPropertyName: 'rateLimitIpCeiling',
     keyGenerator: (req) => `ceil:${ipOf(req)}`,
-    skip: (req) => !!req.account,
+    skip: skipProvenSession(),
     message: envelope('from this IP', MINUTE_MS),
   });
 
   const apiRateLimiter: RequestHandler = (req, res, next) =>
-    req.account ? accountLimiter(req, res, next) : anonymousLimiter(req, res, next);
+    isProvenSession(req) ? accountLimiter(req, res, next) : anonymousLimiter(req, res, next);
 
   return { accountLimiter, anonymousLimiter, authExchangeLimiter, mutationLimiter, ipCeilingLimiter, apiRateLimiter };
 }

@@ -14,7 +14,9 @@ function makeApp(...limiters: RequestHandler[]): Application {
   const app = express();
   app.set('trust proxy', 1);
   app.use((req, _res, next) => {
-    const id = req.header('x-test-account');
+    // `x-test-claimed` stands in for `legacy` mode's body/query `volunteerId`: an identity
+    // the caller asserted rather than proved.
+    const id = req.header('x-test-account') ?? req.header('x-test-claimed');
     if (id) {
       const account: AccountContext = {
         id,
@@ -23,7 +25,7 @@ function makeApp(...limiters: RequestHandler[]): Application {
         faction: null,
         displayName: id,
         sessionVersion: 0,
-        source: 'session',
+        source: req.header('x-test-account') ? 'session' : 'legacy',
       };
       req.account = account;
     }
@@ -153,5 +155,57 @@ describe('rate-key table', () => {
       const res = await request(app).get('/x').set({ 'X-Forwarded-For': '203.0.113.30' });
       expect(Number(res.headers['ratelimit-limit'])).toBeGreaterThanOrEqual(10_000);
     });
+  });
+});
+
+describe('a claimed identity does not buy a bucket', () => {
+  /**
+   * In `legacy` mode `attachIdentity` believes a `volunteerId` in the body or query, and an
+   * account id is not a credential — `GET /volunteers` and the leaderboard hand them out to
+   * anonymous callers. Keyed on `req.account` alone, rotating public ids bought a fresh
+   * per-account budget for each while the per-IP ceiling, the anti-abuse stop that exists
+   * for exactly this shape of attack, skipped them all for having an "account".
+   */
+  const SMALLER: Parameters<typeof buildLimiters>[0] = {
+    windowMs: 60_000,
+    accountMax: 50,
+    anonymousMax: 2,
+    authExchangeMax: 50,
+    mutationMax: 50,
+    ipCeilingMax: 50,
+    trustedCidrs: [],
+    testMode: false,
+  };
+
+  it('rotating claimed ids does not escape the per-IP bucket', async () => {
+    const limiters = buildLimiters(SMALLER);
+    const app = makeApp(limiters.apiRateLimiter);
+    const ip = '203.0.113.77';
+
+    // Two requests, each naming a different account, exhaust the anonymous allowance of 2 —
+    // because neither of them proved anything.
+    await request(app).get('/x').set({ 'x-test-claimed': 'victim-a', 'X-Forwarded-For': ip }).expect(200);
+    await request(app).get('/x').set({ 'x-test-claimed': 'victim-b', 'X-Forwarded-For': ip }).expect(200);
+    const third = await request(app).get('/x').set({ 'x-test-claimed': 'victim-c', 'X-Forwarded-For': ip });
+    expect(third.status).toBe(429);
+    expect(third.body.message).toContain('from this IP');
+  });
+
+  it('a proved session still gets its own account bucket, independent of the IP', async () => {
+    const limiters = buildLimiters(SMALLER);
+    const app = makeApp(limiters.apiRateLimiter);
+    const ip = '203.0.113.78';
+    for (let i = 0; i < 5; i++) {
+      await request(app).get('/x').set({ 'x-test-account': 'real-session', 'X-Forwarded-For': ip }).expect(200);
+    }
+  });
+
+  it('a claimed identity does not skip the per-IP anti-abuse ceiling', async () => {
+    const limiters = buildLimiters({ ...SMALLER, anonymousMax: 1000, ipCeilingMax: 2 });
+    const app = makeApp(limiters.ipCeilingLimiter);
+    const ip = '203.0.113.79';
+    await request(app).get('/x').set({ 'x-test-claimed': 'a', 'X-Forwarded-For': ip }).expect(200);
+    await request(app).get('/x').set({ 'x-test-claimed': 'b', 'X-Forwarded-For': ip }).expect(200);
+    await request(app).get('/x').set({ 'x-test-claimed': 'c', 'X-Forwarded-For': ip }).expect(429);
   });
 });

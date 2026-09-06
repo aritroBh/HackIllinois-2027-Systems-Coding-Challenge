@@ -256,11 +256,31 @@ export class AuthService {
       expiresAt: new Date(Date.now() + 15 * 60_000),
     });
     const link = `${env.PUBLIC_URL}/dashboard/#magic=${token}`;
-    await getMailer().send({
-      to: account.email as string,
-      subject: 'Your Nexus Quest sign-in link',
-      text: `Tap to sign in (valid 15 minutes, single use):\n\n${link}\n\nIf you did not ask for this, ignore it.`,
-    });
+    // Dispatched, not awaited — the 202 must not be paced by whether there was anything to
+    // send.
+    //
+    // The response body is identical either way, which is half of not being an enumeration
+    // oracle. The other half is the clock: the no-account branch above returns after one
+    // indexed lookup, while awaiting `send()` on a real SMTP transport put hundreds of
+    // milliseconds between the two answers, readable at thirty attempts a minute. Whether an
+    // address exists is exactly what that difference discloses.
+    //
+    // Fire-and-forget also has the property the caller needs: a delivery failure must not
+    // change what the caller sees, because "the mail bounced" is itself the fact being
+    // protected. It is logged instead, where the operator can act on it.
+    //
+    // What remains is the token insert — one local write against an indexed collection,
+    // microseconds against SMTP's milliseconds. Constant-time to the resolution an attacker
+    // can measure over the network, which is the standard this needs to meet.
+    void getMailer()
+      .send({
+        to: account.email as string,
+        subject: 'Your Nexus Quest sign-in link',
+        text: `Tap to sign in (valid 15 minutes, single use):\n\n${link}\n\nIf you did not ask for this, ignore it.`,
+      })
+      .catch((err: unknown) => {
+        console.error(`[auth] magic-link delivery failed for account ${account._id}:`, err);
+      });
     // The link is never returned to the caller (that would make the 202 an enumeration
     // oracle); in development the console mailer prints it to the server log instead.
     return { delivered: true };
