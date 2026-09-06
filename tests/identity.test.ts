@@ -242,6 +242,20 @@ describe('Revocation', () => {
     expect((await leadAgent.get('/api/v1/me')).status).toBe(401);
   });
 
+  it('role grants respect the hierarchy: an organizer cannot mint an ADMIN or touch an admin; an admin can', async () => {
+    const org = await makeVolunteer({ role: VolunteerRole.ORGANIZER });
+    const admin = await makeVolunteer({ role: VolunteerRole.ADMIN });
+    const vol = await makeVolunteer();
+    const { agent: o, csrf: oCsrf } = await signIn(org.id);
+    const { agent: a, csrf: aCsrf } = await signIn(admin.id);
+    expect((await o.patch(`/api/v1/auth/accounts/${vol.id}/role`).set('X-CSRF-Token', oCsrf).send({ role: 'ADMIN' })).status).toBe(403);
+    expect((await o.patch(`/api/v1/auth/accounts/${vol.id}/role`).set('X-CSRF-Token', oCsrf).send({ role: 'ORGANIZER' })).status).toBe(403);
+    expect((await o.patch(`/api/v1/auth/accounts/${admin.id}/role`).set('X-CSRF-Token', oCsrf).send({ role: 'VOLUNTEER' })).status).toBe(403);
+    expect((await o.patch(`/api/v1/auth/accounts/${vol.id}/role`).set('X-CSRF-Token', oCsrf).send({ role: 'SHIFT_LEAD' })).status).toBe(200);
+    expect((await a.patch(`/api/v1/auth/accounts/${vol.id}/role`).set('X-CSRF-Token', aCsrf).send({ role: 'ADMIN' })).status).toBe(200);
+    expect((await Volunteer.findById(vol.id))!.role).toBe(VolunteerRole.ADMIN);
+  });
+
   it('anonymous legacy callers cannot mint claim codes without the organiser secret', async () => {
     const vol = await makeVolunteer();
     const none = await request(app).post('/api/v1/auth/claim-codes').send({ accountId: vol.id });
@@ -252,13 +266,18 @@ describe('Revocation', () => {
 
   it('bulk CSV neutralises spreadsheet formula prefixes and never sends the code unquoted', async () => {
     await makeVolunteer({ name: '=HYPERLINK("http://evil")' });
+    await makeVolunteer({ name: '  -2+3+cmd|calc' });
     const res = await request(app)
       .post('/api/v1/auth/claim-codes/bulk')
       .set('X-Organizer-Secret', env.ORGANIZER_SECRET)
       .set('Accept', 'text/csv')
       .send({ kind: 'VOLUNTEER' });
     expect(res.status).toBe(201);
+    expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).toContain(`"'=HYPERLINK(""http://evil"")"`);
+    // The model trims names, so the leading spaces are gone by the time the CSV is built; the
+    // neutraliser still has to catch the `-` prefix that survives.
+    expect(res.text).toContain(`"'-2+3+cmd|calc"`);
     expect(res.text).not.toMatch(/^"=|,"=/m);
   });
 

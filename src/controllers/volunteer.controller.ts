@@ -5,7 +5,8 @@
  * which is the mass-assignment guard: `role`, `karmaPoints`, `prestigeTier` and `badges`
  * are server-owned and cannot be set at signup.
  *
- * `listVolunteers` currently returns full documents with no projection and no pagination,
+ * `listVolunteers` and `getVolunteerById` project through `projectionFor`: contact details are
+ * lead+ only and identities/sessionVersion are never returned. Pagination is still open.
  * including email and phone. It is also exempt from the mutation auth guard because it is
  * a GET, so it is readable in every posture — add a projection and a limit before this
  * carries real attendee data.

@@ -131,6 +131,7 @@ export class AuthController {
         ttlHours: req.body.ttlHours,
         issuedBy: req.account?.id ?? 'organizer-secret',
       });
+      res.setHeader('Cache-Control', 'no-store');
       res.status(201).json({ success: true, data: issued });
     } catch (error) {
       next(error);
@@ -145,13 +146,16 @@ export class AuthController {
         ttlHours: req.body.ttlHours,
         issuedBy: req.account?.id ?? 'organizer-secret',
       });
+      res.setHeader('Cache-Control', 'no-store');
       const wantsCsv = (req.headers.accept ?? '').includes('text/csv');
       if (wantsCsv) {
         // Quote every cell and neutralise spreadsheet formula prefixes (= + - @ and the tab/CR
         // variants), so a crafted account name cannot execute when the CSV is opened.
         const esc = (v: unknown) => {
           const raw = String(v ?? '');
-          const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+          // Leading whitespace is stripped by spreadsheets before formula detection, so test
+          // the first non-blank character.
+          const safe = /^\s*[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
           return `"${safe.replace(/"/g, '""')}"`;
         };
         const csv = ['accountId,name,email,code,expiresAt']
@@ -173,7 +177,15 @@ export class AuthController {
       const account = await Volunteer.findById(req.params.id as string);
       if (!account) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
       if (account.kind !== AccountKind.VOLUNTEER) throw ApiError.badRequest('Hacker accounts cannot be given a staff role.');
-      account.role = req.body.role as VolunteerRole;
+      // Rank check, mirroring revoke: you may only hand out roles below your own, and only
+      // change accounts below your own. Otherwise any organizer could promote a confederate to
+      // ADMIN, who then revokes every organizer.
+      const caller = req.account!;
+      const granted = req.body.role as VolunteerRole;
+      if (caller.role !== 'ADMIN' && (ROLE_RANK[granted] >= ROLE_RANK[caller.role] || ROLE_RANK[account.role] >= ROLE_RANK[caller.role])) {
+        throw new ApiError(403, ErrorCode.INSUFFICIENT_PERMISSIONS, 'You can only assign roles below your own, to accounts below your own.');
+      }
+      account.role = granted;
       await account.save();
       evictAccountCache(account.id);
       res.status(200).json({ success: true, data: AuthService.toPublicAccount(account) });
