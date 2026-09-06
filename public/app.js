@@ -154,15 +154,40 @@ const MAP_NEUTRAL = '#5d7096';
 const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
 
 /**
- * The player's real position as lat/lng, for proof-of-presence on spins and
- * gym battles. Null until the campus has a placed player, in which case the
- * legacy behaviour (the target's own coordinates) is used — that path is
- * demo-only and the server's geofence cannot verify it.
+ * The player's position as lat/lng, for proof-of-presence on spins and gym battles.
+ *
+ * Null until the campus has a placed player, and callers must treat null as "cannot act"
+ * rather than substituting anything. Both call sites used to fall back to *the target's own
+ * coordinates* — the HackStop's, the gym's — which is not a weak proof of presence but the
+ * absence of one: the server measures the distance from a point to itself, gets zero, and
+ * the 75 m geofence passes unconditionally. A fresh profile that never placed its trainer
+ * could spin every beacon and contest every gym on campus from one chair, and the check that
+ * was supposed to stop it could not fail.
+ *
+ * What this returns is still asserted by the browser, and the code says so plainly rather
+ * than implying otherwise: a determined player can drop their trainer next to a gym. That is
+ * a known limit of a web client and is what the presence layer's speed and accuracy gates
+ * exist to bound. Sending the target's position was a different thing entirely — not a
+ * limit on the proof, but no proof at all.
  */
 function playerCoords() {
   const p = typeof campus?.getPlayer === 'function' ? campus.getPlayer() : null;
   if (!p || !fromWorld) return null;
   return fromWorld(p.x, p.z);
+}
+
+/**
+ * Where the trainer is, or a refusal that says how to fix it.
+ *
+ * One message for both economy actions, because the remedy is the same: the map has to know
+ * where you are before it can tell the server you are somewhere.
+ */
+function requirePlayerCoords(what) {
+  const at = playerCoords();
+  if (at) return at;
+  logChaosTerminal(`[BLOCKED] ${what} needs your position — open Campus and place your trainer first.`);
+  window.Nexus?.toast?.('Place your trainer on the map first.');
+  return null;
 }
 
 /**
@@ -174,10 +199,17 @@ function playerCoords() {
 function actingVolunteer() {
   const u = window.Nexus?.session?.user;
   if (u) return sessionAsVolunteer(u);
-  // No session at all: the server is in AUTH_MODE=legacy and dev-login is off,
-  // so nothing identifies the caller. Acting as the first roster entry is what
-  // keeps the zero-setup demo clickable; it is not an identity claim, and every
-  // gated endpoint still decides for itself.
+  // No session at all: the server is in AUTH_MODE=legacy and dev-login is off, so nothing
+  // identifies the caller. Acting as the first roster entry keeps the zero-setup demo
+  // clickable.
+  //
+  // Stated precisely, because the previous wording ("it is not an identity claim") was
+  // wrong: in `legacy` mode the server *believes* a body `volunteerId`, so this genuinely
+  // acts as that volunteer, and the Trainer path below still sends one. What is true is
+  // narrower — legacy mode is the documented open-demo contract (docs/IDENTITY.md), every
+  // gated endpoint re-decides for itself, and in `AUTH_MODE=required` a claimed id is
+  // refused outright with IDENTITY_MISMATCH. None of that makes the claim harmless in
+  // legacy; it makes it deliberate.
   if (volunteersCache.length === 0) {
     logChaosTerminal('[ERROR] No volunteers loaded yet — wait for the roster to sync.');
     return null;
@@ -1460,16 +1492,18 @@ async function battleOrFortifyGym(gymId, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
 
-  // battleGymSchema requires coordinates — the engine geofences a capture so a
-  // stronghold cannot be taken from across campus. Omitting them made every
-  // click fail with a bare "Request validation failed", so the button had never
-  // worked from the dashboard. Contesting a gym means standing at it, so the
-  // gym's own position is the honest thing to send.
+  // battleGymSchema requires coordinates — the engine geofences a capture so a stronghold
+  // cannot be taken from across campus. Sending the gym's own position satisfied the schema
+  // and defeated the geofence in the same line: distance zero, check passed, every gym on
+  // campus contestable from one chair. If we do not know where the player is, we say so and
+  // stop, which is what a geofence is for.
   const gym = gymsCache.find((g) => g._id === gymId);
   if (!gym) {
     logChaosTerminal('[ERROR] Gym not in cache — refresh the territory list.');
     return;
   }
+  const at = requirePlayerCoords('Contesting a gym');
+  if (!at) return;
 
   try {
     const json = await Nexus.api(`/api/v1/pokeshift/gyms/${gymId}/battle`, {
@@ -1478,7 +1512,7 @@ async function battleOrFortifyGym(gymId, btn) {
         volunteerId: vol._id,
         faction: currentVolunteerFaction,
         power: 150,
-        coordinates: playerCoords() ?? { latitude: gym.latitude, longitude: gym.longitude },
+        coordinates: at,
       },
       lenient: true,
     });
@@ -1512,10 +1546,17 @@ async function loadHackStopsData() {
 async function spinHackStop(beaconId, lat, lon, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
+  // The stop's own coordinates arrive as `lat`/`lon` from the button, and they used to be
+  // the fallback sent as the player's position — a geofence measured against itself. They
+  // are still passed in because the caller has them; they are no longer a stand-in for
+  // knowing where the player is.
+  void lat; void lon;
+  const at = requirePlayerCoords('Spinning a HackStop');
+  if (!at) return;
   window.soundEngine?.playStopSpin();
 
   try {
-    const json = await Nexus.api(`/api/v1/pokeshift/hackstops/${beaconId}/spin`, { method: 'POST', body: { volunteerId: vol._id, coordinates: playerCoords() ?? { latitude: lat, longitude: lon } }, lenient: true });
+    const json = await Nexus.api(`/api/v1/pokeshift/hackstops/${beaconId}/spin`, { method: 'POST', body: { volunteerId: vol._id, coordinates: at }, lenient: true });
 
     if (json.success) {
       const item = json.data.itemDetails;
@@ -1596,17 +1637,42 @@ async function loadUserInventory() {
   }
 }
 
+/** Metres between two lat/lngs. Equirectangular — a few metres over a campus, and the only
+ *  thing it is used for here is deciding which of fourteen gyms is closest. */
+function metresBetween(a, b) {
+  const R = 6371000;
+  const lat = ((a.latitude + b.latitude) / 2) * (Math.PI / 180);
+  const dx = (b.longitude - a.longitude) * (Math.PI / 180) * Math.cos(lat) * R;
+  const dy = (b.latitude - a.latitude) * (Math.PI / 180) * R;
+  return Math.hypot(dx, dy);
+}
+
 async function deployPowerUp(itemType, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
-  const targetGym = gymsCache[0];
+
+  // The gym you are standing at, not whichever one the fetch happened to return first.
+  //
+  // This was `gymsCache[0]`, and the Deploy button in the bag carries only the item — so an
+  // item inspected against one stronghold was spent on another, usually an enemy-held one,
+  // with no way to choose and nothing in the UI admitting which gym had been buffed. Nearest
+  // is the rule the rest of the game already uses for a place-bound action, and naming the
+  // target in the log is what makes it checkable.
+  const at = requirePlayerCoords('Deploying an item');
+  if (!at) return;
+  const placed = gymsCache.filter((g) => Number.isFinite(g.latitude) && Number.isFinite(g.longitude));
+  if (!placed.length) {
+    logChaosTerminal('[BLOCKED] No gyms loaded — refresh the territory list.');
+    return;
+  }
+  const targetGym = placed.reduce((best, g) => (metresBetween(at, g) < metresBetween(at, best) ? g : best), placed[0]);
 
   try {
     const json = await Nexus.api('/api/v1/pokeshift/inventory/use', { method: 'POST', body: { volunteerId: vol._id, itemType, targetGymId: targetGym?._id }, lenient: true });
     if (json.success) {
       window.soundEngine?.playSonarPing();
       window.fx?.burstAt(btn, '#ffb020', 24);
-      logChaosTerminal(`[DEPLOYED] ${json.data.message}`);
+      logChaosTerminal(`[DEPLOYED @ ${targetGym.name || targetGym.locationName || targetGym._id}] ${json.data.message}`);
       loadUserInventory();
       loadGymsData();
       fetchStats();

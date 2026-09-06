@@ -164,11 +164,25 @@ The loader reads the monument ids out of `campus.json` and requires them to **eq
 ids in `monuments.json`, in both directions. Adding a gym means adding it to
 `monuments.json` and rebuilding; the error tells you which.
 
-## quests.json and the economy files
+## quests.json, booths.json and raids.json
 
-Reserved. The server-side economy (quests, raids, objectives) is not part of the validated
-contract yet, so a `quests.json` in your pack is served to the client and otherwise
-ignored. When it lands it will be validated like everything else.
+All three are optional — a pack without them simply has no quests, no sponsor booths and no
+raid windows — and all three are validated at boot when present. That paragraph used to say
+they were reserved and ignored, which had not been true of booths and raids for two
+milestones and was never true in the way it implied for quests: `quests.schema.ts` existed
+and the loader did not call it, so a quest that could not advance booted cleanly and sat at
+zero for the weekend.
+
+What is checked, beyond each file's own shape:
+
+* every `venue` in `booths.json` and `raids.json` is a key in `venues.json`;
+* every `reward.sticker` in `booths.json` and `quests.json` is an item id in
+  `memorabilia.json`, and every `reward.powerUp` is a type the power-up catalog defines;
+* a `DISTINCT` quest names the field it collects, a `STREAK` quest has a window to be
+  consecutive in, and no two quests share an id.
+
+A quest naming a domain event the server does not emit is *not* a pack error — the pack is
+not allowed to depend on the server's build — but `npm run check:events` reports it.
 
 ## What the boot-time cross-validation rejects
 

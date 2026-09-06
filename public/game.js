@@ -375,8 +375,16 @@
   /** Disable Spin buttons until the player stands within the geofence. */
   function gateSpins() {
     if (!has('getNearby') || !window.campus.getPlayer?.()) {
-      // No renderer or no placed player: the demo path, nothing to measure.
-      document.querySelectorAll('[data-action="spin"]').forEach((btn) => { btn.disabled = false; btn.textContent = 'Spin'; btn.title = 'Spin this HackStop'; });
+      // No renderer, or a trainer that has not been placed: there is nothing to measure, and
+      // "nothing to measure" is not a reason to allow the action. This branch used to force
+      // every Spin button ENABLED, which together with the target-coordinates fallback in
+      // app.js made the 75 m geofence unreachable: a fresh profile could spin every beacon on
+      // campus without moving. The button stays disabled and says what would enable it.
+      document.querySelectorAll('[data-action="spin"]').forEach((btn) => {
+        btn.disabled = true;
+        btn.textContent = 'Spin';
+        btn.title = 'Open Campus and place your trainer to spin this HackStop';
+      });
       return;
     }
     const near = window.campus.getNearby(PROX_RADIUS);

@@ -150,9 +150,51 @@
 
   const session = N.session;
 
+  /**
+   * Per-account state this browser keeps outside the cookie.
+   *
+   * A reload clears everything in memory, which is why `logout` could get away with one for
+   * so long — but `localStorage` and the service-worker cache both survive it, and this is a
+   * shared laptop at a hackathon. Left behind, these were readable by whoever sat down next:
+   * a distress call's seat number and the name attached to it, a face drawn from somebody's
+   * photograph, a sticker book, a trainer card the worker would serve from cache the moment
+   * the network dropped.
+   *
+   * `nexus.lite.v1` is deliberately absent: it is a rendering preference for the device, not
+   * a fact about the person, and the next user of a slow laptop wants it kept.
+   */
+  const ACCOUNT_KEYS = ['nexus.sos.ticket', 'nexus.avatar.v1', 'nexus.stickers.v1'];
+
+  /**
+   * Which account this device last had signed in, so a change of hands is detectable.
+   *
+   * The id is already public — it appears in every roster payload — and holding it is what
+   * lets the guard below fire for the case `logout` cannot cover: somebody closes the laptop
+   * lid without signing out, and the next person signs in on the same browser. Clearing on
+   * logout alone assumes people log out, and at four in the morning they do not.
+   */
+  const DEVICE_ACCOUNT_KEY = 'nexus.device.account';
+
   function setUser(account) {
     const prev = session.user;
     session.user = account || null;
+
+    // A different person than the one this browser last carried: drop what the previous
+    // account left behind before anything reads it. Deliberately not on sign-*out* — that is
+    // `logout`'s job and it also clears the service-worker card — and deliberately not when
+    // the same account signs back in, which would cost somebody their sticker book for
+    // refreshing a session.
+    if (session.user && session.user.id) {
+      let last = null;
+      try { last = localStorage.getItem(DEVICE_ACCOUNT_KEY); } catch { /* storage disabled */ }
+      if (last && last !== String(session.user.id)) {
+        for (const key of ACCOUNT_KEYS) {
+          try { localStorage.removeItem(key); } catch { /* as above */ }
+        }
+      }
+      try { localStorage.setItem(DEVICE_ACCOUNT_KEY, String(session.user.id)); } catch { /* as above */ }
+    }
+
     if (prev !== session.user) N.emit('session', session.user);
     return session.user;
   }
@@ -168,10 +210,46 @@
     }
   };
 
+  /**
+   * Everything the departing account leaves on this device, removed before the reload.
+   *
+   * Awaited, not fired and forgotten. The service-worker message is delivered asynchronously
+   * and `location.replace` tears the page down, so posting it and reloading in the same turn
+   * is a race the cache usually wins — which is indistinguishable from never sending it, and
+   * `sw.js` has carried a handler for a message nothing sent since it was written. The
+   * timeout is there because a worker that never answers must not strand somebody on a
+   * screen they are trying to leave.
+   */
+  async function clearDeviceState() {
+    for (const key of ACCOUNT_KEYS) {
+      try { localStorage.removeItem(key); } catch { /* private mode, or storage disabled */ }
+    }
+    try { sessionStorage.clear(); } catch { /* as above */ }
+
+    const worker = navigator.serviceWorker;
+    if (!worker || !worker.controller) return;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      const timer = setTimeout(finish, 750);
+      try {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => { clearTimeout(timer); finish(); };
+        worker.controller.postMessage({ type: 'nexus-sw-clear-card' }, [channel.port2]);
+      } catch {
+        clearTimeout(timer);
+        finish();
+      }
+    });
+  }
+
   session.logout = async function logout({ reload = true } = {}) {
     try { await api(`${API}/auth/logout`, { method: 'POST' }); } catch (err) { console.warn('[session] logout:', err.message); }
     setUser(null);
     N.emit('session:logout');
+    // Before the reload, not after: the reload is what makes the in-memory caches safe, and
+    // it is also what would cut a fire-and-forget cleanup short.
+    await clearDeviceState();
     // Every cache in app.js was filled for the old account; a clean load is
     // the honest reset rather than chasing each one.
     if (reload) location.replace(LANDING);

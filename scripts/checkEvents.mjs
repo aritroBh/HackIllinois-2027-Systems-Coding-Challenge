@@ -106,6 +106,20 @@ for (const file of clientFiles) {
   for (const list of code.matchAll(/for \(const \w+ of \[([^\]]*)\]\)\s*\{?\s*N?\.?onEvent/g)) {
     for (const m of list[1].matchAll(/'([A-Z][A-Z0-9_]*)'/g)) subscribed.set(m[1], file);
   }
+  // The composed form: `for (const suffix of Object.keys(TABLE)) N.onEvent(`PREFIX_${suffix}`)`.
+  //
+  // This one is not a curiosity. `views/sos.js` subscribes to all seven SOS lifecycle events
+  // exactly this way, so the file that owns the lifecycle was invisible to the audit whose
+  // header claims no name is invented on either side — and adding an eighth status to the
+  // table would have produced precisely the forwarded-but-unemitted phantom this script was
+  // written after. The prefix comes from the template, the suffixes from the object literal
+  // the loop iterates, and the product is what the browser will actually subscribe to.
+  for (const loop of code.matchAll(/for \(const (\w+) of Object\.keys\((\w+)\)\)[\s\S]{0,120}?onEvent\(\s*`([A-Z][A-Z0-9_]*_)\$\{\1\}`/g)) {
+    const [, , table, prefix] = loop;
+    const decl = code.match(new RegExp(`const ${table}\\s*=\\s*\\{([^}]*)\\}`));
+    if (!decl) continue;
+    for (const key of decl[1].matchAll(/([A-Z][A-Z0-9_]*)\s*:/g)) subscribed.set(prefix + key[1], file);
+  }
 }
 const phantom = [...subscribed].filter(([t]) => !server.has(t) && !CONTROL.has(t)).sort();
 if (phantom.length) {

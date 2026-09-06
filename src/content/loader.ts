@@ -32,6 +32,7 @@ import {
 } from './schema';
 import { boothsSchema } from './booths.schema';
 import { raidsSchema } from './raids.schema';
+import { questsSchema } from './quests.schema';
 
 export class ContentPackError extends Error {
   constructor(public readonly issues: PackIssue[]) {
@@ -81,10 +82,37 @@ export function loadPack(dir: string): ContentPack {
   // The game files are optional — a pack with no booths simply has no booths — but a pack that
   // HAS them and has them wrong must fail here rather than at the first scan of the event. A
   // sponsor whose QR code 500s at nine in the morning is not a bug anyone gets to fix calmly.
-  if (fs.existsSync(path.join(dir, 'booths.json'))) readJson(dir, 'booths.json', boothsSchema, issues);
-  if (fs.existsSync(path.join(dir, 'raids.json'))) readJson(dir, 'raids.json', raidsSchema, issues);
+  const booths = fs.existsSync(path.join(dir, 'booths.json')) ? readJson(dir, 'booths.json', boothsSchema, issues) : null;
+  const raids = fs.existsSync(path.join(dir, 'raids.json')) ? readJson(dir, 'raids.json', raidsSchema, issues) : null;
+  // `quests.json` was the one game file nobody read at boot, although its own schema says the
+  // shapes that cannot advance "are rejected at load instead". They were not: a DISTINCT
+  // quest with no `distinctBy`, a STREAK over the whole event, or a duplicate id all booted
+  // cleanly and then sat at zero for the weekend — the invisible-dead-quest failure the
+  // schema exists to prevent, with the schema present and unused.
+  if (fs.existsSync(path.join(dir, 'quests.json'))) readJson(dir, 'quests.json', questsSchema, issues);
   const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
+  // Venue keys in the game files, checked here rather than in `crossValidate` because these
+  // files are optional and the pack object it receives does not carry them.
+  //
+  // Both schemas say in as many words that `venue` is "a venue key from venues.json", and
+  // neither checked. A booth or a raid pointing at a venue that does not exist boots without
+  // complaint and shows up as a map pin that is not there — at the moment a sponsor asks why
+  // nobody can find their table.
+  if (venues) {
+    const venueKeys = new Set(Object.keys(venues));
+    booths?.booths.forEach((booth, i) => {
+      if (!venueKeys.has(booth.venue)) {
+        issues.push({ file: 'booths.json', path: `booths[${i}].venue`, message: `unknown venue ${booth.venue}` });
+      }
+    });
+    raids?.raids.forEach((raid, i) => {
+      if (!venueKeys.has(raid.venue)) {
+        issues.push({ file: 'raids.json', path: `raids[${i}].venue`, message: `unknown venue ${raid.venue}` });
+      }
+    });
+  }
+
   if (info) {
     const ids = new Set(monuments.monuments.map((m) => m.id));
     for (const key of Object.keys(info)) if (!key.startsWith('_') && !ids.has(key)) issues.push({ file: 'monuments-info.json', path: key, message: 'dossier for an undeclared monument' });

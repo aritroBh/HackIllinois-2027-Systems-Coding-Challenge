@@ -5,7 +5,13 @@
  * the browser: `/me/shifts` for the next shift, `/me/inventory` for power-ups, `/me/card`
  * for the short id and tier. The attendance token is minted against the account's own
  * confirmed registration, and the server derives the volunteer from the session, so there
- * is no id to pass and no way to mint one for somebody else.
+ * is no id to pass on this path.
+ *
+ * "No way to mint one for somebody else" is true of this tab and not of the whole client:
+ * the older Trainer QR path in `app.js` still posts `{volunteerId, shiftId}`, which a server
+ * in `AUTH_MODE=legacy` believes. That is the documented open-demo contract rather than a
+ * hole — `required` mode refuses a body id that disagrees with the session — but a reader
+ * who took this sentence for a global guarantee would be wrong.
  *
  * The walking ETA is local arithmetic. The renderer knows where the player is in world
  * units, the content pack knows where the venue is in degrees, and both share the frame

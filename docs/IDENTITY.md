@@ -47,7 +47,9 @@ An ORGANIZER/ADMIN session works in place of the secret header. The badge QR sho
 `https://<PUBLIC_URL>/dashboard/#claim=<CODE>` — a URL fragment, so the code never reaches
 server or proxy logs. Redeem: `POST /api/v1/auth/claim {code}` — 30/min per IP, 300/min for
 addresses in `TRUSTED_EGRESS_CIDRS` (the venue NAT is never exempt, only allowed more); fifty
-failed claims in an hour raise `CLAIM_BRUTE_FORCE` on the announce channel.
+failed claims in an hour raise `CLAIM_BRUTE_FORCE` on the **ops** channel — a staff alarm,
+not an announcement, because `announce` is readable anonymously and telling the floor that
+somebody is guessing claim codes is telling the guesser their guessing is being watched.
 
 ## Adapter 2 — email magic link
 

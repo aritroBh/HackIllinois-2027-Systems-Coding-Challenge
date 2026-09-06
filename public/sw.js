@@ -44,6 +44,14 @@
   // Loaded by index.html on every visit. If any of these is missing the install
   // fails and the previous worker stays in charge, which is the outcome we want:
   // a half-cached shell is worse than no shell.
+  //
+  // Kept in lockstep with index.html by `scripts/checkShell.mjs`, which is a gate rather than
+  // a convention because this list drifted silently once already: the dashboard was split
+  // into per-tab views and nine of the scripts index.html loads were never added here. The
+  // shell cached, the page loaded offline, and every one of those scripts failed at
+  // `ERR_INTERNET_DISCONNECTED` — so Me, Quests, SOS and Lead rendered as empty containers.
+  // An offline shell that serves a blank page is worse than no offline shell, because it
+  // looks like it worked.
   const SHELL = [
     INDEX,
     '/dashboard/manifest.webmanifest',
@@ -52,8 +60,17 @@
     '/dashboard/nexus.js',
     '/dashboard/session.js',
     '/dashboard/theme.js',
+    '/dashboard/lite.js',
+    '/dashboard/a11y.js',
+    '/dashboard/pwa.js',
+    '/dashboard/plugins.js',
     '/dashboard/views/onboarding.js',
     '/dashboard/views/players.js',
+    '/dashboard/views/announce.js',
+    '/dashboard/views/me.js',
+    '/dashboard/views/lead.js',
+    '/dashboard/views/sos.js',
+    '/dashboard/views/quests.js',
     '/dashboard/sprites.js',
     '/dashboard/fx.js',
     '/dashboard/soundEngine.js',
@@ -225,7 +242,17 @@
     // Sent by session.js on sign-out: the card belongs to the account that just
     // left, and the next person on this device must not be able to read it.
     if (type === 'nexus-sw-clear-card') {
-      event.waitUntil(caches.open(CARD_CACHE).then((cache) => cache.delete(CARD_PATH)));
+      // Acknowledged on the port the sender provided, so `session.js` can wait for the
+      // deletion rather than for a timeout it chose. Without the reply the sender cannot tell
+      // "cleared" from "the worker is not listening", and it tears the page down either way.
+      const reply = event.ports && event.ports[0];
+      event.waitUntil(
+        caches
+          .open(CARD_CACHE)
+          .then((cache) => cache.delete(CARD_PATH))
+          .catch(() => undefined)
+          .then(() => { if (reply) { try { reply.postMessage({ ok: true }); } catch { /* port closed */ } } })
+      );
     }
   });
 })();

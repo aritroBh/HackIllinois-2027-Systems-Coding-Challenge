@@ -66,7 +66,12 @@
   // ticket is kept here and re-hydrated by the SSE events that follow it.
   function remember(ticket) {
     try {
-      if (ticket) localStorage.setItem(STORE_KEY, JSON.stringify(ticket));
+      // Stamped with the account that raised it. The record is a seat number and a name, on
+      // a laptop other people sit at, and it survives everything a browser does short of
+      // clearing storage — so it has to say whose it is and be refused when it is not the
+      // reader's. `session.js` clears it on sign-out and on a change of account; this is the
+      // belt to that pair of braces, for the tab that is simply left open.
+      if (ticket) localStorage.setItem(STORE_KEY, JSON.stringify({ ...ticket, ownerId: me()?.id ? String(me().id) : null }));
       else localStorage.removeItem(STORE_KEY);
     } catch { /* private mode: the tab works, it just forgets on reload */ }
   }
@@ -74,7 +79,16 @@
   function recall() {
     try {
       const held = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-      return held && typeof held.id === 'string' ? held : null;
+      if (!held || typeof held.id !== 'string') return null;
+      // Somebody else's call, or one from before the stamp existed: forget it rather than
+      // show it. Losing your own live ticket across an upgrade costs one refresh; showing a
+      // stranger where a person in distress is sitting costs rather more.
+      const mine = me()?.id ? String(me().id) : null;
+      if (!held.ownerId || !mine || held.ownerId !== mine) {
+        localStorage.removeItem(STORE_KEY);
+        return null;
+      }
+      return held;
     } catch { return null; }
   }
 

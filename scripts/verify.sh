@@ -20,27 +20,23 @@ step "typecheck"
 npx tsc --noEmit
 
 step "frontend syntax"
-node --check public/nexus.js
-node --check public/session.js
-node --check public/theme.js
-node --check public/views/onboarding.js
-node --check public/sprites.js
-node --check public/fx.js
-node --check public/soundEngine.js
-node --check public/game.js
-node --check public/app.js
-node --check public/gl/glx-geometry.js
-node --check public/gl/glx-gl.js
-node --check public/gl/tiles.js
-node --check public/gl/tile-bake.js
-node --check public/gl/bake-worker.js
-node --check public/gl/players.js
-node --check public/views/players.js
-node --check public/gl/props.js
-node --check public/gl/decals.js
-node --check public/gl/rooftops.js
-node --check public/plugins.js
-node --check public/views/announce.js
+# Every browser script, found rather than listed.
+#
+# This was a hand-written enumeration and it fell behind the moment the dashboard was split
+# into per-tab views: nine files — including views/sos.js, which owns the whole SOS
+# lifecycle, and sw.js, which owns offline — were never added, so a syntax error in any of
+# them passed this gate green. A list that has to be maintained to stay true is not a gate,
+# it is a comment; the glob cannot fall behind because it has nothing to fall behind on.
+#
+# Null-delimited, because the checkout path may contain a space — this repository's does, and
+# an unquoted `for f in $(find …)` split "HackIllinois 2027" into two nonexistent modules and
+# failed the gate on every file.
+FRONTEND_COUNT=0
+while IFS= read -r -d '' f; do
+  node --check "$f"
+  FRONTEND_COUNT=$((FRONTEND_COUNT + 1))
+done < <(find "$ROOT/public" -name '*.js' -not -path '*/node_modules/*' -print0 | sort -z)
+echo "$FRONTEND_COUNT frontend files parse"
 # `node --check` on a bare .js parses it as a script, which is NOT how the browser or the
 # bake worker load these. Importing is the only check that catches a shader template closed
 # early by a stray backtick in a GLSL comment — which is exactly how campus3d.js was broken
@@ -74,7 +70,7 @@ if (!same(js, pyIds) || !same(js, ts)) { console.error('material id tables diffe
 const glsl = (await import('$ROOT/public/gl/materials.js')).MATERIAL_GLSL;
 for (const [k, id] of Object.entries(js)) if (!new RegExp('#define MAT_[A-Z_]+ +' + id + '(?![0-9])').test(glsl)) { console.error('no #define for material', k, id); process.exit(1); }
 console.log(Object.keys(js).length + ' material ids agree across JS, Python and TS');
-" 2>/dev/null
+"
 
 step "plugin asset digests are SRI-usable"
 node --input-type=module -e "
@@ -107,6 +103,9 @@ for (const name of fs.existsSync(root) ? fs.readdirSync(root) : []) {
 }
 console.log(checked + ' plugin asset digest(s) convert cleanly from hex to SRI base64');
 "
+
+step "offline shell in lockstep (index.html ⇔ sw.js SHELL)"
+node scripts/checkShell.mjs
 
 step "props vocabulary in lockstep (props.overpass.tpl ⇔ props.py ⇔ props.js)"
 node scripts/checkProps.mjs
@@ -169,7 +168,7 @@ for (const [name, make] of Object.entries(gens)) {
   console.log((bad ? 'FAIL ' : 'ok   ') + name.padEnd(12) + ' ok=' + ok + ' inverted=' + inv);
 }
 if (failed) { console.error(failed + ' generator(s) have inverted winding'); process.exit(1); }
-" 2>/dev/null
+"
 
 if [ "$MODE" = "quick" ]; then
   step "quick mode done"
