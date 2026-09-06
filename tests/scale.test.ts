@@ -211,6 +211,86 @@ describe('the interest computation is shared, not repeated per client', () => {
     }
   });
 
+  it('puts every neighbour on the CLIENT\'s map exactly once, at every rung', () => {
+    // The same invariant as the test above, asserted one layer out — on the frame a client
+    // actually receives rather than on the cohort's own bookkeeping.
+    //
+    // That distinction is the whole point of this test. The cohort is shared by everybody in
+    // a cell, so the two corrections that make it right *for one viewer* — dropping the
+    // viewer itself, and putting back a neighbour the shared counts excluded as a row that
+    // this rung had no budget to send — live in the session. A cohort-level assertion cannot
+    // see either of them, and both were wrong: the viewer subtracted itself from a count it
+    // was already absent from, deleting a neighbour (and, where the cell held exactly one
+    // other person, the entire cluster), while at some rungs one person was excluded from
+    // the counts and then never sent.
+    //
+    // Nothing here re-derives a span, a radius or a cap from the implementation. Everybody is
+    // seated inside a single 50 m cell, so "who should be visible" is simply "everybody else"
+    // no matter how the ring is computed — and a change to the span formula cannot make this
+    // test agree with itself while disagreeing with reality.
+    const POPULATION = 30;
+
+    // Two seatings, because the two corrections are triggered by opposite situations and a
+    // single seating exercises only one of them.
+    //
+    //   'centre' — the viewer stands at the middle of the cell, so it is the nearest
+    //             candidate of all and lands in `detail`. The shared counts already exclude
+    //             it, and subtracting again is the bug that deleted a neighbour.
+    //   'rim'    — the viewer is one of a ring of equidistant people and falls outside the
+    //             budget's worth of `detail`. Now it IS in the counts and must subtract
+    //             itself — and the odd one out of `detail`, excluded from the counts as a row
+    //             the budget had no space to send, must be put back.
+    for (const seating of ['centre', 'rim'] as const) {
+      const store = new PresenceStore();
+      // A tight knot around the MIDDLE of one cell, not around the origin — the origin is a
+      // cell corner, so a knot centred there straddles four cells and the population under
+      // test would silently be a quarter of what the test says it is.
+      const cellUnits = store.cfg.cellMeters / store.cfg.metersPerUnit;
+      const middle = cellUnits / 2;
+      const ids = place(store, POPULATION, true, (i) => {
+        const a = i * 2.399963;
+        // Index 0 is the viewer in both seatings; where it sits is the whole difference.
+        if (seating === 'centre' && i === 0) return [middle, middle];
+        const r = seating === 'centre' ? 1 : 0.2;
+        return [middle + Math.cos(a) * r, middle + Math.sin(a) * r];
+      });
+      const index = store.buildIndex();
+      const cellKey = store.cellKeyFor(store.get(ids[0])!.fx, store.get(ids[0])!.fz);
+      // One cell holds all of them, so the universe is not a function of the search geometry.
+      expect(index.cells.get(cellKey)!.pub).toHaveLength(POPULATION);
+
+      for (const cap of [store.cfg.maxDetail, 10, 4, 1, 0]) {
+        // JSON rows, so the frame can be read as an object. The binary encoding is the
+        // production one and is covered by its own round-trip test; what is under test here
+        // is the accounting, which is identical either way.
+        const client = { ...fakeClient(ids[0]), binary: false };
+        const frames: Array<Record<string, unknown>> = [];
+        client.send = (m) => { frames.push(m as Record<string, unknown>); return true; };
+        const session = new PresenceSession(client, store, { snapshotEveryMs: 15_000, jsonDetailCap: 40 });
+        Object.defineProperty(session, 'accountId', { get: () => ids[0] });
+        session.detailBudget = cap;
+
+        const cohort = store.cohort(cellKey, store.cfg.interestRadiusMeters, false, session.effectiveCap(), index);
+        // Both seatings must actually produce the situation they were built for, or this
+        // degenerates into the same case twice and stops testing what it says it tests.
+        if (cap > 0 && cap < POPULATION - 1) {
+          expect(cohort.detailIds.has(ids[0])).toBe(seating === 'centre');
+        }
+        session.send(1, Date.now(), store.cfg.metersPerUnit, cohort);
+
+        const frame = frames.at(-1)!;
+        const rows = ((frame.p as unknown[]) ?? []).length;
+        const counted = (((frame.c as Array<[number, number, number]>) ?? [])).reduce((sum, c) => sum + c[2], 0);
+
+        // Everyone except the viewer, once each. Not twice — a person drawn as a sprite and
+        // counted in the dot behind them is a phantom — and not zero times, which is the
+        // failure that actually shipped.
+        expect(`${seating}/${cap}: ${rows + counted}`).toBe(`${seating}/${cap}: ${POPULATION - 1}`);
+        expect(rows).toBe(Math.min(cap, POPULATION - 1));
+      }
+    }
+  });
+
   it('collapses to one shared pass per venue when the crowd is clustered, as a real event is', () => {
     const store = new PresenceStore();
     const ids = seedVenues(store, 5000);

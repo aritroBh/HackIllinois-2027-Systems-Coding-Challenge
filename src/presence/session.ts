@@ -30,6 +30,8 @@ export class PresenceSession {
    */
   private lastClusterSig = Number.NaN;
   private lastClusterAdjusted = false;
+  /** The `pendingAddBack` cells the last sent cluster payload was corrected for, joined. */
+  private lastClusterAddBack = '';
   /**
    * Reused across ticks: a row array and the row objects inside it.
    *
@@ -109,11 +111,20 @@ export class PresenceSession {
     if (!cohort) { this.pendingAdjust = false; return { rows, joins, visible }; }
 
     const cap = this.effectiveCap();
+    // Cells owed a body back: see `pendingAddBack`.
+    this.pendingAddBack.length = 0;
     if (cap > 0) {
       let taken = 0;
       for (const e of cohort.detail) {
         if (e.id === this.accountId) continue;
-        if (taken >= cap) break;
+        if (taken >= cap) {
+          // Excluded from the shared counts as a row, and then not sent as one. This happens
+          // to exactly the viewers that are not themselves in `detail`, and to at most one
+          // person per tick, but "at most one person is invisible" is not a property this
+          // layer is allowed to have.
+          this.pendingAddBack.push(e.cell);
+          continue;
+        }
         taken += 1;
         visible.add(e.id);
         const [idx, isNew] = this.idx.assign(e.id, nowMs);
@@ -123,6 +134,11 @@ export class PresenceSession {
         this.sentVersion.set(e.id, e.version);
         rows.push(this.rowInto(rows.length, e, idx, nowMs));
       }
+    } else {
+      // No rows at all, so nobody was excluded from the counts on this session's behalf and
+      // there is nothing to put back. The cohort was built with a budget of zero, which
+      // selects nobody, so its counts already hold everybody.
+      void 0;
     }
 
     // Whether this viewer has to be subtracted from its own cell's count is decided here and
@@ -134,7 +150,14 @@ export class PresenceSession {
     // an off-duty volunteer looking at the map is absent from the public counts, so subtracting
     // itself took a neighbour away instead. And once the ladder stops sending rows, the list
     // being adjusted is the all-inclusive one, whose own-cell entry sits at a different index.
-    const inOwnCount = this.countsSelf();
+    //
+    // And the viewer subtracts itself only if it is actually in the shared count. It usually
+    // is not: the cohort is built one longer than the budget precisely so the viewer — which
+    // is normally the nearest candidate to its own cell centre, being in it — lands in
+    // `detail`, and everything in `detail` is already out of the counts. Subtracting again
+    // took a NEIGHBOUR off the map, and where the cell held one other person it removed the
+    // whole cluster. The condition is membership of the count, not membership of the cell.
+    const inOwnCount = !cohort.detailIds.has(this.accountId) && this.countsSelf();
     this.pendingAdjust = inOwnCount && cohort.ownClusterIndex >= 0;
     return { rows, joins, visible };
   }
@@ -168,6 +191,12 @@ export class PresenceSession {
 
   /** Whether the cluster payload just computed had this viewer subtracted from its own cell. */
   private pendingAdjust = false;
+  /**
+   * Cells holding somebody the shared cohort excluded from its counts and this session did
+   * not send, one entry per such person. Reused between ticks rather than reallocated; it is
+   * empty on almost every tick and never longer than one.
+   */
+  private pendingAddBack: string[] = [];
   private visibleBuf = new Set<string>();
 
   /**
@@ -175,16 +204,47 @@ export class PresenceSession {
    * itself when no adjustment is needed. Only called when the payload is going out.
    */
   private adjustedClusters(cohort: Cohort): Array<[number, number, number]> {
-    // One list. The cohort was built with this session's effective row budget, so its counts
-    // already exclude exactly the people this session is sending as rows and nobody else.
+    // One list, and at most two corrections to it.
+    //
+    // The cohort was built with this session's effective row budget, so its counts exclude
+    // the people this session sends as rows — plus, when the viewer is in `detail`, the
+    // viewer itself. Both corrections below exist because that "plus" is conditional and the
+    // cohort serves every viewer in the cell at once.
+    //
+    // The invariant they preserve, and the one the test asserts: every publishable person
+    // within reach is on this viewer's map exactly once — as a row, or in exactly one cluster
+    // count — except the viewer, who is neither.
     const base = cohort.clusters;
-    if (!this.pendingAdjust) return base;
-    const at = cohort.ownClusterIndex;
-    if (at < 0) return base;
+    if (!this.pendingAdjust && this.pendingAddBack.length === 0) return base;
     const out = base.slice();
-    const [cxu, czu, n] = out[at];
-    if (n <= 1) out.splice(at, 1);
-    else out[at] = [cxu, czu, n - 1];
+
+    // Somebody excluded from the counts as a row who never became one.
+    for (const cellKey of this.pendingAddBack) {
+      const at = cohort.indexOfCell.get(cellKey);
+      if (at !== undefined) {
+        const [cxu, czu, n] = out[at];
+        out[at] = [cxu, czu, n + 1];
+        continue;
+      }
+      // Their cell contributed no count at all — every other member of it was sent — so the
+      // cluster was dropped and has to be recreated rather than incremented.
+      const [ciRaw, cjRaw] = cellKey.split(':');
+      const s = cohort.cellUnits;
+      out.push([
+        Math.round(Number(ciRaw) * s * 100) / 100,
+        Math.round(Number(cjRaw) * s * 100) / 100,
+        1,
+      ]);
+    }
+
+    if (this.pendingAdjust) {
+      const at = cohort.ownClusterIndex;
+      if (at >= 0) {
+        const [cxu, czu, n] = out[at];
+        if (n <= 1) out.splice(at, 1);
+        else out[at] = [cxu, czu, n - 1];
+      }
+    }
     return out;
   }
 
@@ -234,10 +294,23 @@ export class PresenceSession {
     // against the shared cohort rather than a rebuilt map per session.
     let clusterPayload: Array<[number, number, number]> | undefined;
     const sig = active ? active.sig : 0;
-    if (active && (full || sig !== this.lastClusterSig || this.pendingAdjust !== this.lastClusterAdjusted)) {
+    // The per-viewer corrections are part of "has this payload changed". The shared checksum
+    // cannot see them — every session in the cell shares it — so a tick where the cohort is
+    // unchanged but this viewer's own correction is not would otherwise leave the client
+    // holding the previous tick's counts. `pendingAddBack` is empty on nearly every tick and
+    // never longer than one, so this is a comparison of two short strings, usually both empty.
+    const addBackSig = this.pendingAddBack.length ? this.pendingAddBack.join(',') : '';
+    if (
+      active &&
+      (full ||
+        sig !== this.lastClusterSig ||
+        this.pendingAdjust !== this.lastClusterAdjusted ||
+        addBackSig !== this.lastClusterAddBack)
+    ) {
       clusterPayload = this.adjustedClusters(active);
       this.lastClusterSig = sig;
       this.lastClusterAdjusted = this.pendingAdjust;
+      this.lastClusterAddBack = addBackSig;
     }
 
     // `gone` on its own is a reason to send: a frame that says only "these slots are empty" is

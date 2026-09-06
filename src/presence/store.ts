@@ -147,6 +147,20 @@ export interface Cohort {
    */
   ownClusterIndex: number;
   /**
+   * Cell key → its index in `clusters`, for the one other adjustment a session may need.
+   *
+   * A cohort is built one longer than the row budget so a viewer can drop itself and still
+   * fill its quota. A viewer that is NOT in `detail` — it can happen, because `detail` is
+   * ranked from the cell centre and a viewer at the cell edge may be further out than the
+   * budget's worth of people clustered at the middle — sends only `cap` of the `cap + 1`,
+   * and the odd one out was excluded from the counts as though it had been sent. It is then
+   * in neither list: not a row, not a dot, simply not on that viewer's map. Putting it back
+   * needs the cluster for *its* cell, which is not necessarily the viewer's own.
+   */
+  indexOfCell: Map<string, number>;
+  /** Cell size in world units, so a session can synthesise a cluster for a cell that had none. */
+  cellUnits: number;
+  /**
    * A cheap order-sensitive checksum of `clusters`.
    *
    * Cluster counts are sent only when they change, and every session in a cohort is looking at
@@ -509,6 +523,7 @@ export class PresenceStore {
     const detail = best.map((b) => b.e);
     const detailIds = new Set(detail.map((e) => e.id));
     const clusters: Array<[number, number, number]> = [];
+    const indexOfCell = new Map<string, number>();
     let ownClusterIndex = -1;
     let sig = 0;
     for (const m of cellsInSpan) {
@@ -517,6 +532,7 @@ export class PresenceStore {
       for (const e of members) if (!detailIds.has(e.id)) n += 1;
       if (n === 0) continue;
       if (m.key === cellKey) ownClusterIndex = clusters.length;
+      indexOfCell.set(m.key, clusters.length);
       // `| 0` keeps the running value a 32-bit integer, so this stays integer arithmetic
       // rather than drifting into a float that compares by luck.
       sig = (sig * 31 + m.ci * 7 + m.cj * 13 + n * 17) | 0;
@@ -526,7 +542,7 @@ export class PresenceStore {
       // spread campus, to round a number that was never imprecise.
       clusters.push([Math.round(m.ci * s * 100) / 100, Math.round(m.cj * s * 100) / 100, n]);
     }
-    return { detail, detailIds, clusters, cellKey, ownClusterIndex, sig };
+    return { detail, detailIds, clusters, cellKey, ownClusterIndex, indexOfCell, cellUnits: s, sig };
   }
 
   /**
