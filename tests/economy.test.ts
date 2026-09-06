@@ -66,24 +66,33 @@ describe('karma is minted in exactly one place', () => {
     expect(other.awarded).toBe(40);
   });
 
-  it('twenty concurrent awards against one cap never exceed it', async () => {
-    const vol = await makeAccount();
+  it('twenty concurrent awards against a real cap stop at the cap, and the ledger agrees', async () => {
+    // Cap a source for the duration of this test. Probing an UNCAPPED source would let the
+    // assertion pass for the wrong reason: twenty awards of ten can never exceed two
+    // hundred, so "at most two hundred" would hold whether the cap worked or not.
     const CAP = 100;
-    // Drive a source the pack does not cap through an explicit ceiling by awarding in
-    // pieces and checking the ledger, which is the artefact a dispute would be settled on.
-    const results = await Promise.all(
-      Array.from({ length: 20 }, () => KarmaService.awardKarma(vol.id, 10, 'CONCURRENCY_PROBE'))
-    );
-    const paid = results.reduce((s, r) => s + r.awarded, 0);
-    const balance = (await Volunteer.findById(vol.id))!.karmaPoints;
-    // Whatever the cap policy, the ledger and the balance must agree exactly. A drift here
-    // is the bug that mints karma out of nothing.
-    const ledger = await KarmaLedger.find({ accountId: vol._id, source: 'CONCURRENCY_PROBE' });
-    const ledgerTotal = ledger.reduce((s, r) => s + r.amount, 0);
-    expect(balance).toBe(paid);
-    expect(ledgerTotal).toBe(paid);
-    expect(paid).toBeLessThanOrEqual(200);
-    void CAP;
+    const caps = pack.event.karmaCaps as Record<string, number>;
+    caps.CONCURRENCY_PROBE = CAP;
+    try {
+      const vol = await makeAccount();
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => KarmaService.awardKarma(vol.id, 10, 'CONCURRENCY_PROBE'))
+      );
+      const paid = results.reduce((s, r) => s + r.awarded, 0);
+      const balance = (await Volunteer.findById(vol.id))!.karmaPoints;
+      const ledger = await KarmaLedger.find({ accountId: vol._id, source: 'CONCURRENCY_PROBE' });
+      const ledgerTotal = ledger.reduce((s, r) => s + r.amount, 0);
+
+      // The cap held under twenty simultaneous writers.
+      expect(paid).toBe(CAP);
+      // And the three numbers that must never diverge agree exactly. A drift here is karma
+      // minted out of nothing, which is the failure you cannot quietly correct afterwards.
+      expect(balance).toBe(CAP);
+      expect(ledgerTotal).toBe(CAP);
+      expect(results.filter((r) => r.capped).length).toBeGreaterThan(0);
+    } finally {
+      delete caps.CONCURRENCY_PROBE;
+    }
   });
 });
 
@@ -142,10 +151,11 @@ describe('the bounty budget cannot be oversold', () => {
   it('ten concurrent reservations against a budget for three succeed exactly three times', async () => {
     const vol = await makeAccount();
     const day = '2027-02-28';
+    // Deliberately NOT swallowing throws: the plan forbids a 500 here, so an exception is a
+    // failure of the test rather than a budget refusal to be counted.
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
         withTransactionRetry((session) => BountyService.reserve({ accountId: vol.id, day, bounty: 100, budget: 300 }, session))
-          .catch(() => ({ ok: false as const, reason: 'ERROR' }))
       )
     );
     const granted = results.filter((r) => r.ok);

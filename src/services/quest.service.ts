@@ -342,11 +342,24 @@ export class QuestService {
     );
     if (!won) return false;
 
-    if (quest.reward.karma > 0) {
-      await KarmaService.awardKarma(accountId, quest.reward.karma, KARMA_SOURCE, {
-        questId: quest.id,
-        windowKey: won.windowKey,
-      });
+    // Pay before announcing. The CAS above is what makes completion exactly once, so a
+    // payout that throws here would otherwise leave a quest marked complete, announced as
+    // complete, and never paid, with no way to retry it. Failing before the broadcast is
+    // recoverable; failing after it is a lie the player can see.
+    try {
+      if (quest.reward.karma > 0) {
+        await KarmaService.awardKarma(accountId, quest.reward.karma, KARMA_SOURCE, {
+          questId: quest.id,
+          windowKey: won.windowKey,
+        });
+      }
+      if (quest.reward.sticker) {
+        await StickerService.award(accountId, quest.reward.sticker, `QUEST:${quest.id}`);
+      }
+    } catch (error) {
+      // Hand the completion back so the next matching event can try again.
+      await QuestProgress.updateOne({ _id: won._id }, { $set: { completedAt: null } });
+      throw error;
     }
 
     eventHub.broadcast({
@@ -362,9 +375,6 @@ export class QuestService {
       },
     });
 
-    if (quest.reward.sticker) {
-      await StickerService.award(accountId, quest.reward.sticker, `QUEST:${quest.id}`);
-    }
     return true;
   }
 }

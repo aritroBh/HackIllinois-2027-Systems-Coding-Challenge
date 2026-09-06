@@ -52,7 +52,7 @@ import { Types } from 'mongoose';
 import { CheckIn, ICheckIn } from '../models/checkin.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { Shift } from '../models/shift.model';
-import { Volunteer, computePrestigeTier } from '../models/volunteer.model';
+import { Volunteer } from '../models/volunteer.model';
 import { DynamicQrTokenEngine, IVerificationResult } from '../common/utils/crypto';
 import { SurgePricingEngine } from '../common/utils/surgePricing';
 import { GeoEngine, resolveVenue } from '../common/utils/geo';
@@ -60,6 +60,8 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { sameId } from '../common/utils/id';
+import { KarmaService, KarmaSource } from './karma.service';
+import { domainEvents } from '../common/events/domainEvents';
 
 
 export class CheckInService {
@@ -117,7 +119,8 @@ export class CheckInService {
 
     const { volunteerId, shiftId } = verification;
 
-    // Verify registration exists
+    // The token proves who minted it, not that the holder still holds a seat. A volunteer
+    // who cancelled after their token was issued must not check in on it.
     const reg = await Registration.findOne({
       shiftId: new Types.ObjectId(shiftId!),
       volunteerId: new Types.ObjectId(volunteerId!),
@@ -165,7 +168,9 @@ export class CheckInService {
       }
     }
 
-    // Check if already checked in
+    // Replay reaching this far means the nonce cache missed (a restart, another replica).
+    // Return the existing record unchanged: it writes nothing and awards nothing, which is
+    // the honest answer to "check this person in again".
     if (reg.status === RegistrationStatus.CHECKED_IN) {
       const existingCheckIn = await CheckIn.findOne({ registrationId: reg._id });
       if (existingCheckIn) {
@@ -204,12 +209,13 @@ export class CheckInService {
       throw error;
     }
 
-    // Update registration status
     reg.status = RegistrationStatus.CHECKED_IN;
     reg.checkInTime = new Date();
     await reg.save();
 
     const vol = await Volunteer.findById(volunteerId);
+
+    domainEvents.emit('checkin.completed', { accountId: String(volunteerId), shiftId: String(shiftId), at: new Date() });
 
     eventHub.broadcast({
       type: 'VOLUNTEER_CHECKED_IN',
@@ -227,9 +233,13 @@ export class CheckInService {
   }
 
   /**
-   * Concludes a shift check-out, calculates hours, and applies dynamic karma multiplier.
-   * ponytail: owner-bound + CAS — only the checked-in volunteer checks out, concurrent
-   * check-outs can't double-pay, karma/hours credit via $inc (no read-modify-write loss).
+   * Concludes a shift check-out, calculates hours, and applies the dynamic karma multiplier.
+   *
+   * Three guards, each closing a different way to be paid twice. The owner check stops a
+   * volunteer closing someone else's shift and taking their karma. The CAS on
+   * `checkOutTime` means two concurrent check-outs produce one payment and one replay.
+   * Hours are credited with `$inc` rather than a read-modify-write, so a payout racing
+   * another payout on the same account cannot lose one of them.
    */
   public static async checkOut(checkInId: string, callerVolunteerId?: string): Promise<ICheckIn> {
     const existing = await CheckIn.findById(checkInId);
@@ -260,11 +270,14 @@ export class CheckInService {
       throw ApiError.conflict('Check-out raced a concurrent request; retry to observe the settled record.');
     }
 
-    // Calculate duration in minutes
+    // Floored at one minute so a sub-minute shift still records something a human can read
+    // in the history, rather than a zero that looks like a missing field.
     const durationMinutes = Math.max(1, Math.round((now.getTime() - checkIn.checkInTime.getTime()) / (1000 * 60)));
     checkIn.durationMinutes = durationMinutes;
 
-    // Compute earned karma with surge multiplier
+    // Surge is recomputed against the check-*in* moment, not now, so a volunteer is paid the
+    // rate that was advertised when they turned up rather than the rate the shift has
+    // decayed to by the time they leave.
     const shift = await Shift.findById(checkIn.shiftId);
     const baseKarma = shift ? shift.baseKarma : 100;
 
@@ -282,11 +295,10 @@ export class CheckInService {
     // down linearly below that. The old floor of 0.5x minted half a shift's
     // karma for a 60-second "presence" (instant check-in/out farming).
     const timeFactor = Math.min(1, durationMinutes / 60);
-    const earnedKarma = Math.max(1, Math.round(surge.karmaAward * timeFactor));
+    let earnedKarma = Math.max(1, Math.round(surge.karmaAward * timeFactor));
     checkIn.karmaAwarded = earnedKarma;
     await checkIn.save();
 
-    // Update registration
     await Registration.findByIdAndUpdate(checkIn.registrationId, {
       $set: {
         status: RegistrationStatus.COMPLETED,
@@ -295,26 +307,29 @@ export class CheckInService {
       },
     });
 
-    // Update volunteer profile atomically ($inc — concurrent payouts can't lost-update).
-    // ponytail: UTC hour for the graveyard badge so deploy timezone can't misfire it.
+    // The graveyard badge is judged in UTC rather than the host's local zone, so the same
+    // check-in earns it (or does not) whatever region the server happens to run in.
     const earnedBadges: string[] = [];
     const utcHour = checkIn.checkInTime.getUTCHours();
     if (utcHour >= 2 && utcHour <= 5) earnedBadges.push('MIDNIGHT_KRAKEN');
     if (surge.surgeMultiplier >= 3.0) earnedBadges.push('SIEBEL_GUARDIAN');
-    const volunteer = await Volunteer.findOneAndUpdate(
+    // Hours and badges are this service's own bookkeeping; karma is not. Routing the payout
+    // through KarmaService is what keeps the daily cap and the ledger honest, and it
+    // recomputes the prestige tier from the balance it just wrote.
+    await Volunteer.updateOne(
       { _id: checkIn.volunteerId },
       {
-        $inc: { karmaPoints: earnedKarma, hoursServed: Math.round(hours * 100) / 100 },
+        $inc: { hoursServed: Math.round(hours * 100) / 100 },
         ...(earnedBadges.length > 0 ? { $addToSet: { badges: { $each: earnedBadges } } } : {}),
-      },
-      { new: true }
-    );
-    if (volunteer) {
-      const tier = computePrestigeTier(volunteer.karmaPoints);
-      if (tier !== volunteer.prestigeTier) {
-        await Volunteer.updateOne({ _id: volunteer._id }, { $set: { prestigeTier: tier } });
       }
-    }
+    );
+    const payout = earnedKarma > 0
+      ? await KarmaService.awardKarma(checkIn.volunteerId, earnedKarma, KarmaSource.CHECKOUT, { shiftId: String(checkIn.shiftId), hours })
+      : { awarded: 0 };
+    earnedKarma = payout.awarded;
+    const volunteer = await Volunteer.findById(checkIn.volunteerId);
+
+    domainEvents.emit('checkout.completed', { accountId: String(checkIn.volunteerId), shiftId: String(checkIn.shiftId), hoursServed: hours, at: new Date() });
 
     eventHub.broadcast({
       type: 'VOLUNTEER_CHECKED_OUT',

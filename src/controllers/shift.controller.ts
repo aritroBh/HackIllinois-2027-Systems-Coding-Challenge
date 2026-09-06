@@ -31,6 +31,14 @@ export class ShiftController {
    */
   public static async getRoster(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      // The route already requires a lead session. Checking again here is deliberate: this
+      // handler discloses where named people are, and a future refactor that remounts it
+      // should fail closed rather than quietly open.
+      const role = req.account?.role;
+      if (req.account?.source !== 'session' || !(role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN')) {
+        throw new ApiError(403, ErrorCode.INSUFFICIENT_PERMISSIONS, 'The roster is for shift leads.');
+      }
+
       const shiftId = req.params.id as string;
       const shift = await Shift.findById(shiftId).lean();
       if (!shift) throw ApiError.notFound('Shift not found.', ErrorCode.SHIFT_NOT_FOUND);

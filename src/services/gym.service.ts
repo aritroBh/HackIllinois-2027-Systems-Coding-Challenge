@@ -32,6 +32,8 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { env } from '../config/env';
+import { KarmaService, KarmaSource } from './karma.service';
+import { domainEvents } from '../common/events/domainEvents';
 
 /** Minimum gap between karma-paying battles per volunteer (anti-farm). */
 const GYM_KARMA_COOLDOWN_MS = 60000;
@@ -101,7 +103,8 @@ export class GymService {
 
     const MAX_RETRIES = 5;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      // ponytail: jittered backoff between OCC retries — bare spin retries thunder the herd.
+      // Jittered backoff between CAS retries. A bare spin makes every loser retry in the
+      // same instant, so the same writer keeps losing and the database sees a thundering herd.
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 40 * attempt)));
       }
@@ -110,7 +113,8 @@ export class GymService {
         throw ApiError.notFound('Gym not found.');
       }
 
-      // Geofence verification if coordinates provided
+      // Checked whenever coordinates are present, not only under REQUIRE_GEOFENCE: a client
+      // that volunteers a position is held to it either way.
       if (coordinates) {
         const geoCheck = GeoEngine.isWithinGeofence(
           coordinates,
@@ -124,7 +128,8 @@ export class GymService {
         }
       }
 
-      // Check Boba Shield active status
+      // Expiry is compared here rather than swept by a job, so a lapsed shield stops
+      // protecting the gym the moment someone contests it.
       if (gym.isShielded && gym.shieldExpiresAt && gym.shieldExpiresAt > new Date()) {
         throw ApiError.conflict('Gym is currently protected by an active Boba Shield. Cannot contest!');
       }
@@ -133,7 +138,6 @@ export class GymService {
       const isAlly = currentFaction === Faction.NEUTRAL || currentFaction === volunteerFaction;
 
       if (isAlly) {
-        // --- CASE 1: REINFORCE / DEFEND ---
         const newPoints = Math.min(gym.maxControlPoints, gym.controlPoints + power);
         const shouldBeLeader = !gym.leaderVolunteerId || power > 150;
 
@@ -172,7 +176,6 @@ export class GymService {
           message: `Successfully fortified ${gym.name} for ${volunteerFaction}! (+${power} CP)`,
         };
       } else {
-        // --- CASE 2: ATTACK OPPOSING FACTION ---
         if (gym.controlPoints > power) {
           const newPoints = gym.controlPoints - power;
           const updated = await Gym.findOneAndUpdate(
@@ -207,10 +210,10 @@ export class GymService {
             message: `Inflicted ${power} damage on ${gym.name}! ${newPoints} CP remaining.`,
           };
         } else {
-          // --- CASE 3: GYM OVERTHROW / FACTION FLIP! ---
-          // ponytail: clamp the reset inside [100, maxCP] — the old floor ignored
-          // the cap (fresh CP above max on small gyms). Defender history resets by
-          // design on capture (new regime); the flip itself is the audit trail.
+          // A strike that meets or exceeds the remaining points flips the gym. The reset is
+          // clamped inside [100, maxControlPoints]: a bare floor of 100 hands a small gym
+          // more points than its own ceiling. Defenders are cleared because the regime
+          // changed; the capture broadcast is the audit trail for who held it before.
           const freshControlPoints = Math.min(gym.maxControlPoints, Math.max(100, power));
           const updated = await Gym.findOneAndUpdate(
             { _id: gym._id, version: gym.version },
@@ -238,6 +241,9 @@ export class GymService {
           if (!updated) continue; // CAS conflict, retry next iteration
 
           const karmaAward = await this.awardBattleKarma(volunteerId, 150); // Capture bonus!
+
+          // Committed: the capture is durable, so anything that reacts to it can now run.
+          domainEvents.emit('gym.captured', { accountId: String(volunteerId), gymId: String(gymId), faction: String(volunteerFaction) });
 
           eventHub.broadcast({
             type: 'GYM_CAPTURED',
@@ -274,14 +280,18 @@ export class GymService {
    */
   private static async awardBattleKarma(volunteerId: string, amount: number): Promise<number> {
     const cutoff = new Date(Date.now() - GYM_KARMA_COOLDOWN_MS);
-    const awarded = await Volunteer.findOneAndUpdate(
+    // The CAS still owns the cooldown: it is what stops two captures inside the window both
+    // paying. Only the payout itself moved, so caps and the ledger apply here too.
+    const claimed = await Volunteer.findOneAndUpdate(
       {
         _id: volunteerId,
         $or: [{ lastGymKarmaAt: null }, { lastGymKarmaAt: { $lt: cutoff } }],
       },
-      { $inc: { karmaPoints: amount }, $set: { lastGymKarmaAt: new Date() } },
+      { $set: { lastGymKarmaAt: new Date() } },
       { new: true }
     );
-    return awarded ? amount : 0;
+    if (!claimed) return 0;
+    const award = await KarmaService.awardKarma(volunteerId, amount, KarmaSource.GYM, { reason: 'gym-capture' });
+    return award.awarded;
   }
 }

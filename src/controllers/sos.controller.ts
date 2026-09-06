@@ -54,7 +54,7 @@ export class SOSController {
 
   public static async createTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const ticket = await SOSService.createTicket(req.body);
+      const ticket = await SOSService.createTicket(req.body, { id: req.account?.id, kind: req.account?.kind });
       res.status(201).json({ success: true, data: ticket });
     } catch (error) {
       next(error);

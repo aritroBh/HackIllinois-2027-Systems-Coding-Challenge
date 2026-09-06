@@ -202,7 +202,12 @@ describe('announcements', () => {
     const hacker = await makeAccount({ kind: AccountKind.HACKER });
     const { agent: l, csrf } = await signIn(lead.id);
 
-    expect((await (await signIn(volunteer.id)).agent.post('/api/v1/announcements').send({ message: 'nope' })).status).toBe(403);
+    // With the CSRF header present, the only thing that can produce a 403 is the role gate,
+    // which is what this line is meant to pin.
+    const vol = await signIn(volunteer.id);
+    const refused = await vol.agent.post('/api/v1/announcements').set('X-CSRF-Token', vol.csrf).send({ message: 'nope' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('INSUFFICIENT_PERMISSIONS');
 
     await l.post('/api/v1/announcements').set('X-CSRF-Token', csrf).send({ message: 'Pizza at Siebel', audience: AnnouncementAudience.ALL, minutes: 5 });
     await l.post('/api/v1/announcements').set('X-CSRF-Token', csrf).send({ message: 'Staff huddle', audience: AnnouncementAudience.STAFF, minutes: 5 });

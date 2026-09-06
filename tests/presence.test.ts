@@ -305,7 +305,12 @@ describe('SOS dispatch prefers a live position', () => {
     presenceStore.update(facts(String(near._id)), { lat: nanAt.lat, lng: nanAt.lng, acc: 6 });
 
     await PresenceAudit.deleteMany({});
-    const created = await request(app).post('/api/v1/sos/tickets').send({
+    // Raising a ticket is a request to share your location with responders, so it is bound
+    // to an account: there is nobody to send help to, and nobody to bill the bounty against,
+    // if the caller is anonymous.
+    const sam = await makeAccount({ name: 'Stuck Sam', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const samSession = await signIn(sam.id);
+    const created = await samSession.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', samSession.csrf).send({
       hackerName: 'Stuck Sam', tableLocation: 'Table 4', description: 'Need a hand', urgency: 'HIGH',
       coordinates: { latitude: ticketAt.lat, longitude: ticketAt.lng },
     });
@@ -341,10 +346,13 @@ describe('SOS dispatch prefers a live position', () => {
     const raeAt = at(37, 0); // a distance that is obviously not a multiple of ten
     presenceStore.update(facts(String(responder._id)), { lat: raeAt.lat, lng: raeAt.lng, acc: 6 });
 
-    const created = await request(app).post('/api/v1/sos/tickets').send({
+    const sam = await makeAccount({ name: 'Sam', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const samSession = await signIn(sam.id);
+    const created = await samSession.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', samSession.csrf).send({
       hackerName: 'Sam', tableLocation: 'T1', description: 'help', urgency: 'HIGH',
       coordinates: { latitude: ticketAt.lat, longitude: ticketAt.lng },
     });
+    expect(created.status).toBe(201);
     const volunteer = await makeAccount();
     const { agent: v, csrf } = await signIn(volunteer.id);
     const res = await v.post(`/api/v1/sos/tickets/${created.body.data._id}/dispatch`).set('X-CSRF-Token', csrf).send({});

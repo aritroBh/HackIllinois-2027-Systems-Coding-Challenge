@@ -106,9 +106,17 @@ const assetTable: Map<string, ResolvedAsset[]> = (() => {
   return table;
 })();
 
-/** `[{ name, version, assets: [{ url, sha256 }] }]` for every activated plugin. */
+/**
+ * `[{ name, version, assets: [{ url, sha256 }] }]` for every plugin that is currently
+ * ENABLED. A plugin that was activated at boot but has since been disabled by repeated hook
+ * failures is omitted: its assets 404 at the guard, so listing them only sends clients to
+ * fetch files they cannot have, and it discloses that the plugin exists at all.
+ */
 export function pluginManifest(): PluginManifestEntry[] {
-  return pluginRegistry.activated().map((plugin) => ({
+  return pluginRegistry
+    .activated()
+    .filter((plugin) => pluginRegistry.enabled(plugin.name))
+    .map((plugin) => ({
     name: plugin.name,
     version: plugin.version,
     assets: (assetTable.get(plugin.name) ?? []).map(({ url, sha256 }) => ({ url, sha256 })),

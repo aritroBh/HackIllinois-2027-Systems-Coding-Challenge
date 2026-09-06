@@ -18,7 +18,9 @@ import {
 
 export const sosRouter = Router();
 
-sosRouter.post('/tickets', validate(createSOSTicketSchema), SOSController.createTicket);
+// Raising a ticket needs an account, both so the creator can cancel their own and so the
+// per-day bounty budget has somebody to charge.
+sosRouter.post('/tickets', requireAccount, validate(createSOSTicketSchema), SOSController.createTicket);
 // The list carries every ticket's location, table text and description: staff only (a hacker's
 // own ticket reaches them over the `me` channel / GET /me in M5).
 sosRouter.get('/tickets', requireVolunteerKind, validate(listSOSTicketsSchema), SOSController.listTickets);

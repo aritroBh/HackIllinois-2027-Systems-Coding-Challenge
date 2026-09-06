@@ -1,10 +1,16 @@
 /**
- * NEXUS OS — war-room frontend.
+ * NEXUS OS — the war-room shell (plan §C1, §C2).
  *
  * Binds the live API and SSE stream to the dashboard, and drives the WebGL
  * campus (gl/campus3d.js): gyms recolour their monument, on-duty volunteers
  * orbit the buildings they are working, HackStops become geofenced beacons and
  * open SOS tickets become distress cones on the real UIUC map.
+ *
+ * This is the oldest file in the tree, and the six tabs it renders inline
+ * (War Room, Campus, Turf Wars, Trainer, Chaos Lab, Ranks) predate the
+ * `views/` split. Everything added since — Me, the lead console, hacker SOS,
+ * presence, announcements — lives in its own file and only registers itself
+ * with nexus.js. New panels go there, not here.
  */
 
 let shiftsCache = [];
@@ -13,8 +19,9 @@ let currentQrToken = null;
 let currentQrVolunteerId = null;
 let currentQrShiftId = null;
 let qrCountdownTimer = null;
-// The session user's faction when signed in; the picker still overrides it
-// locally until PATCH /me lands in M3. Re-synced on the `session` event below.
+// The session user's faction when signed in. The picker overrides it in this
+// tab only: no endpoint writes an account's faction, so a reload or the
+// `session` event below puts the server's value back.
 let currentVolunteerFaction = window.Nexus?.session?.user?.faction || 'TEAM_KERNEL';
 let gymsCache = [];
 let hackStopsCache = [];
@@ -167,8 +174,10 @@ function playerCoords() {
 function actingVolunteer() {
   const u = window.Nexus?.session?.user;
   if (u) return sessionAsVolunteer(u);
-  // Legacy fallback — dies in M5 with the role router: with no session (the
-  // server in AUTH_MODE=legacy and no dev-login), act as the first roster entry.
+  // No session at all: the server is in AUTH_MODE=legacy and dev-login is off,
+  // so nothing identifies the caller. Acting as the first roster entry is what
+  // keeps the zero-setup demo clickable; it is not an identity claim, and every
+  // gated endpoint still decides for itself.
   if (volunteersCache.length === 0) {
     logChaosTerminal('[ERROR] No volunteers loaded yet — wait for the roster to sync.');
     return null;
@@ -219,7 +228,11 @@ const hhmm = (iso) =>
  */
 const num = (v) => (Number.isFinite(v) ? v : 0).toLocaleString();
 
-/** A ring of 24 pixel pips; the first round(pct/100·24) light up. */
+/**
+ * The coverage ring. The pips are positioned once and only their `on` class
+ * flips afterwards: this repaints on every stats poll, and rebuilding two
+ * dozen absolutely positioned nodes each time was measurable layout churn.
+ */
 function paintRing(id, pct, pips = 24) {
   const ring = document.getElementById(id);
   if (!ring) return;
@@ -302,20 +315,28 @@ const logQrTerminal = (msg) => writeTerminal('qr-terminal', msg);
  * The six shell tabs, registered with the Nexus registry (nexus.js renders the
  * nav from it and owns activation — `switchTab` is gone; `Nexus.showTab(id)`
  * replaces it and `window.switchTab` survives one release as a warning alias).
- * `roles` stays empty until the role router lands in M5: everyone sees every tab.
+ * Roles here are about relevance, not protection: the endpoints behind each tab enforce
+ * their own. A hacker has no use for the War Room's staffing view and no business being
+ * offered the Chaos Lab, so neither is shown to them. Campus, Turf Wars and Ranks are the
+ * game and belong to everybody. With no session at all (the open demo) nothing is hidden.
  */
-Nexus.registerTab({ id: 'tab-shifts', label: 'War Room', order: 10 });
-Nexus.registerTab({ id: 'tab-campus', label: 'Campus', order: 20, onShow: () => bootCampus() });
+const STAFF = ['VOLUNTEER', 'SHIFT_LEAD', 'ORGANIZER', 'ADMIN'];
+const EVERYONE = [...STAFF, 'HACKER'];
+
+Nexus.registerTab({ id: 'tab-shifts', label: 'War Room', order: 10, roles: STAFF });
+Nexus.registerTab({ id: 'tab-campus', label: 'Campus', order: 20, roles: EVERYONE, onShow: () => bootCampus() });
 Nexus.registerTab({
-  id: 'tab-pokeshift', label: 'Turf Wars', order: 30,
+  id: 'tab-pokeshift', label: 'Turf Wars', order: 30, roles: EVERYONE,
   onShow: () => { loadGymsData(); loadHackStopsData(); loadUserInventory(); },
 });
 Nexus.registerTab({
-  id: 'tab-qr', label: 'Trainer', order: 40,
+  id: 'tab-qr', label: 'Trainer', order: 40, roles: STAFF,
   onShow: () => { if (shiftsCache.length > 0 && !currentQrShiftId) setupDefaultQr(); },
 });
-Nexus.registerTab({ id: 'tab-chaos', label: 'Chaos Lab', order: 50 });
-Nexus.registerTab({ id: 'tab-leaderboard', label: 'Ranks', order: 60 });
+// The Chaos Lab fires a fifty-worker race at the live server. That is a demonstration for
+// whoever is running the event, not a control to hand a thousand attendees.
+Nexus.registerTab({ id: 'tab-chaos', label: 'Chaos Lab', order: 50, roles: ['ORGANIZER', 'ADMIN'] });
+Nexus.registerTab({ id: 'tab-leaderboard', label: 'Ranks', order: 60, roles: EVERYONE });
 Nexus.onEvent('tab', ({ id }) => window.game?.onTabChange(id));
 
 document.getElementById('sound-toggle-btn')?.addEventListener('click', (e) => {
@@ -439,13 +460,16 @@ async function fetchStats() {
     setMetric('hud-fill-rate', `${d.overallFillRatePercent}%`);
     setMetric('hud-total-karma', num(d.totalKarmaAwarded));
 
-    // Coverage ring: the arc is a circle of r=42, circumference 263.9.
+    // Clamped before it reaches the ring: the server reports fill rate against
+    // capacity, so an oversold shift can push this past 100.
     const pct = Math.max(0, Math.min(100, Number(d.overallFillRatePercent) || 0));
     const coverage = document.getElementById('vital-coverage');
     if (coverage) coverage.innerText = Math.round(pct);
     paintRing('coverage-ring', pct);
 
-    // Karma over the session: a sample per stats poll, bars scaled to range.
+    // Only sample when the total actually moved. A poll that returns the same
+    // number is not a data point, and recording it would flatten the sparkline
+    // into a straight line during a quiet stretch.
     const total = Number(d.totalKarmaAwarded) || 0;
     if (karmaSeries.length === 0 || karmaSeries[karmaSeries.length - 1] !== total) {
       karmaSeries.push(total);
@@ -1813,11 +1837,7 @@ function renderMonumentDetail(mon) {
     </div>`;
 }
 
-/**
- * Repositions the HTML label layer each frame from projected world positions.
- * HTML rather than in-canvas text so the labels stay crisp at any zoom and
- * inherit the page's typography.
- */
+/** Label element per monument id, plus `__you` for the player's name tag. */
 const labelNodes = new Map();
 
 /* Telemetry. fps is a rolling count over a 500 ms window; the DOM is written
@@ -1876,6 +1896,13 @@ function toggleCinema(force) {
   }
 }
 
+/**
+ * Repositions the label layer from the renderer's projected world positions,
+ * once per frame. HTML rather than in-canvas text so the labels stay crisp at
+ * any zoom and inherit the page's typography. Nodes are created once and only
+ * moved afterwards, and their text is written only when it changed, because
+ * this runs at frame rate.
+ */
 function paintWorldLabels(payload) {
   const { projectToScreen, monuments, hovered, dist, player } = payload;
   updateTelemetry(dist);

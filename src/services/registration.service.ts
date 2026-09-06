@@ -54,6 +54,7 @@ import { ApiError } from "../common/errors/apiError";
 import { ErrorCode } from "../common/errors/errorCodes";
 import { eventHub } from "../common/sse/eventHub";
 import { sameId } from "../common/utils/id";
+import { domainEvents } from '../common/events/domainEvents';
 
 const VOLUNTEER_LOCK_TTL_MS = 30000;
 const VOLUNTEER_LOCK_RETRIES = 6;
@@ -103,7 +104,9 @@ function chicagoDayRange(date: Date): { dayStart: Date; dayEnd: Date } {
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-      hourCycle: "h23", // ponytail: prevents the "24:xx" midnight quirk breaking the parse.
+      // `hour12: false` alone renders midnight as "24" in some runtimes, which parses as
+      // the next day and moves the whole fatigue window. `h23` pins it to 00.
+      hourCycle: "h23",
     });
     for (let i = 0; i < 3; i++) {
       const parts = partsFmt.formatToParts(guess);
@@ -410,7 +413,14 @@ export class RegistrationService {
         },
       );
 
-      // 9. Emit Real-Time SSE Notification
+      // 9. Announce it, inward then outward. The domain bus feeds the reward rules and any
+      // plugin hooks; the SSE hub feeds browsers. Both run after the write is committed.
+      domainEvents.emit('registration.created', {
+        accountId: String(volunteerId),
+        shiftId: String(shiftId),
+        waitlisted: targetStatus !== RegistrationStatus.CONFIRMED,
+      });
+
       eventHub.broadcast({
         type:
           targetStatus === RegistrationStatus.CONFIRMED
@@ -518,8 +528,9 @@ export class RegistrationService {
         ErrorCode.REGISTRATION_NOT_FOUND,
       );
     }
-    // ponytail: IDOR fix — only the owning volunteer may cancel. (Full auth with
-    // unspoofable caller identity is the upgrade path; this makes ownership explicit.)
+    // Ownership is proved, not assumed. Cancelling frees a seat and promotes the head of the
+    // waitlist, so without this anyone holding a registration id could drop a stranger's
+    // shift and move themselves up the queue behind it.
     if (!callerVolunteerId) {
       throw ApiError.badRequest(
         "volunteerId (owning volunteer) is required to cancel a registration.",
@@ -628,7 +639,9 @@ export class RegistrationService {
           }
 
           if (hasConflict) {
-            // ponytail: skip (don't destroy) conflicted candidates — their spot is kept for a later cascade.
+            // Skipped, never cancelled. The conflict is with a shift they hold *today*;
+            // dropping them from this queue would cost them their place permanently for a
+            // clash that may be gone by the time the next seat frees.
             continue;
           }
 
@@ -839,10 +852,11 @@ export class RegistrationService {
       }
     }
 
-    // 2. Enforce Daily Fatigue Threshold (Max 8 hours / calendar day, America/Chicago —
-    // UIUC wall-clock, not UTC — with overlap attribution so overnight shifts split
-    // across both days instead of double-counting day one and zeroing day two).
-    // ponytail: Intl-based zone math, no date lib.
+    // Daily fatigue threshold: at most 8 hours per calendar day in UIUC wall-clock time.
+    // The zone matters because the rule is about a person's night, and a UTC day boundary
+    // falls at 6 p.m. locally, mid-shift. Hours are attributed by overlap so an overnight
+    // shift splits across the two days it actually spans, instead of loading all of it onto
+    // the first and leaving the second free. The zone maths is `Intl`, so no date library.
     const { dayStart, dayEnd } = chicagoDayRange(newStart);
     const overlapMs = (aStart: Date, aEnd: Date): number =>
       Math.max(

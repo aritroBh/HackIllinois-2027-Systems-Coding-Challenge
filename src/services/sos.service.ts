@@ -21,14 +21,19 @@ import { SOSTicket, ISOSTicket, SOSTicketStatus, SOSTicketCategory, SOSTicketUrg
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { Volunteer, IVolunteer, computePrestigeTier } from '../models/volunteer.model';
 import { IShift } from '../models/shift.model';
-import { GeoEngine, HACKILLINOIS_VENUES, IGeoCoordinates, resolveVenueCoordinates } from '../common/utils/geo';
+import { GeoEngine, IGeoCoordinates, resolveVenueCoordinates, resolveVenue } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { presenceStore } from '../presence/store';
 import { PresenceAudit } from '../models/presenceAudit.model';
-import { toLocal } from '../content/loader';
+import { KarmaService, KarmaSource } from './karma.service';
+import { withTransactionRetry } from '../common/db/withTransactionRetry';
+import { BountyService } from './bounty.service';
+import { eventDay } from '../models/karmaLedger.model';
+import { toLocal, pack } from '../content/loader';
 import { eventHub } from '../common/sse/eventHub';
 import { sameId } from '../common/utils/id';
+import { domainEvents } from '../common/events/domainEvents';
 
 
 export interface ICreateSOSTicketDTO {
@@ -50,27 +55,63 @@ const isLeadRole = (role?: string): boolean => /SHIFT_LEAD|ORGANIZER|ADMIN/.test
 
 /** Distances shown to non-leads are rounded to this, so they cannot be used to range. */
 const DISTANCE_BUCKET_M = 10;
+
+/** What a ticket offers when the creator names no figure. The pack's per-urgency ceiling caps it. */
+const DEFAULT_BOUNTY = 150;
 const coarsen = (m: number): number | null => (Number.isFinite(m) ? Math.round(m / DISTANCE_BUCKET_M) * DISTANCE_BUCKET_M : null);
 
 export class SOSService {
   /**
    * Hacker creates an emergency logistics / hardware help ticket.
    */
-  public static async createTicket(dto: ICreateSOSTicketDTO): Promise<ISOSTicket> {
-    const coords = dto.coordinates || HACKILLINOIS_VENUES.SIEBEL_ATRIUM;
+  public static async createTicket(dto: ICreateSOSTicketDTO, creator?: { id?: string; kind?: string }): Promise<ISOSTicket> {
+    // Fail closed rather than defaulting to a building. A ticket with a fabricated position
+    // sends a responder to the wrong place, which is worse than refusing the ticket and
+    // asking again. The HTTP schema already requires coordinates; this covers direct callers.
+    if (!dto.coordinates || !Number.isFinite(dto.coordinates.latitude) || !Number.isFinite(dto.coordinates.longitude)) {
+      throw new ApiError(400, ErrorCode.MISSING_REQUIRED_FIELD, 'An SOS ticket needs the coordinates of the person who needs help.');
+    }
 
-    const ticket = await SOSTicket.create({
-      ...dto,
-      coordinates: coords,
-      status: SOSTicketStatus.OPEN,
-      karmaBounty: dto.karmaBounty || 150,
-    });
+    const urgency = dto.urgency ?? SOSTicketUrgency.MEDIUM;
+    const ceiling = pack.event.bountyCap?.[urgency];
+    const requested = dto.karmaBounty ?? DEFAULT_BOUNTY;
+    if (ceiling !== undefined && requested > ceiling) {
+      throw ApiError.badRequest(`A ${urgency} ticket may offer at most ${ceiling} karma.`);
+    }
 
-    eventHub.broadcast({
-      type: 'SOS_TICKET_CREATED',
-      data: ticket.toObject(),
-    });
+    // A hacker's tickets draw on a per-day budget. The debit and the ticket are one
+    // transaction: a reservation without a ticket would silently eat someone's budget, and
+    // a ticket without a reservation is the hole the budget exists to close.
+    const budget = pack.event.hackerBountyBudgetPerDay ?? 0;
+    const chargesBudget = !!creator?.id && creator.kind === 'HACKER' && budget > 0;
 
+    let ticket: ISOSTicket;
+    if (chargesBudget) {
+      ticket = await withTransactionRetry(async (session) => {
+        const reserved = await BountyService.reserve(
+          { accountId: creator!.id!, day: eventDay(), bounty: requested, budget },
+          session
+        );
+        if (!reserved.ok) {
+          throw new ApiError(409, ErrorCode.SCHEDULE_CONFLICT, "You have offered as much karma today as the event allows. Raise the ticket without a bounty, or ask a lead.");
+        }
+        const [created] = await SOSTicket.create(
+          [{ ...dto, coordinates: dto.coordinates, status: SOSTicketStatus.OPEN, karmaBounty: requested, createdById: creator!.id }],
+          { session }
+        );
+        return created;
+      });
+    } else {
+      ticket = await SOSTicket.create({
+        ...dto,
+        coordinates: dto.coordinates,
+        status: SOSTicketStatus.OPEN,
+        karmaBounty: requested,
+        createdById: creator?.id ?? null,
+      });
+    }
+
+    SOSService.publish(ticket, 'SOS_TICKET_CREATED');
     return ticket;
   }
 
@@ -189,8 +230,9 @@ export class SOSService {
       at: new Date(now),
     });
 
-    // ponytail: no skill-match wipeout fallback — assigning a random unqualified volunteer
-    // is worse than no dispatch at all.
+    // No fallback to the nearest unqualified volunteer. Sending someone who cannot do the
+    // job marks the ticket handled and stops anyone else looking at it, which is slower
+    // than an honest refusal that puts the ticket back in front of a human.
     if (!bestCandidate || !winner) {
       throw ApiError.conflict('No on-duty volunteer matches the required skill for this ticket.', ErrorCode.MISSING_SKILL_CERTIFICATION);
     }
@@ -215,8 +257,11 @@ export class SOSService {
         tableLocation: ticket.tableLocation,
         volunteerId: bestCandidate._id,
         volunteerName: bestCandidate.name,
-        distanceMeters: Number.isFinite(shortestDistance) ? shortestDistance : null,
+        // Coarsened even here: the hub drops this field for ordinary subscribers, but a
+        // lead-visible frame is not a reason to put an exact range on the wire.
+        distanceMeters: coarsen(shortestDistance),
         positionSource: winner!.positionSource,
+        venueKey: resolveVenue(ticket.tableLocation).key,
       },
     });
 
@@ -291,12 +336,16 @@ export class SOSService {
 
   /** The full ticket to lead+ and the parties; a redacted copy to everyone else. */
   private static publish(ticket: ISOSTicket, type: string): void {
+    // `venueKey` survives the hub's redaction for ordinary subscribers, so it must be a
+    // resolved venue key and never the free-text table location. "Table 9, back left" is
+    // exactly the detail the redaction exists to withhold; a venue key is a building.
+    const venue = resolveVenue(ticket.tableLocation);
     eventHub.broadcast({
       type,
       data: {
         ticketId: ticket._id,
         status: ticket.status,
-        venueKey: ticket.tableLocation,
+        venueKey: venue.matched ? venue.key : null,
         category: ticket.category,
         urgency: ticket.urgency,
         hackerName: ticket.hackerName,
@@ -390,7 +439,11 @@ export class SOSService {
 
   /**
    * Volunteer resolves the SOS ticket, earns karma bounty, and unlocks FIRST_RESPONDER badge.
-   * ponytail: assignee-bound + CAS — strangers can't claim others' bounties, concurrent resolves can't double-pay.
+   *
+   * This is where the money moves, so it is guarded twice. A dispatched ticket pays only the
+   * volunteer it was dispatched to, or a stranger can walk in and take a bounty someone else
+   * is already answering. The status transition is a compare-and-swap, so two resolvers
+   * arriving together produce one payment and one conflict rather than two payments.
    */
   public static async resolveTicket(ticketId: string, volunteerId: string): Promise<ISOSTicket> {
     if (!volunteerId) {
@@ -401,21 +454,42 @@ export class SOSService {
       throw ApiError.notFound('SOS ticket not found.');
     }
 
-    if (ticket.status === SOSTicketStatus.RESOLVED) {
-      throw ApiError.conflict('Ticket is already resolved.');
+    const observed = ticket.status;
+    if (!canTransition(observed, SOSTicketStatus.RESOLVED)) {
+      // A second resolve of the same ticket is the common case here and deserves the plain
+      // words for it. The generic edge message is right for the other refusals (a cancelled
+      // ticket, say) but would tell somebody whose colleague just closed the ticket that it
+      // "cannot go from RESOLVED to RESOLVED", which reads as a bug rather than as an answer.
+      throw ApiError.conflict(
+        observed === SOSTicketStatus.RESOLVED
+          ? 'This SOS ticket is already resolved.'
+          : `An SOS ticket cannot go from ${observed} to RESOLVED.`,
+        ErrorCode.SCHEDULE_CONFLICT
+      );
     }
 
-    // ponytail: assignee-bound — a dispatched ticket pays its bounty only to the
-    // dispatched volunteer. Strangers resolving others' tickets is bounty theft.
-    // OPEN tickets are claimed by whoever resolves first (CAS below serializes races).
-    if (ticket.status === SOSTicketStatus.DISPATCHED && !sameId(ticket.assignedVolunteerId, volunteerId)) {
+    // Assignee-bound once somebody has been sent: a ticket that is on its way to a named
+    // responder pays that responder. An OPEN ticket is claimed by whoever resolves it first.
+    const claimed = observed !== SOSTicketStatus.OPEN;
+    if (claimed && !sameId(ticket.assignedVolunteerId, volunteerId)) {
       throw ApiError.forbidden('Only the dispatched volunteer may resolve this ticket.');
     }
 
-    // CAS the status transition; loser of the race gets a clean 409 instead of a double bounty.
+    // A real compare-and-set: the filter names the status we READ, not the set of statuses
+    // that happen to be resolvable. Matching a broader set let a ticket that was OPEN a
+    // moment ago but has since been dispatched to somebody else still match, and the
+    // OPEN-shaped payload would then overwrite the assignee and pay the wrong person. The
+    // loser of the race gets a clean 409.
     const resolved = await SOSTicket.findOneAndUpdate(
-      { _id: ticket._id, status: { $in: [SOSTicketStatus.OPEN, SOSTicketStatus.DISPATCHED] } },
-      { $set: { status: SOSTicketStatus.RESOLVED, resolvedAt: new Date(), ...(ticket.status === SOSTicketStatus.OPEN ? { assignedVolunteerId: new Types.ObjectId(volunteerId), dispatchedAt: new Date() } : {}) } },
+      { _id: ticket._id, status: observed },
+      {
+        $set: {
+          status: SOSTicketStatus.RESOLVED,
+          resolvedAt: new Date(),
+          ...(claimed ? {} : { assignedVolunteerId: new Types.ObjectId(volunteerId), dispatchedAt: new Date() }),
+        },
+        $push: { history: { status: SOSTicketStatus.RESOLVED, at: new Date(), by: new Types.ObjectId(volunteerId) } },
+      },
       { new: true }
     );
     if (!resolved) {
@@ -423,11 +497,9 @@ export class SOSService {
     }
 
     // Award karma bounty atomically ($inc — concurrent resolves can't lost-update).
-    const vol = await Volunteer.findOneAndUpdate(
-      { _id: new Types.ObjectId(volunteerId) },
-      { $inc: { karmaPoints: resolved.karmaBounty }, $addToSet: { badges: 'FIRST_RESPONDER' } },
-      { new: true }
-    );
+    await Volunteer.updateOne({ _id: new Types.ObjectId(volunteerId) }, { $addToSet: { badges: 'FIRST_RESPONDER' } });
+    await KarmaService.awardKarma(volunteerId, resolved.karmaBounty, KarmaSource.SOS, { ticketId: String(resolved._id) });
+    const vol = await Volunteer.findById(volunteerId);
 
     // Recompute prestige tier from the new balance (single follow-up write; karma itself is already atomic).
     if (vol) {
@@ -436,6 +508,13 @@ export class SOSService {
         await Volunteer.updateOne({ _id: vol._id }, { $set: { prestigeTier: tier } });
       }
     }
+
+    domainEvents.emit('sos.resolved', {
+      ticketId: String(resolved._id),
+      resolverId: volunteerId,
+      category: String(resolved.category),
+      venueKey: resolveVenue(resolved.tableLocation).key,
+    });
 
     eventHub.broadcast({
       type: 'SOS_TICKET_RESOLVED',

@@ -24,11 +24,12 @@
  */
 import { HackStop, IHackStop } from '../models/hackstop.model';
 import { PowerUpInventory, PowerUpType, POWER_UP_CATALOG, IPowerUpInventory } from '../models/powerup.model';
-import { Volunteer } from '../models/volunteer.model';
 import { Gym } from '../models/gym.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
 import { ApiError } from '../common/errors/apiError';
 import { eventHub } from '../common/sse/eventHub';
+import { KarmaService, KarmaSource } from './karma.service';
+import { domainEvents } from '../common/events/domainEvents';
 
 export interface ISpinResult {
   hackStopId: string;
@@ -79,7 +80,6 @@ export class HackStopService {
       throw ApiError.badRequest('Valid finite latitude and longitude coordinates are required.');
     }
 
-    // 1. Geodesic Geofence Verification via Haversine
     const distanceMeters = GeoEngine.haversineDistanceMeters(userCoords, {
       latitude: hackStop.latitude,
       longitude: hackStop.longitude,
@@ -91,7 +91,8 @@ export class HackStopService {
       );
     }
 
-    // 2. Cooldown Verification (5-minute sliding window)
+    // A cheap early refusal so the common double-tap gets a countdown instead of rolling
+    // loot it will not receive. The claim below is what actually enforces the cooldown.
     const now = Date.now();
     const lastSpunTime = hackStop.lastSpunUsers.get(volunteerId);
     if (lastSpunTime) {
@@ -104,7 +105,7 @@ export class HackStopService {
       }
     }
 
-    // 3. Roll Loot Table
+    // Weights are server-side and never travel to the client, so rarity cannot be asked for.
     const lootWeights: Array<{ type: PowerUpType; weight: number }> = [
       { type: PowerUpType.COLD_BREW_ELIXIR, weight: 40 },
       { type: PowerUpType.INSOMNIA_COOKIE_SHIELD, weight: 25 },
@@ -126,9 +127,9 @@ export class HackStopService {
     }
 
     const itemMeta = POWER_UP_CATALOG[awardedPowerUp];
-    const awardedKarma = Math.floor(Math.random() * 25) + 25 + itemMeta.karmaBonus;
+    let awardedKarma = Math.floor(Math.random() * 25) + 25 + itemMeta.karmaBonus;
 
-    // 4. Atomically claim the cooldown slot. The conditional update only
+    // Atomically claim the cooldown slot. The conditional update only
     // matches when no fresh spin exists for this volunteer, so concurrent
     // double-spins cannot both pass. If the claim loses, fall through to the
     // legacy read path below, which re-reads fresh state and reports the
@@ -171,10 +172,9 @@ export class HackStopService {
       throw ApiError.conflict('HackStop cooling down: spin already recorded. Try again shortly.');
     }
 
-    // 5. Award Power-Up to Volunteer Inventory
-    // ponytail: best-effort prune of expired cooldown entries so lastSpunUsers
-    // can't grow one entry per volunteer forever (16MB doc-limit kill-switch).
-    // Fire-and-forget: a failed prune never fails the spin.
+    // Prune expired cooldown entries. `lastSpunUsers` gains a key per volunteer who ever
+    // spins this beacon, and a document that reaches Mongo's 16 MB limit stops accepting
+    // spins entirely. Best-effort: a failed prune must never fail the spin that paid for it.
     try {
       const spun = claimed.lastSpunUsers;
       if (spun && spun.size > 500) {
@@ -205,10 +205,16 @@ export class HackStopService {
       { upsert: true, new: true }
     );
 
-    // 6. Award Karma to Volunteer
-    await Volunteer.findByIdAndUpdate(volunteerId, { $inc: { karmaPoints: awardedKarma } });
+    // Pay through the ledger: spins are the easiest karma on the map, so the daily cap
+    // on this source is the thing that stops a beacon becoming a farm.
+    const spinAward = await KarmaService.awardKarma(volunteerId, awardedKarma, KarmaSource.HACKSTOP, { beaconId: hackStop.beaconId });
+    awardedKarma = spinAward.awarded;
 
     const nextAvailableAt = new Date(now + hackStop.cooldownSeconds * 1000);
+
+    // The spin is committed; anything that reacts to it (quests, plugins) subscribes rather
+    // than being called from here.
+    domainEvents.emit('hackstop.spun', { accountId: String(volunteerId), beaconId: hackStop.beaconId, awardedKarma });
 
     eventHub.broadcast({
       type: 'HACKSTOP_SPUN',
@@ -255,8 +261,9 @@ export class HackStopService {
   ): Promise<{ message: string; remainingQuantity: number }> {
     const itemMeta = POWER_UP_CATALOG[itemType];
 
-    // ponytail: validate BEFORE consuming — an invalid target previously ate the
-    // item (CAS decrement) and still paid karma for zero effect.
+    // The target is validated before the item is consumed. The decrement is not part of a
+    // transaction, so a bad target after it would eat the item and still pay its karma
+    // bonus for an effect that never landed.
     const needsTarget =
       itemType === PowerUpType.OVERCLOCK_SOLDER_CORE || itemType === PowerUpType.INSOMNIA_COOKIE_SHIELD;
     if (needsTarget && !targetGymId) {
@@ -279,7 +286,6 @@ export class HackStopService {
       throw ApiError.badRequest(`Insufficient inventory: You have zero ${itemType}.`);
     }
 
-    // Effect resolution
     if (itemType === PowerUpType.OVERCLOCK_SOLDER_CORE && targetGymId) {
       // Add-then-clamp, evaluated server-side as an aggregation-pipeline update.
       //
@@ -313,7 +319,9 @@ export class HackStopService {
       });
     }
 
-    await Volunteer.findByIdAndUpdate(volunteerId, { $inc: { karmaPoints: itemMeta.karmaBonus } });
+    if (itemMeta.karmaBonus > 0) {
+      await KarmaService.awardKarma(volunteerId, itemMeta.karmaBonus, KarmaSource.POWERUP, { itemType });
+    }
 
     eventHub.broadcast({
       type: 'POWERUP_CONSUMED',

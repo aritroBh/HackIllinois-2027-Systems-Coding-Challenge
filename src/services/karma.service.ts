@@ -204,17 +204,27 @@ export class KarmaService {
         }
       }
 
+      // A *range*-matched conditional increment, not an exact-value compare-and-set.
+      //
+      // Naming the exact balance we read makes every concurrent writer invalidate every
+      // other one: with twenty simultaneous awards, nineteen filters miss on each pass and
+      // the loop runs out of attempts while there is still room under the cap. Matching
+      // `amount <= cap - granted` instead preserves the invariant just as strictly — the
+      // increment can only apply where it still fits — while letting any writer whose grant
+      // genuinely fits win on its first try. A retry then means what it should: somebody
+      // else consumed the room, so re-read and clamp against the total that won.
       const result = await KarmaLedger.updateOne(
-        { accountId, source, day, amount: spent },
+        { accountId, source, day, amount: { $lte: cap - granted } },
         KarmaService.spendUpdate(granted, meta)
       );
       if (result.modifiedCount === 1) return granted;
     }
 
-    throw ApiError.conflict(
-      'Karma award lost the daily-cap race repeatedly. Please retry.',
-      ErrorCode.CONCURRENT_MUTATION_IN_PROGRESS
-    );
+    // Reaching here means every attempt found the row already at or above the ceiling that
+    // our own grant needed, without ever reading a total that left room. The honest report
+    // is that the cap is full — refusing the award with a 409 would tell the caller their
+    // check-in failed when it did not, and the caller cannot do anything with a retry.
+    return 0;
   }
 
   /**

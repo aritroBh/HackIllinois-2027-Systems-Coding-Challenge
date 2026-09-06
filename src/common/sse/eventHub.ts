@@ -3,10 +3,10 @@
  *
  * SSE carries the ops events: a waitlist promotion, a gym flip, an SOS dispatch. It buys
  * automatic browser reconnection, plain HTTP semantics through proxies, and no second
- * protocol to secure. Presence — a 1 Hz bidirectional position stream — will ride a
- * WebSocket instead (plan A4) with SSE `presence` as its fallback; both transports share
- * the stream-limit table in `src/common/streamLimits.ts`, so a device's connections are
- * counted in one place.
+ * protocol to secure. Presence is the exception: a 1 Hz bidirectional position stream rides
+ * a WebSocket (`src/presence/wsTransport.ts`), and falls back to the SSE `presence` channel
+ * here when the upgrade is refused. Both transports draw on the stream-limit table in
+ * `src/common/streamLimits.ts`, so a device's connections are counted in one place.
  *
  * **Channels.** Every event lives on exactly one of `ops | sos | game | presence |
  * presence:exact | announce | me`. The ~20 existing `broadcast({type, data})` call sites
@@ -153,6 +153,25 @@ export function redactSos(data: unknown): {
     category: d.category,
     urgency: d.urgency,
   };
+}
+
+/**
+ * The `audience` an announcement frame declares, when it declares one. Frames without it
+ * (every event that is not an announcement) are delivered to everyone on the channel.
+ */
+function audienceOf(data: unknown): string | null {
+  const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+  const a = typeof d.audience === 'string' ? d.audience : null;
+  return a && a !== 'ALL' ? a : null;
+}
+
+/** Whether an account is in the named audience. No account means no targeted delivery. */
+function audienceReaches(audience: string, account: AccountContext | undefined): boolean {
+  if (!account) return false;
+  if (audience === 'VOLUNTEERS') return account.kind === 'VOLUNTEER';
+  if (audience === 'HACKERS') return account.kind === 'HACKER';
+  if (audience === 'STAFF') return isLeadOrAbove(account);
+  return false;
 }
 
 type AuthMode = 'legacy' | 'required';
@@ -443,12 +462,17 @@ class SSEBroadcastHub {
     const frames = new Frames(seq, ts, message.type, channel, message.data);
     const isPresence = channel === 'presence' || channel === 'presence:exact';
     const redactable = channel === 'sos';
+    // `announce` is the one public channel, so an announcement aimed at a subset of the
+    // floor is filtered HERE rather than by the client. A staff message that reaches a
+    // hacker's stream has already leaked, however carefully the UI hides it.
+    const audience = channel === 'announce' ? audienceOf(message.data) : null;
 
     for (const client of [...this.clients.values()]) {
       if (!client.channels.has(channel)) continue;
       // A lagging client gets no presence frames: the next tick supersedes them, and
       // buffering positions for a peer that is not reading is how a socket hits 512 KiB.
       if (isPresence && client.lagging) continue;
+      if (audience && !audienceReaches(audience, client.account)) continue;
       this.write(client, frames.for(client.version, redactable && !client.fullSos));
     }
   }

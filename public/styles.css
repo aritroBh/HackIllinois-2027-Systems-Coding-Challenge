@@ -711,3 +711,21 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .nearby-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nearby-kind { display: none; }
 .nearby-dist { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------------ *
+ * Announcement banner (views/announce.js)
+ * ------------------------------------------------------------------ */
+
+#announce-banner { display: grid; gap: 4px; padding: 6px 18px 0; }
+#announce-banner[hidden] { display: none; }
+.announce-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  padding: 6px 10px; border: 1px solid var(--edge); border-left-width: 4px;
+  background: var(--inset); font-size: 12px; border-radius: 3px;
+}
+.announce-row[data-tone="WARNING"] { border-left-color: var(--harvest); }
+.announce-row[data-tone="URGENT"] { border-left-color: var(--orange); }
+.announce-row[data-tone="INFO"] { border-left-color: var(--arches); }
+.announce-tone { text-transform: uppercase; letter-spacing: .08em; font-size: 10px; color: var(--ink); }
+.announce-msg { color: var(--fg); }
+.announce-by { color: var(--ink); font-size: 11px; }
