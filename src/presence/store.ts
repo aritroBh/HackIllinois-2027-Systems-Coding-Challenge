@@ -186,9 +186,26 @@ export const DEFAULT_CONFIG: StoreConfig = {
   muteMs: 60_000,
 };
 
+/**
+ * Metres of per-hour jitter added on each axis after the grid snap. See `fuzz`.
+ */
+const JITTER_METRES = 8;
+
+/**
+ * The furthest a published position can sit from the real one, in metres.
+ *
+ * A grid snap moves a point by at most half a cell of the fuzz grid, and the jitter adds up to
+ * `JITTER_METRES` on each axis on top. Anything that reasons about distance using the CELL a
+ * person is filed under, while measuring against their EXACT position, has to allow for this
+ * gap — the two are not the same point and can differ by most of a building.
+ */
+export function maxFuzzDisplacementMetres(fuzzGridMeters: number): number {
+  return fuzzGridMeters / 2 + JITTER_METRES;
+}
+
 function jitterFor(id: string, hourIndex: number): [number, number] {
   const h = crypto.createHash('sha256').update(`${id}:${hourIndex}`).digest();
-  return [((h[0] / 255) * 2 - 1) * 8, ((h[1] / 255) * 2 - 1) * 8]; // metres, ±8
+  return [((h[0] / 255) * 2 - 1) * JITTER_METRES, ((h[1] / 255) * 2 - 1) * JITTER_METRES];
 }
 
 export class PresenceStore {
@@ -608,9 +625,17 @@ export class PresenceStore {
     let worstHeld = Infinity;
     for (let ring = 0; ring <= maxRing; ring++) {
       if (out.length >= limit) {
-        // The nearest possible point in this shell. One cell of slack because the search
-        // centre sits somewhere inside its own cell rather than at a corner of it.
-        const floorDistance = Math.max(0, ring - 1) * s * this.cfg.metersPerUnit;
+        // The nearest possible EXACT position in this shell.
+        //
+        // Two slacks, and the second one is not obvious. The first is a cell: the search centre
+        // sits somewhere inside its own cell rather than at a corner of it. The second is the
+        // fuzz. Entries are filed by their PUBLISHED position — grid-snapped and jittered — and
+        // dispatch measures against the real one, so a person in shell R can genuinely be up to
+        // the maximum fuzz displacement nearer than that shell's boundary suggests. Without
+        // this term the search stopped a shell early and sent the second-nearest responder,
+        // for a reason invisible from the geometry alone.
+        const floorDistance =
+          Math.max(0, ring - 1) * s * this.cfg.metersPerUnit - maxFuzzDisplacementMetres(this.cfg.fuzzGridMeters);
         if (floorDistance > worstHeld) break;
       }
       // The shell's perimeter, generated directly rather than filtered out of the square.

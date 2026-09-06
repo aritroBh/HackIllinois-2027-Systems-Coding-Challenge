@@ -314,6 +314,52 @@ describe('dispatch search expands rings and still finds the true nearest', () =>
     expect(found.some((f) => f.e.id === 'axis')).toBe(true);
   });
 
+  it('finds somebody whose fuzz filed them a shell further out than they really are', () => {
+    // Cells are indexed by the PUBLISHED position — grid-snapped and jittered — and dispatch
+    // ranks by the EXACT one. A person can therefore sit up to eighteen metres nearer than the
+    // shell they are filed under implies, and a stopping rule that reasons from the shell
+    // boundary alone cuts the search off before reaching them.
+    //
+    // Built by hand because the random fuzz above does not reliably produce it: the
+    // arrangement needs the quota to fill just far enough out that one more shell would be
+    // skipped, with the better candidate displaced into exactly that shell.
+    const store = new PresenceStore();
+    const now = Date.now();
+    const mpu = store.cfg.metersPerUnit;
+    const cellUnits = store.cfg.cellMeters / mpu;
+
+    const put = (id: string, x: number, fx: number) => {
+      const e: PresenceEntry = {
+        id, name: id, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null, avatarHash: null,
+        onDuty: true, x, z: 0, lat: 0, lng: 0, acc: 5, h: 0, fx, fz: 0,
+        pendingFx: NaN, pendingFz: NaN, cell: '', t: now, version: 1, strikes: 0,
+        muteUntil: 0, lastSampleT: now, optIn: true,
+      };
+      (store as unknown as { entries: Map<string, PresenceEntry> }).entries.set(id, e);
+      (store as unknown as { reindex(e: PresenceEntry): void }).reindex(e);
+    };
+
+    const qx = cellUnits - 0.1; // near the far edge of cell 0
+    // Ten candidates whose fuzz keeps them in ring 1, each about 45 m away.
+    for (let i = 0; i < 10; i++) {
+      const at = qx + 4.5 + i * 0.001;
+      put(`ring1_${i}`, at, cellUnits + 0.5);
+    }
+    // And one who is genuinely NEARER — 43 m — but whose fuzz pushed them into ring 2.
+    put('displaced', qx + 4.3, 2 * cellUnits + 0.5);
+
+    const found = store.nearestVolunteers(qx, 0, 60_000, now, 10);
+    const distances = found.map((f) => f.distanceM);
+    const brute = [...store.all()]
+      .map((e) => Math.abs(e.x - qx) * mpu)
+      .sort((a, b) => a - b)
+      .slice(0, 10);
+
+    expect(distances.map((d) => d.toFixed(4))).toEqual(brute.map((d) => d.toFixed(4)));
+    // And the displaced one really is in the answer, which is the whole point.
+    expect(found.some((f) => f.e.id === 'displaced')).toBe(true);
+  });
+
   it('agrees with brute force across two hundred random populations', () => {
     // The stopping rule is a geometry argument, and geometry arguments are exactly the kind
     // that read as correct and are not. Two hand-built cases prove the two failures already
@@ -334,9 +380,20 @@ describe('dispatch search expands rings and still finds the true nearest', () =>
       for (let i = 0; i < n; i++) {
         const x = (rnd() - 0.5) * 2 * spread;
         const z = (rnd() - 0.5) * 2 * spread;
+        // The published position is NOT the real one, and this is the whole trap.
+        //
+        // Cells are indexed by the fuzzed coordinate — grid-snapped and jittered — while
+        // dispatch ranks by the exact one, so a person can sit up to eighteen metres nearer
+        // than the cell they are filed under implies. An earlier version of this fuzz set
+        // fx = x, which is a world where the two agree; it passed happily over a stopping
+        // rule that ignored the gap and cut the search a shell short.
+        const g = store.cfg.fuzzGridMeters / store.cfg.metersPerUnit;
+        const jitter = () => ((rnd() - 0.5) * 2 * 8) / store.cfg.metersPerUnit;
+        const fx = Math.round(x / g) * g + jitter();
+        const fz = Math.round(z / g) * g + jitter();
         const e: PresenceEntry = {
           id: `v${i}`, name: `v${i}`, kind: 'VOLUNTEER', role: 'VOLUNTEER', faction: null,
-          avatarHash: null, onDuty: true, x, z, lat: 0, lng: 0, acc: 5, h: 0, fx: x, fz: z,
+          avatarHash: null, onDuty: true, x, z, lat: 0, lng: 0, acc: 5, h: 0, fx, fz,
           pendingFx: NaN, pendingFz: NaN, cell: '', t: now, version: 1, strikes: 0,
           muteUntil: 0, lastSampleT: now, optIn: true,
         };
