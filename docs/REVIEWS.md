@@ -161,3 +161,60 @@ a security guard reverted by a snapshot restored during an A/B check.
 
 Both accepted findings are recorded here rather than closed silently, because a reader who
 finds them later should be able to tell a decision from an oversight.
+
+---
+
+## Round C — demo-readiness pass, 2026-09-06
+
+Not a milestone review: a pass aimed at the question "what would embarrass us in front of
+somebody who reads the code". Six reviewers — five internal (concurrency, identity/perimeter,
+presence, SOS/privacy, economy/game) and **muse** on a hashed scratch copy (tree hash
+`7066e8e0…` unchanged before and after) — plus a full documentation fact-check, plus
+`npm run e2e`, which was written for this round and drives the live HTTP surface with real
+cookies and real concurrency.
+
+Verdicts: muse `CHANGES — 0 P0, 7 P1, 1 P2`. The internal reviewers reported 5 P0, 15 P1 and
+~30 P2 between them, with several exploits executed rather than argued.
+
+### Closed
+
+| Finding | Source | Verdict | Fix |
+|---|---|---|---|
+| `ORGANIZER_SECRET` kept its committed default outside production while the other two secrets were randomised. `X-Organizer-Secret` is accepted regardless of AUTH_MODE, so the string in this repository minted a claim code for any account, and a claim code is a session. | identity reviewer, executed live | confirmed | 9619b05 |
+| Check-out wrote `COMPLETED` with no precondition, resurrecting a registration cancelled while checked in into a seat already given to the waitlist | concurrency reviewer | confirmed, reproduced | 9619b05 |
+| Check-in set the status with a read-modify-save, clobbering a cancellation that committed in the window | concurrency reviewer, muse | confirmed | 9619b05 |
+| `cancelRegistration` accepted a `COMPLETED` row, took neither branch, and walked it backwards while `filledSlots` kept counting it | concurrency reviewer | confirmed | 9619b05 |
+| `POWERUP`, `CHECKOUT` and `BOOTH` had no `karmaCaps` entry, and `capFor` fails **open** — three uncapped mints. `content/example-campus` had no `karmaCaps` at all. | economy reviewer, executed live | confirmed | d52b4de |
+| The seeded three-way trade ring could never execute: two legs handed a volunteer an uncertified shift, so `executedCount` was always 0 | `npm run e2e` | confirmed | d52b4de |
+| Seeded `filledSlots` disagreed with the rows (one shift claimed 2 filled seats with 0 registrations); a volunteer was waitlisted on a shift with a free seat | `tests/seededDemo.test.ts` | confirmed | d52b4de |
+| In `legacy` mode a caller-asserted `volunteerId` satisfied `organizerOrSecret`, `revoke`, `setRole`, the lead PII projection and `/me` — and account ids are public | identity reviewer, executed live | confirmed | 5d8d2a1 |
+| `GET /sos/tickets` returned coordinates, table text and hacker name to every volunteer, undoing the `sos` channel's own redaction | SOS reviewer + `npm run e2e` | confirmed | 5d8d2a1 |
+| A lead could acknowledge a ticket and go on-scene but not resolve it, stranding it | `npm run e2e` | confirmed | 5d8d2a1 |
+| A refused scan spent the token: a geofence miss left the volunteer's next honest scan reporting a replay attack | muse | confirmed | 6b2f1b4 |
+| `GET /swaps` was the one list route with no `validate()` — `?status[$regex]=` reached Mongo as an operator object | identity reviewer | confirmed | 6b2f1b4 |
+| `/auth/claim-codes` had no credential limiter, so guessing the organiser secret got the 600/min anonymous budget | identity reviewer | confirmed | 6b2f1b4 |
+| Booth scan and quest settlement each removed their once-only guard in a `catch` that runs *after* the award, making a once-ever reward repeatable | economy reviewer, executed live | confirmed | ff45fc3 |
+| `NEUTRAL` skipped the gym faction lock entirely, letting a bound account attack any gym including its own | economy reviewer, executed live | confirmed | ff45fc3 |
+| The per-volunteer mutex could be released by a request that no longer held it | muse | confirmed | 1436a99 (parallel session) |
+| Ten simultaneous scans of ten fresh tokens produced ten attendances and later ten payouts | parallel session, by writing the test | confirmed | d87a691 (parallel session) |
+
+### Documentation, corrected in c03e552
+
+The fact-check found 16 false, 13 misleading and 3 unsupported claims against 48 that were
+true and well-supported. The ones that mattered: ARCHITECTURE.md described a **Tarjan
+strongly-connected-components** implementation tracking `dfn[u]`/`low[u]` and a
+canonical-rotation cycle hash — the code has never contained either, and an interviewer
+asking to walk through it would have found nothing there. FORK_GUIDE opened with "nothing in
+`src/` names a building" while `resolveVenue` reads a hard-coded UIUC gazetteer that makes
+every check-in in a fork fail. PLUGINS.md described a sandboxed iframe slot, in the present
+indicative, that does not exist anywhere in the repository. CONTENT-PACKS documented three
+geofence knobs that nothing reads.
+
+### Accepted, not fixed
+
+Recorded so a later reader can tell a decision from an oversight. See the open list in the
+session report: the dispatch distance oracle (10 m buckets against ~20 m fuzz), the audit row
+that records `'dispatch'` rather than the reader, SSE authorisation snapshotted at connect,
+the per-volunteer lock covering only `reserveShift`, the cascade's bare `catch`, the cycle
+finder's handling of a volunteer holding two pending proposals, and the absence of a shift
+time-window check on check-in.
