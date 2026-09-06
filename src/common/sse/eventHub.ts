@@ -70,7 +70,18 @@ export const CHANNELS: ReadonlySet<Channel> = new Set<Channel>([
   'me',
 ]);
 
-export const DEFAULT_CHANNELS: readonly Channel[] = ['ops', 'sos', 'game', 'announce'];
+/**
+ * `me` is in the defaults because it is *targeted*: nothing is broadcast on it, so a client
+ * subscribed to it receives only frames addressed to that client's own account and the
+ * subscription costs nothing.
+ *
+ * Leaving it out made the guarantee the SOS code documents — "the ticket's own parties get
+ * the full ticket over the targeted `me` channel" — quietly conditional on the client having
+ * asked for a channel it had no way to know it needed. The shipped dashboard does ask; a
+ * fork, a second client, or anything using the default set silently never received its own
+ * ticket, with no error to notice.
+ */
+export const DEFAULT_CHANNELS: readonly Channel[] = ['ops', 'sos', 'game', 'announce', 'me'];
 
 /** Channels whose events are held for replay. Presence is ephemeral; `me` is targeted. */
 const REPLAY_CHANNELS: ReadonlySet<Channel> = new Set<Channel>(['ops', 'sos', 'game', 'announce']);

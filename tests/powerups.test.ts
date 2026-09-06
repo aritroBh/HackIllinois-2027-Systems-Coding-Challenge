@@ -12,6 +12,9 @@ import { app } from '../src/app';
 import { env } from '../src/config/env';
 import { Volunteer, AccountKind, VolunteerRole } from '../src/models/volunteer.model';
 import { Gym, Faction } from '../src/models/gym.model';
+import { Shift, ShiftCategory } from '../src/models/shift.model';
+import { Registration, RegistrationStatus } from '../src/models/registration.model';
+import { uniqueKey } from './helpers/uniqueKey';
 import { PowerUpInventory, PowerUpType } from '../src/models/powerup.model';
 import { HackStop } from '../src/models/hackstop.model';
 import { HackStopService } from '../src/services/hackstop.service';
@@ -246,5 +249,68 @@ describe('a rota is a position with a timetable attached', () => {
     const { agent } = await signIn(victim.id);
     const mine = await agent.get('/api/v1/me/shifts');
     expect(mine.status).toBe(200);
+  });
+});
+
+describe('taking somebody off the map is not something you can claim', () => {
+  it('refuses PATCH /me/presence to a claimed identity', async () => {
+    // On `requireAccount` alone this was a one-request way to remove any named person from
+    // the presence store and drop their SSE session — and because a claimed identity is not a
+    // session, the CSRF check was skipped too.
+    const victim = await Volunteer.create({
+      name: 'Optin Ola', email: `oo-${Date.now()}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER, presenceOptIn: true,
+    });
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app)
+        .patch(`/api/v1/me/presence?volunteerId=${victim.id}`)
+        .send({ optIn: false });
+      expect(claimed.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+    expect((await Volunteer.findById(victim._id))!.presenceOptIn).toBe(true);
+  });
+});
+
+describe('the next shift is one you can still turn up to', () => {
+  it('skips a shift already worked and a place in a queue', async () => {
+    // "Has not finished" is not "is still yours to work". A shift checked out of at 11:30
+    // keeps an endTime of 14:00, so it stayed at the head of the list and the Me tab offered
+    // it as next — and the token button refuses a COMPLETED registration, so the volunteer
+    // could not mint a token for the shift they were actually about to work.
+    const vol = await Volunteer.create({
+      name: 'Next Nel', email: `nn-${Date.now()}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    const done = await Shift.create({
+      title: 'Worked already', description: 'x', category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000),
+      capacity: 4, baseKarma: 10,
+    });
+    const real = await Shift.create({
+      title: 'Actually next', description: 'x', category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() + 1800_000), endTime: new Date(Date.now() + 7200_000),
+      capacity: 4, baseKarma: 10,
+    });
+    await Registration.create({ shiftId: done._id, volunteerId: vol._id, status: RegistrationStatus.COMPLETED, idempotencyKey: uniqueKey('done') });
+    await Registration.create({ shiftId: real._id, volunteerId: vol._id, status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('real') });
+
+    const { agent } = await signIn(vol.id);
+    const res = await agent.get('/api/v1/me/shifts');
+    expect(res.status).toBe(200);
+    expect(res.body.data.next.title).toBe('Actually next');
+    expect(res.body.data.next.status).toBe(RegistrationStatus.CONFIRMED);
+    // And neither /me/card nor /me is left in a shared browser's HTTP cache. The card
+    // carried an explicit day-long directive; /me carried none at all, which with an ETag
+    // and no directives is heuristically cacheable — the same defect, one route further on.
+    const card = await agent.get('/api/v1/me/card');
+    expect(card.headers['cache-control']).toBe('no-store');
+    const profile = await agent.get('/api/v1/me');
+    expect(profile.headers['cache-control']).toBe('no-store');
   });
 });

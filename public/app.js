@@ -15,6 +15,15 @@
 
 let shiftsCache = [];
 let volunteersCache = [];
+/**
+ * Bumped on every handover, so a response addressed to the departed account can be dropped.
+ *
+ * The same guard `me.js` and `quests.js` carry. Clearing the cache synchronously closes the
+ * idle window; this closes the in-flight one, where A's inventory request resolves after the
+ * clear and writes A's items back under B's name — and the sticker book derives from that
+ * cache, so it is not only the bag that would be wrong.
+ */
+let handoverGeneration = 0;
 let currentQrToken = null;
 let currentQrVolunteerId = null;
 let currentQrShiftId = null;
@@ -1239,8 +1248,11 @@ async function resolveCyclicTrade() {
 async function setupDefaultQr() {
   if (volunteersCache.length === 0 || shiftsCache.length === 0) return;
 
+  // Whose lookup this is. See `handoverGeneration`.
+  const mineGen = handoverGeneration;
   try {
     const json = await Nexus.api('/api/v1/registrations?status=CONFIRMED', { lenient: true });
+    if (mineGen !== handoverGeneration) return; // the account this was for has left the device
     // The attendance token is minted for the SESSION's own registration: the server derives
     // the volunteer from the session, so picking anyone else's row just fails the
     // "does not hold a confirmed spot" check. Prefer mine, fall back to the first row for
@@ -1252,7 +1264,7 @@ async function setupDefaultQr() {
     if (reg) {
       currentQrVolunteerId = reg.volunteerId._id ?? reg.volunteerId;
       currentQrShiftId = reg.shiftId._id ?? reg.shiftId;
-      await refreshQrToken();
+      await refreshQrToken(mineGen);
       return;
     }
   } catch (err) {
@@ -1262,10 +1274,22 @@ async function setupDefaultQr() {
   logQrTerminal('No confirmed registration yet — claim a shift on Shift Radar, then come back.');
 }
 
-async function refreshQrToken() {
+/**
+ * `mineGen` is the handover generation this refresh belongs to.
+ *
+ * `clearQrToken()` closes the *idle* window — the token sitting on screen when the device
+ * changes hands. This closes the in-flight one, which is the dangerous half: the countdown
+ * fires a refresh, the handover lands while the POST is in flight, and the response then
+ * writes the departed account's live HMAC back into `currentQrToken` and into `#qr-local`
+ * and restarts the countdown. The new user sits looking at somebody else's credential with
+ * the clock running, and a desk scanning it inside the window checks the departed volunteer
+ * in and pays them — the exact outcome `clearQrToken()` was written to prevent.
+ */
+async function refreshQrToken(mineGen = handoverGeneration) {
   if (!currentQrVolunteerId || !currentQrShiftId) return;
   try {
     const json = await Nexus.api('/api/v1/attendance/token', { method: 'POST', body: { volunteerId: currentQrVolunteerId, shiftId: currentQrShiftId }, lenient: true });
+    if (mineGen !== handoverGeneration) return; // the account this token belongs to has left
 
     if (json.success) {
       currentQrToken = json.data.token;
@@ -1280,6 +1304,34 @@ async function refreshQrToken() {
   } catch (err) {
     logQrTerminal(`[ERROR] ${err.message}`);
   }
+}
+
+/**
+ * Forget the Trainer tab's attendance token, and take it off the screen.
+ *
+ * The token is an HMAC over (volunteer, shift, time slice) and a desk scanner accepts it: it
+ * checks that volunteer in and pays them. It lived in three module variables and in the text
+ * of `#qr-local`, and the handover cleared none of them — so on a shared laptop the next
+ * person sat down looking at the previous person's live credential, with the countdown still
+ * running. Anyone at the desk within the thirty-second window could scan it and check the
+ * departed volunteer in.
+ *
+ * `me.js` grew a `clearToken()` for exactly this in round eight; the older Trainer path has
+ * its own copy of the same credential and was missed. Clearing the DOM text matters as much
+ * as clearing the variables: the refresh under the new session fails the "does not hold a
+ * confirmed spot" check and leaves whatever was there before untouched.
+ */
+function clearQrToken() {
+  if (qrCountdownTimer) { clearInterval(qrCountdownTimer); qrCountdownTimer = null; }
+  currentQrToken = null;
+  currentQrVolunteerId = null;
+  currentQrShiftId = null;
+  const local = document.getElementById('qr-local');
+  if (local) local.innerText = '';
+  const text = document.getElementById('countdown-text');
+  if (text) text.innerText = 'No live token';
+  const fill = document.getElementById('countdown-fill');
+  if (fill) fill.style.width = '0%';
 }
 
 function startQrCountdown(seconds) {
@@ -1628,8 +1680,12 @@ document.getElementById('loot-drop-modal')?.addEventListener('click', (e) => {
 async function loadUserInventory() {
   const me = window.Nexus?.session?.user ? sessionAsVolunteer(window.Nexus.session.user) : volunteersCache[0];
   if (!me) return; // startup ordering, not a user action
+  // Whose request this is. See `handoverGeneration`.
+  const mine = handoverGeneration;
   try {
-    userInventoryCache = await apiGet(`/api/v1/pokeshift/inventory/${encodeURIComponent(me._id)}`);
+    const items = await apiGet(`/api/v1/pokeshift/inventory/${encodeURIComponent(me._id)}`);
+    if (mine !== handoverGeneration) return; // the account this was for has left the device
+    userInventoryCache = items;
     renderUserInventory();
     window.game?.renderTrainer();
   } catch (err) {
@@ -2207,9 +2263,20 @@ async function init() {
    * window shows nothing rather than somebody else's things.
    */
   Nexus.onEvent('session:handover', () => {
+    handoverGeneration += 1;
     userInventoryCache = [];
     currentVolunteerFaction = 'NEUTRAL';
     renderUserInventory();
+    clearQrToken();
+    // And load the new account's own things.
+    //
+    // `setUser` emits `session` and then `session:handover` synchronously, so the sign-in
+    // listener has already started the *new* user's inventory request with the *old*
+    // generation — which the bump above then invalidates, so their own response is thrown
+    // away. Without this reload the incoming user's bag and sticker book stay empty until
+    // they happen to navigate to a tab that refetches. `me.js` and `quests.js` both reload
+    // here for the same reason; this handler was the one that only cleared.
+    void loadUserInventory();
   });
   await fetchVolunteers();
   await fetchShifts();

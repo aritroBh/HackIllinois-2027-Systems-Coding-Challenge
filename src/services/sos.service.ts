@@ -71,6 +71,23 @@ const ON_DUTY_GRACE_MS = 30 * 60_000;
 const isLeadRole = (role?: string): boolean => /SHIFT_LEAD|ORGANIZER|ADMIN/.test(role ?? '');
 
 /**
+ * A lead who *proved* it, for the decisions that disclose somebody else's position.
+ *
+ * `legacy` mode believes a `volunteerId` in the body or query, and `GET /volunteers` hands
+ * out account ids and roles to anonymous callers — so a claimed lead is one public string
+ * away from anybody. Five earlier fixes established that staff *reads* must check
+ * `source === 'session'`; the two below never got it, which meant the full ticket document
+ * and the exact dispatch distances were readable without a credential, reopening the ranging
+ * oracle round four closed and the coordinate disclosure round C closed.
+ *
+ * Deliberately narrower than `isLeadRole`: the lifecycle *actions* (reassign, the lead
+ * override on acknowledge and resolve) stay as they are, because `legacy` is documented as an
+ * open demo for actions. Disclosure is the thing that cannot be taken back.
+ */
+const isProvenLead = (viewer?: { role?: string; source?: string }): boolean =>
+  viewer?.source === 'session' && isLeadRole(viewer.role);
+
+/**
  * Distances shown to non-leads are rounded to this, so they cannot be used to range.
  *
  * Twenty-five metres, not ten, and measured against the *published* position rather than
@@ -180,7 +197,7 @@ export class SOSService {
    * calculates Haversine distance to the ticket coordinates,
    * and dispatches the closest volunteer.
    */
-  public static async dispatchNearestVolunteer(ticketId: string, viewer?: { id?: string; role?: string }): Promise<{
+  public static async dispatchNearestVolunteer(ticketId: string, viewer?: { id?: string; role?: string; source?: string }): Promise<{
     ticket: ISOSTicket;
     dispatchedVolunteer: Record<string, unknown>;
     distanceMeters: number | null;
@@ -338,7 +355,7 @@ export class SOSService {
       throw ApiError.conflict('No on-duty volunteer matches the required skill for this ticket.', ErrorCode.MISSING_SKILL_CERTIFICATION);
     }
 
-    const isLead = /SHIFT_LEAD|ORGANIZER|ADMIN/.test(viewer?.role ?? '');
+    const isLead = isProvenLead(viewer);
 
     // 3. CAS the ticket OPEN -> DISPATCHED so concurrent dispatchers can't double-assign.
     const dispatched = await SOSTicket.findOneAndUpdate(
@@ -746,7 +763,12 @@ export class SOSService {
       category: resolved.category,
       venueKey: resolvedVenue.matched ? resolvedVenue.key : null,
       karmaBounty: resolved.karmaBounty,
-      volunteerId,
+      // The earner, not the actor. `vol`, `karmaAwarded` and `totalKarma` below are all read
+      // from `earnerId`; this one field was the caller. When a lead closes a ticket on the
+      // dispatched responder's behalf the two differ, and the frame then said "this id" with
+      // somebody else's name and somebody else's balance — so the lead's own client saw its
+      // own id and wrote the responder's karma total over its own header.
+      volunteerId: earnerId,
       volunteerName: vol ? vol.name : 'Volunteer',
       karmaAwarded: grantedKarma,
       totalKarma: vol ? vol.karmaPoints : 0,
@@ -783,20 +805,30 @@ export class SOSService {
    */
   public static async listTickets(
     status?: SOSTicketStatus,
-    viewer?: { id?: string; role?: string }
+    viewer?: { id?: string; role?: string; source?: string }
   ): Promise<Array<ISOSTicket | Record<string, unknown>>> {
     const query = status ? { status } : {};
     const tickets = await SOSTicket.find(query)
       .populate('assignedVolunteerId', 'name role')
       .sort({ createdAt: -1 });
-    if (isLeadRole(viewer?.role)) return tickets;
+    if (isProvenLead(viewer)) return tickets;
     return tickets.map((t) => {
       // The parties to a ticket keep their own copy whole: the person who raised it, and
       // whoever has been sent to them. Redacting those would hide the address from the one
       // volunteer who has to walk to it.
+      //
+      // `source === 'session'`, for the same reason `isProvenLead` needs it, and this is the
+      // hole that fix left open. Being a party is decided by an id, and in `legacy` mode an
+      // id is claimed rather than proved while `GET /volunteers` hands account ids to
+      // anonymous callers. So `?volunteerId=<any public id>` matched `createdById` and
+      // returned that person's ticket whole — coordinates, table text, hacker name,
+      // description, medical category — to a caller with no credential. Tightening only the
+      // lead path moved the disclosure one branch down rather than closing it; a claimed
+      // identity now gets the redacted shape like every other unproven caller.
       const isParty =
-        (!!viewer?.id && sameId(t.createdById, viewer.id)) ||
-        (!!viewer?.id && sameId(t.assignedVolunteerId, viewer.id));
+        viewer?.source === 'session' &&
+        !!viewer.id &&
+        (sameId(t.createdById, viewer.id) || sameId(t.assignedVolunteerId, viewer.id));
       if (isParty) return t;
       return {
         _id: t._id,

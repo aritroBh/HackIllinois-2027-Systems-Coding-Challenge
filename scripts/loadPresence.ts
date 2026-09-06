@@ -10,7 +10,7 @@
  *   npm run bench:presence -- --clients 5000 --devices 2 --seconds 120
  *   npm run bench:presence -- --clients 5000 --storm 10        # 10 % reconnect within 60 s
  *
- * **What the numbers have to say.** Phase one, steady state: tick CPU p95 under 200 ms (the
+ * **What the numbers have to say.** Phase one, steady state: tick CPU p95 under 30 ms (the
  * first rung of the load ladder), the longest event-loop block under about 15 ms, the ladder
  * never leaving rung 0, zero cross-transport evictions, and no 1013 close for an account
  * inside its slot budget. Phase two, reconnect storm: a reconnecting account never evicts its
@@ -18,7 +18,11 @@
  *
  * The tick budget is stated as CPU rather than wall clock on purpose. The tick is sliced
  * across the second (see `PresenceService.tick`), so its wall-clock span is meaningless and
- * its blocking behaviour is a separate measurement. A CPU figure of two hundred milliseconds
+ * its blocking behaviour is a separate measurement. Thirty milliseconds is the rung-0
+ * threshold the load ladder itself uses (`PresenceService`), which is why the gate enforces
+ * it: a run that stays under it is a run the ladder never had reason to step down from. The
+ * docblock used to say two hundred while the gate checked thirty — a reader tuning to the
+ * comment would have been six times over the line the code draws. Two hundred milliseconds
  * is a fifth of the one-second cadence: past that, presence is a large enough share of the
  * process to start showing up in unrelated request latency, which is exactly when the ladder
  * should be trimming the ring rather than the operator finding out from a complaint.
@@ -329,7 +333,18 @@ async function main(): Promise<number> {
   row('outbound < 1 MB/s', `${(rxPeak / 1024).toFixed(0)} KB/s peak`, rxPeak < 1024 * 1024);
   row('cluster-only fallback never triggered', String(clusterTriggered), !clusterTriggered);
   row('no 1013 closes inside the slot budget', String(closes1013), closes1013 === 0);
-  row('sockets held', `${held}/${open}`, held >= open * 0.95);
+  // Sockets actually opened, before anything about how they behaved.
+  //
+  // Every row below this one is a function of load, and every one of them is trivially green
+  // at zero: `held >= open * 0.95` is `0 >= 0`, the tick p95 of an idle server is small, no
+  // bandwidth is a small number, and a fallback that never triggered did not trigger. Point
+  // the harness at the wrong URL, at a server with PRESENCE_ENABLED off, or break the CSRF
+  // subprotocol, and it printed `M4b: PASS` for a run that measured nothing at all. The
+  // provisioning row added earlier gates the accounts; this gates the connections, which is
+  // the thing the gate is actually about.
+  const wanted = args.clients * args.devices;
+  row('sockets opened', `${open}/${wanted}`, open >= wanted * 0.98);
+  row('sockets held', `${held}/${open}`, open > 0 && held >= open * 0.95);
   // The load the gate was asked for, asserted rather than assumed.
   //
   // Every threshold above is a function of how many clients actually connected, and the run
@@ -345,7 +360,9 @@ async function main(): Promise<number> {
   console.log(`\n      leg: ${args.from.length > 1 ? `${args.from.length} source addresses (untrusted-capable)` : 'one source address (trusted-egress leg only)'}`);
 
   const provisionedEnough = clients.length >= args.clients * 0.98;
-  const passed = provisionedEnough && tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
+  const connectedEnough = open >= args.clients * args.devices * 0.98 && held >= open * 0.95;
+  const passed =
+    provisionedEnough && connectedEnough && tickP95 < 30 && rxPeak < 1024 * 1024 && !clusterTriggered && closes1013 === 0 && stormOk;
   console.log(passed ? '\nM4b: PASS' : '\nM4b: FAIL');
   return passed ? 0 : 1;
 }

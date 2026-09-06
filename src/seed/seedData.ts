@@ -19,6 +19,9 @@
  * between seeding and serving, or set `MONGODB_URI` so both attach to the same database.
  */
 import mongoose from 'mongoose';
+// Registers every model, so the wipe below covers all of them rather than only the ones this
+// file happens to import. `tests/setup.ts` imports it for the same reason.
+import '../models';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { Volunteer, VolunteerRole, PrestigeTier } from '../models/volunteer.model';
@@ -26,11 +29,6 @@ import { Registration, RegistrationStatus } from '../models/registration.model';
 import { ShiftSwap, SwapStatus } from '../models/swap.model';
 import { Gym, Faction } from '../models/gym.model';
 import { HackStop } from '../models/hackstop.model';
-import { CheckIn } from '../models/checkin.model';
-import { SOSTicket } from '../models/sosTicket.model';
-import { PowerUpInventory } from '../models/powerup.model';
-import { IdempotencyRecord } from '../models/idempotency.model';
-import { ReservationLock } from '../models/reservationLock.model';
 import { HACKILLINOIS_VENUES } from '../common/utils/geo';
 
 export async function seedDatabase(): Promise<void> {
@@ -49,22 +47,20 @@ export async function seedDatabase(): Promise<void> {
   // headline trade ring came to be wired so that it could never execute.
   if (mongoose.connection.readyState !== 1) await connectDatabase();
 
-  // Clear existing collections (every collection, including attendance,
-  // SOS, inventory, and lock/idempotency state — stale check-in nonces or
-  // locks from a previous seed otherwise leak into the fresh dataset).
-  await Promise.all([
-    Shift.deleteMany({}),
-    Volunteer.deleteMany({}),
-    Registration.deleteMany({}),
-    ShiftSwap.deleteMany({}),
-    Gym.deleteMany({}),
-    HackStop.deleteMany({}),
-    CheckIn.deleteMany({}),
-    SOSTicket.deleteMany({}),
-    PowerUpInventory.deleteMany({}),
-    IdempotencyRecord.deleteMany({}),
-    ReservationLock.deleteMany({}),
-  ]);
+  // Every collection, and this time actually every collection.
+  //
+  // The list used to name eleven models while the comment claimed all of them, and the ones
+  // it missed are precisely the ones that make a second run behave differently from the
+  // first: `BoothScan` is a once-ever guard, so re-seeding left every sponsor booth already
+  // scanned and answering 409; `QuestProgress` left quests pre-completed; `KarmaLedger`,
+  // `BountyLedger` and `StickerLedger` left part of the day's caps already spent, so the
+  // demo's economy started somewhere in the middle of a day nobody had played.
+  //
+  // Enumerated from `mongoose.models` rather than by hand, because a hand-written list is a
+  // thing that goes stale silently — which is exactly what happened. A model added tomorrow
+  // is wiped tomorrow without anybody remembering to come back here.
+  const collections = Object.values(mongoose.models);
+  await Promise.all(collections.map((model) => model.deleteMany({})));
 
 
   const now = new Date();

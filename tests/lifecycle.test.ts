@@ -266,3 +266,263 @@ describe('a shift has to be happening', () => {
     ).resolves.toBeTruthy();
   });
 });
+
+describe('what is recorded is what was paid', () => {
+  /**
+   * `CheckIn.karmaAwarded` and `Registration.earnedKarma` are what a disputed balance is
+   * reconstructed from, and both were written with the *advertised* figure — computed from
+   * the surge multiplier — while the ledger, the balance and the broadcast all carried the
+   * figure the daily cap actually allowed. A volunteer past their CHECKOUT cap therefore had
+   * two rows saying they were paid one number against a ledger saying another, permanently.
+   *
+   * Every sibling path was already corrected to *report* the granted figure. This one has to
+   * persist it too.
+   */
+  it('a capped check-out records the granted karma, not the offered karma', async () => {
+    const { KarmaService } = await import('../src/services/karma.service');
+    const { pack } = await import('../src/content/loader');
+    const cap = pack.event.karmaCaps.CHECKOUT;
+
+    const shift = await makeShift(2);
+    const jo = await makeVolunteer('Jo');
+    const { registration: reg } = await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(jo._id),
+      idempotencyKey: uniqueKey('jo'),
+    });
+
+    // Spend the whole day's CHECKOUT allowance before the shift is closed.
+    await KarmaService.awardKarma(String(jo._id), cap, 'CHECKOUT', { reason: 'pre-spent' });
+
+    await Registration.updateOne(
+      { _id: reg._id },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } }
+    );
+    const checkIn = await CheckIn.create({
+      registrationId: reg._id,
+      volunteerId: jo._id,
+      shiftId: shift._id,
+      checkInTime: new Date(Date.now() - 60 * 60 * 1000),
+      nonce: uniqueKey('nonce'),
+      verifiedBy: 'TEST_DESK',
+    });
+
+    const closed = await CheckInService.checkOut(String(checkIn._id), String(jo._id));
+
+    // Nothing was granted — the cap was already exhausted — so nothing is what both rows say.
+    expect(closed.karmaAwarded).toBe(0);
+    expect((await CheckIn.findById(checkIn._id))!.karmaAwarded).toBe(0);
+    expect((await Registration.findById(reg._id))!.earnedKarma).toBe(0);
+  });
+});
+
+describe('a check-in that already happened stays answerable', () => {
+  /**
+   * The idempotent "you are already checked in" answer sat below the shift window, the
+   * coordinate requirement and the geofence — so a *successful* check-in became
+   * un-returnable the moment any of those stopped holding. A desk retrying after a restart,
+   * at 18:35, for a shift that ended at 18:00, was told the shift was over rather than being
+   * handed the attendance it had already recorded.
+   */
+  it('returns the existing record even once the shift window has closed', async () => {
+    const start = new Date(Date.now() - 3 * 3600_000);
+    const shift = await Shift.create({
+      title: 'Window Closed Shift',
+      description: 'Ended two hours ago',
+      category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: start,
+      endTime: new Date(start.getTime() + 3600_000),
+      capacity: 2,
+      requiredSkills: [],
+    });
+    const kim = await makeVolunteer('Kim');
+    const { registration: reg } = await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(kim._id),
+      idempotencyKey: uniqueKey('kim'),
+    });
+
+    // Kim checked in while the shift was running.
+    await Registration.updateOne(
+      { _id: reg._id },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: start } }
+    );
+    const existing = await CheckIn.create({
+      registrationId: reg._id,
+      volunteerId: kim._id,
+      shiftId: shift._id,
+      checkInTime: start,
+      nonce: uniqueKey('nonce'),
+      verifiedBy: 'TEST_DESK',
+    });
+
+    // The desk retries now, long after the window closed, with a fresh token.
+    const { token } = await CheckInService.generateToken(String(kim._id), String(shift._id));
+    const { checkIn } = await CheckInService.verifyAndCheckIn(token, 'TEST_DESK', {
+      latitude: 40.113725,
+      longitude: -88.224905,
+    });
+    expect(String(checkIn._id)).toBe(String(existing._id));
+  });
+});
+
+describe('the paid interval is the shift, not the visit', () => {
+  /**
+   * Check-in opens thirty minutes before a shift starts, deliberately — volunteers turn up
+   * early and a desk should be able to scan them. The clamp added with the check-out fix
+   * capped the *end* of the paid interval and left the start wherever the scan happened, so
+   * arriving early was paid as work. `timeFactor` saturates at one hour, so it bites hardest
+   * on short visits: half an hour early plus five minutes present reads as thirty-five
+   * minutes and pays 0.58 of the award instead of 0.08.
+   */
+  it('does not pay for the half hour before the shift started', async () => {
+    const start = new Date(Date.now() + 5 * 60_000); // starts in five minutes
+    const shift = await Shift.create({
+      title: 'Early Bird Shift',
+      description: 'Two hours, scanned early',
+      category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: start,
+      endTime: new Date(start.getTime() + 2 * 3600_000),
+      capacity: 2,
+      requiredSkills: [],
+    });
+    const early = await makeVolunteer('Early Erin');
+    const { registration: reg } = await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(early._id),
+      idempotencyKey: uniqueKey('early'),
+    });
+    await Registration.updateOne(
+      { _id: reg._id },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } }
+    );
+    // Scanned twenty-five minutes before the shift starts, and checks out now.
+    const checkIn = await CheckIn.create({
+      registrationId: reg._id,
+      volunteerId: early._id,
+      shiftId: shift._id,
+      checkInTime: new Date(start.getTime() - 25 * 60_000),
+      nonce: uniqueKey('nonce'),
+      verifiedBy: 'TEST_DESK',
+    });
+
+    const closed = await CheckInService.checkOut(String(checkIn._id), String(early._id));
+
+    // Nothing of the shift has happened yet, so the floor is one minute — not the
+    // twenty-five that elapsed in the queue before the doors opened.
+    expect(closed.durationMinutes).toBe(1);
+    expect((await Volunteer.findById(early._id))!.hoursServed).toBeLessThan(0.1);
+  });
+});
+
+describe('the idempotent answer is not a remote oracle', () => {
+  /**
+   * The "you are already checked in" short-circuit exists so a desk retrying after a restart,
+   * past the end of the shift, is handed the attendance it already recorded rather than told
+   * the shift is over. Returning a 200 and an attendance row is also a *disclosure* — it says
+   * this person is checked in right now — so it sits above the shift window and below the two
+   * gates that establish the caller is a desk at the venue with a GPS fix.
+   */
+  it('still refuses when no coordinates are sent, even for a checked-in volunteer', async () => {
+    const start = new Date(Date.now() - 3 * 3600_000);
+    const shift = await Shift.create({
+      title: 'Oracle Shift',
+      description: 'Ended two hours ago',
+      category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: start,
+      endTime: new Date(start.getTime() + 3600_000),
+      capacity: 2,
+      requiredSkills: [],
+    });
+    const sam = await makeVolunteer('Sam');
+    const { registration: reg } = await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(sam._id),
+      idempotencyKey: uniqueKey('sam'),
+    });
+    await Registration.updateOne(
+      { _id: reg._id },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: start } }
+    );
+    await CheckIn.create({
+      registrationId: reg._id,
+      volunteerId: sam._id,
+      shiftId: shift._id,
+      checkInTime: start,
+      nonce: uniqueKey('nonce'),
+      verifiedBy: 'TEST_DESK',
+    });
+
+    const { token } = await CheckInService.generateToken(String(sam._id), String(shift._id));
+    // No coordinates: the caller has not shown they are anywhere near the desk.
+    await expect(CheckInService.verifyAndCheckIn(token, 'TEST_DESK')).rejects.toThrow(
+      /GPS coordinates are required/
+    );
+
+    // And one far from the venue is refused by the geofence rather than answered.
+    const { token: second } = await CheckInService.generateToken(String(sam._id), String(shift._id));
+    await expect(
+      CheckInService.verifyAndCheckIn(second, 'TEST_DESK', { latitude: 41.8781, longitude: -87.6298 })
+    ).rejects.toThrow(/Geofence/);
+  });
+});
+
+describe('a check-out that claims nothing pays nothing', () => {
+  /**
+   * The `CHECKED_IN -> COMPLETED` CAS had its return value discarded while the hours `$inc`
+   * and `KarmaService.awardKarma` ran unconditionally underneath it. The status pre-check
+   * above narrows the window but cannot close it: a cancellation committing between the
+   * pre-check and the CAS hands the seat to a waitlister, the CAS matches nothing — and the
+   * volunteer who cancelled was still credited the hours and paid, while the promoted
+   * volunteer is paid for the same seat later. One seat, two payouts.
+   */
+  it('refuses, pays nothing, and leaves the check-in retryable when the seat has moved on', async () => {
+    const shift = await makeShift(2);
+    const pat = await makeVolunteer('Pat');
+    const { registration: reg } = await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(pat._id),
+      idempotencyKey: uniqueKey('pat'),
+    });
+    await Registration.updateOne(
+      { _id: reg._id },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } }
+    );
+    const checkIn = await CheckIn.create({
+      registrationId: reg._id,
+      volunteerId: pat._id,
+      shiftId: shift._id,
+      checkInTime: new Date(Date.now() - 60 * 60 * 1000),
+      nonce: uniqueKey('nonce'),
+      verifiedBy: 'TEST_DESK',
+    });
+
+    const before = (await Volunteer.findById(pat._id))!;
+
+    // The interleaving: the seat is handed to a waitlister after the pre-check has read the
+    // row and before the CAS runs. Reported to the pre-check as still CHECKED_IN while the
+    // stored row is CANCELLED is precisely that window, and it is the only way to stand in
+    // it deterministically without two processes.
+    await Registration.updateOne({ _id: reg._id }, { $set: { status: RegistrationStatus.CANCELLED } });
+    jest
+      .spyOn(Registration, 'findById')
+      .mockReturnValueOnce({ select: () => Promise.resolve({ status: RegistrationStatus.CHECKED_IN }) } as never);
+
+    await expect(CheckInService.checkOut(String(checkIn._id), String(pat._id))).rejects.toThrow(
+      /changed while the check-out was in flight/
+    );
+    jest.restoreAllMocks();
+
+    // Nothing was paid, and nothing was credited.
+    const after = (await Volunteer.findById(pat._id))!;
+    expect(after.karmaPoints).toBe(before.karmaPoints);
+    expect(after.hoursServed).toBe(before.hoursServed);
+    // And the check-in is still open, so a retry can observe the settled state rather than
+    // being told it already checked out.
+    const reread = await CheckIn.findById(checkIn._id);
+    expect(reread!.checkOutTime).toBeUndefined();
+  });
+});

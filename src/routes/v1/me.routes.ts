@@ -5,7 +5,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireAccount, requireSession } from '../../middleware/identity';
 import { Volunteer } from '../../models/volunteer.model';
-import { Registration } from '../../models/registration.model';
+import { Registration, RegistrationStatus } from '../../models/registration.model';
 import { PowerUpInventory } from '../../models/powerup.model';
 import { SOSTicket, SOSTicketStatus } from '../../models/sosTicket.model';
 import { QuestService } from '../../services/quest.service';
@@ -34,6 +34,15 @@ meRouter.get('/', requireAccount, async (req: Request, res: Response, next: Next
     // address book keyed by a public id. Everything else here is game-facing and already
     // readable from the leaderboard, so the rest of the shape is unchanged.
     if (req.account!.source !== 'session') profile.email = null;
+    // `no-store`, like every sibling route on this router.
+    //
+    // This one was the exception, and it is the route that carries the email. Express sends
+    // an ETag and no cache directives, which makes the response *heuristically* cacheable:
+    // on a shared laptop the next account's `GET /me` could be answered from disk with the
+    // previous account's profile, without touching the network and therefore past the
+    // handover's generation counter and every server-side guard. That is the same defect the
+    // `/me/card` header just fixed; it was on two routes, not one.
+    res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ success: true, data: { account: profile, source: req.account!.source } });
   } catch (error) {
     next(error);
@@ -45,7 +54,15 @@ meRouter.get('/', requireAccount, async (req: Request, res: Response, next: Next
  * receiving other players' positions (the session's interest computation returns nothing
  * for a client with no published position of its own).
  */
-meRouter.patch('/presence', requireAccount, validate(patchPresencePrefSchema), async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`: this writes to the account and evicts it from the presence store.
+ *
+ * On `requireAccount` alone, a legacy `?volunteerId=` was enough to set somebody else's
+ * `presenceOptIn` to false, remove them from the store and drop their SSE session — a
+ * one-request way to take any named person off the map, with no session and (because a
+ * claimed identity is not a session) no CSRF check either.
+ */
+meRouter.patch('/presence', requireSession, requireAccount, validate(patchPresencePrefSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.account!.id;
     const optIn = req.body.optIn === true;
@@ -101,9 +118,27 @@ meRouter.get('/shifts', requireSession, requireAccount, async (req: Request, res
           active: new Date(s.startTime).getTime() <= now && now <= new Date(s.endTime).getTime(),
         };
       });
-    // The one the UI actually needs: the soonest shift that has not finished.
+    // The one the UI actually needs: the soonest shift this volunteer can still turn up to.
+    //
+    // "Has not finished" is not the same as "is still theirs to work". A shift checked out of
+    // at 11:30 keeps an `endTime` of 14:00, so it stayed at the head of this list and the Me
+    // tab offered it as next — and the token button refuses a COMPLETED registration, so the
+    // volunteer could not mint a token for the shift they were actually about to work until
+    // the finished one's clock ran out. WAITLISTED does the same thing from the other end:
+    // a place in a queue is not an assignment, and showing it as next hides the confirmed
+    // shift behind it.
+    //
+    // `SWAP_PENDING` is in the set because it is schedule-occupying (see
+    // `registration.model.ts`), and it is never written today — swaps rewrite the
+    // registration in place. Whoever wires it up must change `CheckInService.generateToken`
+    // and `verifyAndCheckIn` at the same time: both accept only CONFIRMED and CHECKED_IN, so
+    // a shift offered as next here would refuse to mint a token at the desk. Checking in has
+    // to cancel the pending swap as well, or the trade could hand the shift away underneath
+    // an attendance row. Flagged by a reviewer as a live P1; it is unreachable until that
+    // status is written, and is recorded here rather than fixed speculatively.
+    const workable = new Set([RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN, RegistrationStatus.SWAP_PENDING]);
     const upcoming = shifts
-      .filter((s) => new Date(s.endTime).getTime() > now && s.status !== 'CANCELLED')
+      .filter((s) => new Date(s.endTime).getTime() > now && workable.has(s.status as RegistrationStatus))
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ success: true, data: { shifts, next: upcoming[0] ?? null } });
@@ -135,7 +170,17 @@ meRouter.get('/card', requireAccount, async (req: Request, res: Response, next: 
   try {
     const account = await Volunteer.findById(req.account!.id).select('name kind role faction karmaPoints badges prestigeTier').lean();
     if (!account) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
-    res.setHeader('Cache-Control', 'private, max-age=86400');
+    // `no-store`, and the offline copy lives only in the service worker.
+    //
+    // `private, max-age=86400` was aimed at the offline card, and it put the response in the
+    // browser's own HTTP cache for a day, keyed on the URL. `private` means "not a shared
+    // proxy"; it does not partition by cookie, and nothing sends `Vary: Cookie`. So on a
+    // shared laptop the next account's `GET /me/card` was answered from disk with the
+    // previous account's card, without touching the network — past every guard, including the
+    // handover's own generation counter, because it arrives inside the *new* user's request.
+    // The service worker keeps its own copy for the offline card and `clearDeviceState`
+    // purges that one on the way out; this header was buying a second, unpurgeable copy.
+    res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
       success: true,
       data: {

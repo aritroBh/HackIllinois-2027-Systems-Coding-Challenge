@@ -63,7 +63,14 @@ export class SOSController {
 
   public static async dispatchNearest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await SOSService.dispatchNearestVolunteer(req.params.id as string, { id: req.account?.id, role: req.account?.role });
+      // `source` travels with the role, or `isProvenLead` sees a role with no provenance and
+      // redacts a real lead. The service decides what a claimed role may be told; it cannot
+      // make that decision from a viewer the controller has already stripped it out of.
+      const result = await SOSService.dispatchNearestVolunteer(req.params.id as string, {
+        id: req.account?.id,
+        role: req.account?.role,
+        source: req.account?.source,
+      });
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
@@ -84,6 +91,7 @@ export class SOSController {
       const tickets = await SOSService.listTickets(req.query.status as SOSTicketStatus | undefined, {
         id: req.account?.id,
         role: req.account?.role,
+        source: req.account?.source,
       });
       res.status(200).json({ success: true, data: tickets });
     } catch (error) {

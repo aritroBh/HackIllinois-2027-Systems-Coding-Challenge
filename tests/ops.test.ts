@@ -466,11 +466,20 @@ describe('me and roster', () => {
     expect(card.status).toBe(200);
     expect(card.body.data.displayName).toBe('Rota Rae');
     expect(card.body.data.shortId).toHaveLength(6);
-    // The one cacheable /api response, so it must hold nothing worth stealing.
+    // It holds nothing worth stealing, and it is no longer cacheable either.
+    //
+    // This used to assert `private, max-age=86400`, which was aimed at the offline card and
+    // instead put the response in the browser's own HTTP cache for a day, keyed on the URL.
+    // `private` means "not a shared proxy"; it does not partition by cookie, and nothing
+    // sends `Vary: Cookie` — so on a shared laptop the next account's `GET /me/card` was
+    // answered from disk with the previous account's card, without touching the network and
+    // therefore past every server-side guard including the handover's generation counter.
+    // The service worker keeps the offline copy and `clearDeviceState` purges it on the way
+    // out; the header was buying a second, unpurgeable one.
     const body = JSON.stringify(card.body);
     expect(body).not.toContain('@illinois.edu');
     expect(body).not.toContain('sessionVersion');
-    expect(card.headers['cache-control']).toBe('private, max-age=86400');
+    expect(card.headers['cache-control']).toBe('no-store');
   });
 
   it('the roster is lead-only, reports presence as buckets rather than positions, and is audited once', async () => {
@@ -560,6 +569,42 @@ describe('the SOS ticket list is redacted like the channel that carries it', () 
     const asResponder = await (await signIn(String(responder._id))).agent.get('/api/v1/sos/tickets');
     expect(asResponder.body.data[0].coordinates).toBeDefined();
     expect(asResponder.body.data[0].tableLocation).toBe('Table 9');
+  });
+
+  /**
+   * Being a party to a ticket is decided by an account id, and in `legacy` mode an id is
+   * *claimed* rather than proved while `GET /volunteers` hands account ids to anonymous
+   * callers. Tightening only the lead path moved the disclosure one branch down: naming the
+   * victim in `?volunteerId=` matched `createdById` and returned their ticket whole —
+   * coordinates, table text, hacker name, description, medical category — with no credential.
+   */
+  it('refuses the whole ticket to a claimed party, and still gives it to a proved one', async () => {
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const responder = await makeAccount();
+    const ticket = await makeTicket(String(hacker._id));
+    await SOSTicket.updateOne(
+      { _id: ticket._id },
+      { $set: { status: SOSTicketStatus.DISPATCHED, assignedVolunteerId: responder._id, dispatchedAt: new Date() } }
+    );
+
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      // No session at all — just the responder's public id in the query string.
+      const claimed = await request(app).get(`/api/v1/sos/tickets?volunteerId=${responder.id}`);
+      expect(claimed.status).toBe(200);
+      const row = claimed.body.data[0];
+      expect(row.coordinates).toBeUndefined();
+      expect(row.tableLocation).toBeUndefined();
+      expect(row.hackerName).toBeUndefined();
+      expect(row.description).toBeUndefined();
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+
+    // The same account, having actually signed in, still gets the address it must walk to.
+    const proved = await (await signIn(String(responder._id))).agent.get('/api/v1/sos/tickets');
+    expect(proved.body.data[0].tableLocation).toBe('Table 9');
   });
 });
 

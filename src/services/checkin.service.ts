@@ -1,8 +1,8 @@
 /**
  * Attendance — QR token verification, geofenced check-in, and karma-paying checkout.
  *
- * Three independent gates stand between a scan and a recorded attendance, and they defeat
- * three different attacks:
+ * Five gates stand between a scan and a recorded attendance, added by five different rounds,
+ * each defeating a different attack. The first three defeat forgery, sharing and relaying:
  *
  *  1. **The HMAC signature** proves the token was minted by this server and has not been
  *     edited. Covered in `common/utils/crypto`.
@@ -44,9 +44,15 @@
  * more honest rule; it is listed as an open gap rather than changed quietly, because it
  * moves the karma economy for every existing record.
  *
- * **Known gap:** there is no shift time-window check, so a valid token can be redeemed
- * well outside the shift it belongs to. The token binds *who* and *which shift*, not
- * *when* relative to that shift.
+ * **The shift has to be happening.** A ±30 minute grace either side of the shift, so a token
+ * for tomorrow cannot be redeemed today. This was a known gap for a long time and the
+ * comment that described it as one outlived the fix; if you are reading this looking for the
+ * missing check, it is at the top of `verifyAndCheckIn`.
+ *
+ * **The desk is not the volunteer.** `/verify` needs lead-or-above, because `/token` and
+ * `/verify` gated identically meant the person being checked in could mint their own token
+ * and scan it. Note this bites only in `AUTH_MODE=required`: in `legacy` every role gate
+ * passes an anonymous caller by design, which is the open-demo contract.
  */
 import { Types } from 'mongoose';
 import { CheckIn, ICheckIn } from '../models/checkin.model';
@@ -67,9 +73,16 @@ import { domainEvents } from '../common/events/domainEvents';
 /**
  * How far either side of a shift a check-in is still accepted.
  *
- * Wide on purpose — see the reasoning at the check in `verifyAndCheckIn`. Thirty minutes
- * matches the rest buffer between shifts, so a volunteer can never be inside two shifts'
- * check-in windows at once.
+ * Wide on purpose — see the reasoning at the check in `verifyAndCheckIn`.
+ *
+ * It matches `REST_BUFFER_MS`, and an earlier version of this comment claimed that therefore
+ * nobody can be inside two shifts' windows at once. That is false, and the arithmetic is the
+ * other way round: the rest-buffer check permits a gap of *exactly* thirty minutes, so shifts
+ * at 10:00–12:00 and 12:30–14:30 are both legal and their check-in windows meet at 12:00–12:30.
+ * A volunteer can hold an open check-in on both. That is tolerable — they are adjacent shifts
+ * in the same building and somebody who arrives early for the second while the first is
+ * ending is doing nothing wrong — but it is a consequence to know about rather than a
+ * property to rely on.
  */
 const CHECK_IN_GRACE_MS = 30 * 60 * 1000;
 
@@ -160,33 +173,6 @@ export class CheckInService {
       throw ApiError.notFound('Shift not found.');
     }
 
-    // *When*, not only who and which shift.
-    //
-    // The token binds a volunteer to a shift and to a thirty-second slice of clock, and the
-    // geofence binds the scan to a place — but nothing tied any of it to the shift actually
-    // happening. A volunteer confirmed for tomorrow could mint a token today, stand at the
-    // venue, check in, and check out an hour later for the full surge award, having worked
-    // nothing. Karma for a shift that has not happened is the same defect as karma for a
-    // shift somebody else worked; it was simply easier to reach.
-    //
-    // The grace either side is deliberately wide. Volunteers turn up early, desks run late,
-    // and a shift that overruns is the normal case at three in the morning — refusing
-    // somebody who is standing in front of you because the clock says 16:31 would make this
-    // rule the reason attendance goes unrecorded.
-    const nowMs = Date.now();
-    if (nowMs < shift.startTime.getTime() - CHECK_IN_GRACE_MS) {
-      throw ApiError.badRequest(
-        `This shift has not started yet: "${shift.title}" begins ${shift.startTime.toISOString()}. Check-in opens ${CHECK_IN_GRACE_MS / 60000} minutes before.`,
-        { code: ErrorCode.SCHEDULE_CONFLICT }
-      );
-    }
-    if (nowMs > shift.endTime.getTime() + CHECK_IN_GRACE_MS) {
-      throw ApiError.badRequest(
-        `This shift is over: "${shift.title}" ended ${shift.endTime.toISOString()}. Ask a lead to record attendance by hand.`,
-        { code: ErrorCode.SCHEDULE_CONFLICT }
-      );
-    }
-
     // Fail-closed: GPS coordinates are mandatory. Omitting them previously skipped
     // the 75m geofence entirely (remote fake check-in). The open-demo dashboard
     // sends Siebel coordinates; scanners must too.
@@ -219,24 +205,68 @@ export class CheckInService {
       }
     }
 
-    // Every refusal is behind us, so spend the token now. Losing this race means another
-    // scan of the same token got here first — the same answer the cache gave before, just
-    // moved to the point where it is true.
-    if (verification.nonce && !DynamicQrTokenEngine.consumeNonce(verification.nonce)) {
-      throw ApiError.conflict(
-        'Token replay attack detected: This QR token has already been scanned.',
-        ErrorCode.REPLAY_ATTACK_DETECTED
-      );
-    }
-
-    // Replay reaching this far means the nonce cache missed (a restart, another replica).
-    // Return the existing record unchanged: it writes nothing and awards nothing, which is
-    // the honest answer to "check this person in again".
+    // Already checked in? Say so — but only to a caller who got this far.
+    //
+    // This answer is idempotent: it writes nothing and awards nothing, and it is the truth
+    // about a volunteer who is already at their shift. It used to sit below the shift window
+    // as well, which meant a *successful* check-in became un-returnable the moment the window
+    // closed: a desk retrying after a restart at 18:35, for a shift that ended at 18:00, was
+    // told "this shift is over" rather than being handed the attendance it had already
+    // recorded. A retry after success has to be answerable for as long as the record exists,
+    // so it sits above the window.
+    //
+    // It does **not** sit above the coordinate requirement or the geofence, and the first
+    // version of this reorder did. Returning a 200 and an attendance row is a disclosure —
+    // it says "this person is checked in right now" — and putting it above those two gates
+    // meant the disclosure could be had with no coordinates at all, from anywhere, at any
+    // hour. The retry this exists for is a desk standing at the venue with a GPS fix; it has
+    // no need to skip the two gates that establish that, and only the window stands between
+    // it and the answer.
+    //
+    // Residual, recorded rather than fixed here: a caller who supplies the venue's published
+    // coordinates satisfies the geofence, because a geofence cannot tell a spoofed fix from a
+    // real one. In `AUTH_MODE=required` that caller must already hold `SHIFT_LEAD` to reach
+    // `/verify` at all, and a lead can read the roster anyway. In `legacy` it is inside the
+    // documented open-demo contract for actions. Closing it properly means binding the scan
+    // to the scanner, not reordering gates.
     if (reg.status === RegistrationStatus.CHECKED_IN) {
       const existingCheckIn = await CheckIn.findOne({ registrationId: reg._id });
       if (existingCheckIn) {
         return { checkIn: existingCheckIn, verification, geofenceStatus };
       }
+    }
+
+    // *When*, not only who and which shift.
+    //
+    // The token binds a volunteer to a shift and to a thirty-second slice of clock, and the
+    // geofence binds the scan to a place — but nothing tied any of it to the shift actually
+    // happening. A volunteer confirmed for tomorrow could mint a token today, stand at the
+    // venue, check in, and check out an hour later for the full surge award, having worked
+    // nothing. Karma for a shift that has not happened is the same defect as karma for a
+    // shift somebody else worked; it was simply easier to reach.
+    //
+    // The grace either side is deliberately wide. Volunteers turn up early, desks run late,
+    // and a shift that overruns is the normal case at three in the morning — refusing
+    // somebody who is standing in front of you because the clock says 16:31 would make this
+    // rule the reason attendance goes unrecorded.
+    //
+    // It sits *below* the idempotent short-circuit above, and that ordering is the whole
+    // point of both. This gate exists to stop a check-in being *created* for a shift that is
+    // not happening; it has no business refusing to hand back one that already exists. Above
+    // the short-circuit it did exactly that, and a desk retrying after a restart at 18:35 for
+    // a shift that ended at 18:00 was told the shift was over.
+    const nowMs = Date.now();
+    if (nowMs < shift.startTime.getTime() - CHECK_IN_GRACE_MS) {
+      throw ApiError.badRequest(
+        `This shift has not started yet: "${shift.title}" begins ${shift.startTime.toISOString()}. Check-in opens ${CHECK_IN_GRACE_MS / 60000} minutes before.`,
+        { code: ErrorCode.SCHEDULE_CONFLICT }
+      );
+    }
+    if (nowMs > shift.endTime.getTime() + CHECK_IN_GRACE_MS) {
+      throw ApiError.badRequest(
+        `This shift is over: "${shift.title}" ended ${shift.endTime.toISOString()}. Ask a lead to record attendance by hand.`,
+        { code: ErrorCode.SCHEDULE_CONFLICT }
+      );
     }
 
     const nonce = token.split('.')[0];
@@ -253,6 +283,44 @@ export class CheckInService {
     // that the nonce index is happy to accept; only this index stops them becoming ten
     // attendances and, later, ten payouts. Losing that race is not an attack — it is two
     // scanners at one desk — so the loser is handed the row that won.
+    // Claim the registration FIRST, then spend the token, then write the attendance row.
+    //
+    // The order used to be spend → write → claim, and both of the other two orders lose
+    // something. Writing the attendance row before claiming meant a cancellation landing in
+    // the window — two database round trips wide — left a `CheckIn` whose registration was
+    // CANCELLED: an attendance record for somebody who is not on the shift, counted by every
+    // roster and report, and undeletable by retry because the `registrationId` index rejects
+    // the replacement. And spending the token before either meant a refusal after the spend,
+    // which is exactly the "a refused scan must not burn the token" property the split
+    // verify/consume was introduced to get.
+    //
+    // Claiming first makes the failure modes the survivable ones. A lost CAS refuses with the
+    // token intact and nothing written. A crash between the claim and the write leaves a
+    // CHECKED_IN registration with no attendance row, and the early short-circuit above
+    // repairs that on the next scan rather than being stuck behind a unique index.
+    const claimed = await Registration.findOneAndUpdate(
+      { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
+      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } },
+      { new: true }
+    );
+    if (!claimed) {
+      throw ApiError.conflict(
+        'This registration was cancelled or completed while the token was being scanned.',
+        ErrorCode.SCHEDULE_CONFLICT
+      );
+    }
+
+
+    // The token is spent once the registration is ours. The `registrationId` index below is
+    // the durable single-use guarantee; this is the cheap in-process one, and it now sits
+    // after every refusal rather than before two of them.
+    if (verification.nonce && !DynamicQrTokenEngine.consumeNonce(verification.nonce)) {
+      throw ApiError.conflict(
+        'Token replay attack detected: This QR token has already been scanned.',
+        ErrorCode.REPLAY_ATTACK_DETECTED
+      );
+    }
+
     let checkIn;
     try {
       checkIn = await CheckIn.create({
@@ -276,7 +344,31 @@ export class CheckInService {
           // conflict of intent, so hand back the attendance that exists rather than
           // accusing an honest volunteer of a replay attack.
           const settled = await CheckIn.findOne({ registrationId: reg._id });
-          if (settled) return { checkIn: settled, verification, geofenceStatus };
+          if (settled) {
+            // Repair the torn state before returning, rather than only reporting it.
+            //
+            // The attendance row and the registration's status are two writes, and a process
+            // that dies between them leaves a `CheckIn` with a registration still CONFIRMED.
+            // Every retry then landed here, found the row, and returned early — skipping the
+            // status transition for a second time. The registration stayed CONFIRMED for
+            // ever, and check-out refuses anything that is not CHECKED_IN, so the volunteer
+            // could never be paid and no amount of rescanning would help.
+            //
+            // A retry is the natural moment to finish what was started.
+            //
+            // `CONFIRMED` alone is no longer the right condition, and was left over from when
+            // the claim ran *after* this create. It runs before it now, so by the time a
+            // duplicate-key lands our own thread has already moved the row to CHECKED_IN with
+            // its own `checkInTime` — the loser of two simultaneous scans would leave the
+            // registration stamped with its clock and the attendance row stamped with the
+            // winner's. Accepting either state converges both on the row that actually won,
+            // and still repairs a genuinely torn CONFIRMED row left by an older write.
+            await Registration.findOneAndUpdate(
+              { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
+              { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: settled.checkInTime } }
+            );
+            return { checkIn: settled, verification, geofenceStatus };
+          }
         }
         throw ApiError.conflict(
           'Token replay attack detected: This QR token has already been scanned.',
@@ -294,18 +386,6 @@ export class CheckInService {
     // it from the stale in-memory copy, silently undoing a committed cancellation and
     // putting two people in one seat. The cancel path twenty lines away is careful to CAS
     // for exactly this reason; this one was not.
-    const claimed = await Registration.findOneAndUpdate(
-      { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
-      { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } },
-      { new: true }
-    );
-    if (!claimed) {
-      throw ApiError.conflict(
-        'This registration was cancelled or completed while the token was being scanned.',
-        ErrorCode.SCHEDULE_CONFLICT
-      );
-    }
-
     const vol = await Volunteer.findById(volunteerId);
 
     domainEvents.emit('checkin.completed', { accountId: String(volunteerId), shiftId: String(shiftId), at: new Date() });
@@ -386,8 +466,38 @@ export class CheckInService {
     }
 
     // Floored at one minute so a sub-minute shift still records something a human can read
-    // in the history, rather than a zero that looks like a missing field.
-    const durationMinutes = Math.max(1, Math.round((now.getTime() - checkIn.checkInTime.getTime()) / (1000 * 60)));
+    // in the history, rather than a zero that looks like a missing field — and ceilinged at
+    // the shift itself, which it was not.
+    //
+    // Check-in is bounded by a ±30 minute window; check-out was bounded by nothing, so the
+    // clock simply kept running. Somebody who checked in for a one-hour shift, left after
+    // five minutes and tapped check-out three days later was credited seventy-two hours and
+    // paid the full surge award, because `timeFactor` saturates at one hour. `hoursServed` is
+    // the leaderboard tiebreak and the event-wide total, so that is not a cosmetic number.
+    //
+    // The clamp is the shift's own end plus the same grace the entry uses: you are paid for
+    // the shift you worked, and forgetting to tap out costs you nothing but earns you nothing
+    // either.
+    // Clamped at both ends, because the first version of this clamp only capped the end.
+    //
+    // Check-in opens `CHECK_IN_GRACE_MS` *before* the shift starts, which is deliberate —
+    // volunteers turn up early and a desk should be able to scan them. But the paid interval
+    // then ran from whenever they scanned, so arriving thirty minutes early and leaving on
+    // time was credited two and a half hours for a two-hour shift. Worse at the short end:
+    // `timeFactor` saturates at one hour, so an early scan plus a five-minute appearance
+    // reads as thirty-five minutes of work and pays 0.58 of the award instead of 0.08.
+    //
+    // The interval paid is the intersection of "when they were here" with "when the shift
+    // was", plus the same grace at the far end: you are paid for the shift you worked.
+    const shiftForClamp = await Shift.findById(checkIn.shiftId).select('startTime endTime');
+    const latestPayable = shiftForClamp
+      ? Math.min(now.getTime(), shiftForClamp.endTime.getTime() + CHECK_IN_GRACE_MS)
+      : now.getTime();
+    const earliestPayable = shiftForClamp
+      ? Math.max(checkIn.checkInTime.getTime(), shiftForClamp.startTime.getTime())
+      : checkIn.checkInTime.getTime();
+    const workedMs = Math.max(0, latestPayable - earliestPayable);
+    const durationMinutes = Math.max(1, Math.round(workedMs / (1000 * 60)));
     checkIn.durationMinutes = durationMinutes;
 
     // Surge is recomputed against the check-*in* moment, not now, so a volunteer is paid the
@@ -410,23 +520,49 @@ export class CheckInService {
     // down linearly below that. The old floor of 0.5x minted half a shift's
     // karma for a 60-second "presence" (instant check-in/out farming).
     const timeFactor = Math.min(1, durationMinutes / 60);
-    let earnedKarma = Math.max(1, Math.round(surge.karmaAward * timeFactor));
-    checkIn.karmaAwarded = earnedKarma;
+    // What the shift *offers*. What is actually paid is decided by the daily cap below, and
+    // the two rows written here are corrected to match it once it is known.
+    const advertisedKarma = Math.max(1, Math.round(surge.karmaAward * timeFactor));
+    let earnedKarma = advertisedKarma;
+    checkIn.karmaAwarded = advertisedKarma;
     await checkIn.save();
 
     // Conditional on the state being left, not merely on the row's id. The guard above makes
     // the common case correct; this makes the transition itself impossible to get wrong, so
     // a cancellation that lands in the window between the two cannot be overwritten.
-    await Registration.findOneAndUpdate(
+    //
+    // **And the result decides whether anybody gets paid.** It used to be discarded, with the
+    // hours `$inc` and `awardKarma` running unconditionally underneath it — so the CAS
+    // protected the *registration* and nothing else. A cancellation committing between the
+    // pre-check twenty lines up and this line transfers the seat to a waitlister, this update
+    // matches nothing, and the volunteer who cancelled was still credited the hours and paid
+    // the karma; the promoted volunteer is then paid for the same seat when they check out.
+    // One seat, two payouts, and no row anywhere recording that it happened.
+    //
+    // Losing it rolls the `checkOutTime` CAS back rather than leaving the check-in closed:
+    // a closed check-in reads as an idempotent replay to the guard at the top of this method,
+    // so without the rollback a retry would return "already checked out" for a check-out that
+    // never paid, and the state would be unrecoverable from the outside.
+    const completed = await Registration.findOneAndUpdate(
       { _id: checkIn.registrationId, status: RegistrationStatus.CHECKED_IN },
       {
         $set: {
           status: RegistrationStatus.COMPLETED,
           checkOutTime: now,
-          earnedKarma,
+          earnedKarma: advertisedKarma,
         },
       }
     );
+    if (!completed) {
+      await CheckIn.updateOne(
+        { _id: checkIn._id, checkOutTime: now },
+        { $unset: { checkOutTime: '', durationMinutes: '', karmaAwarded: '' } }
+      );
+      throw ApiError.conflict(
+        'This registration changed while the check-out was in flight; nothing was paid. Retry to observe the settled state.',
+        ErrorCode.SCHEDULE_CONFLICT
+      );
+    }
 
     // The graveyard badge is judged in UTC rather than the host's local zone, so the same
     // check-in earns it (or does not) whatever region the server happens to run in.
@@ -444,10 +580,25 @@ export class CheckInService {
         ...(earnedBadges.length > 0 ? { $addToSet: { badges: { $each: earnedBadges } } } : {}),
       }
     );
-    const payout = earnedKarma > 0
-      ? await KarmaService.awardKarma(checkIn.volunteerId, earnedKarma, KarmaSource.CHECKOUT, { shiftId: String(checkIn.shiftId), hours })
+    const payout = advertisedKarma > 0
+      ? await KarmaService.awardKarma(checkIn.volunteerId, advertisedKarma, KarmaSource.CHECKOUT, { shiftId: String(checkIn.shiftId), hours })
       : { awarded: 0 };
     earnedKarma = payout.awarded;
+
+    // The daily cap may have held part of the award back, and the two rows written above
+    // still carry the advertised figure. Correcting them is not cosmetic: `CheckIn.karmaAwarded`
+    // and `Registration.earnedKarma` are what a disputed balance is reconstructed from, and a
+    // volunteer past their CHECKOUT cap otherwise has two rows saying they were paid 150
+    // against a ledger and a wire frame that both say 20. Every sibling path — SOS
+    // resolution, quest settlement — was already corrected to report the granted figure
+    // rather than the offered one; this one persists it as well as reporting it.
+    if (earnedKarma !== advertisedKarma) {
+      await Promise.all([
+        CheckIn.updateOne({ _id: checkIn._id }, { $set: { karmaAwarded: earnedKarma } }),
+        Registration.updateOne({ _id: checkIn.registrationId }, { $set: { earnedKarma } }),
+      ]);
+      checkIn.karmaAwarded = earnedKarma;
+    }
     const volunteer = await Volunteer.findById(checkIn.volunteerId);
 
     domainEvents.emit('checkout.completed', { accountId: String(checkIn.volunteerId), shiftId: String(checkIn.shiftId), hoursServed: hours, at: new Date() });

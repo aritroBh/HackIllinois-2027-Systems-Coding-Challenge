@@ -614,3 +614,120 @@ incomplete, because two different buckets bite and only one of them is the desk 
 no credits remaining"*; `cursor-agent` requires a login. Neither has produced a verdict in this
 session, and earlier rounds' note that they were unavailable "until credentials exist" remains
 accurate — the blocker is an account, not a missing tool.
+
+---
+
+## Round ten — three reviewers, three disjoint sets, and one planted control, 2026-09-06
+
+The machine this work was running on shut down mid-round. Round ten existed only as
+uncommitted changes in the working tree; this entry covers finishing it, reviewing it, and
+what the review found.
+
+**The suite was not green when it was picked back up** — 3 failures in 293. Two were the
+round's own regression and one was a stale assertion, and the regression is the more
+interesting of the two.
+
+### The privacy fix that turned every lead off
+
+`isProvenLead()` was introduced to stop a *claimed* `?volunteerId=` role unlocking the exact
+dispatch distances and the unredacted ticket list. It reads `viewer.source === 'session'`.
+`sos.controller.ts` builds its viewer as `{ id, role }` and has never passed `source`, and
+`dispatchNearestVolunteer`'s signature did not even accept it — so `isProvenLead` was false
+for **every** caller, including a real signed-in lead. The lead console lost its exact
+distances and its "who else could go" column, and `GET /sos/tickets` returned redacted rows
+to the one role entitled to the whole thing. Fail-closed, so nothing leaked; the feature was
+simply off. Two reviewers found it independently and the existing suite had already caught it.
+
+### The hole the fix was covering
+
+Tightening the lead path moved the disclosure one branch down rather than closing it.
+`listTickets` also returns the ticket whole to a **party** — the person who raised it or the
+responder sent to it — and that test was `sameId(t.createdById, viewer.id)` on a bare id. In
+`legacy` an id is claimed, not proved, and `GET /volunteers` hands account ids to anonymous
+callers. So `GET /sos/tickets?volunteerId=<any public id>` returned that person's ticket whole
+— coordinates, table text, hacker name, description, medical category — with no credential and
+no session. muse and opencode reported it independently, both as P0.
+
+Verified live against a running server before and after. After: `{"status":"OPEN",
+"venueKey":null,"category":"MEDICAL_FIRST_AID","urgency":"HIGH","karmaBounty":150}` and
+nothing else.
+
+### The planted control
+
+The brief listed the round's changes and its calibration, and deliberately did **not** mention
+one known-real, long-open finding: `checkOut`'s `CHECKED_IN -> COMPLETED` CAS had its return
+value discarded while the hours `$inc` and `awardKarma` ran unconditionally underneath it. It
+had been recorded in the inter-session notes since the afternoon and never fixed.
+
+**agy found it.** muse and opencode did not — both had been told that crash windows between
+two documents are an accepted class, and this one is adjacent enough to that shape to be read
+as covered. It is not: it needs no crash, only a cancellation committing in a two-round-trip
+window, and the result is one seat paid twice — the volunteer who cancelled *and* the
+waitlister promoted into their seat. It is fixed here, and losing the CAS now rolls the
+`checkOutTime` back so a retry can still observe the settled state rather than being told it
+already checked out.
+
+The control is worth recording as a fact about the reviewers, not only about the code: a brief
+that tells reviewers what to skip will be obeyed, including where the exclusion does not
+actually apply.
+
+### The three reviewers barely overlapped
+
+| | muse | opencode | agy |
+|---|---|---|---|
+| Findings | 7 | 4 | 4 |
+| P0 | 1 | 2 | 0 |
+| Agreed with another reviewer | 3 | 3 | 0 |
+| Unique | 4 | 1 | 4 |
+
+muse and opencode agreed on the party disclosure, the `source` threading, and the in-flight
+QR refresh. agy overlapped with neither and found four nobody else did. Fifteen reports, ten
+distinct findings, and every one of them held up against the code.
+
+### Closed
+
+| Finding | Source | Severity |
+|---|---|---|
+| `GET /sos/tickets?volunteerId=<public id>` returned a stranger's ticket whole — coordinates, table, name, description — to a caller with no session, through the party exception. | muse, opencode | P0 |
+| `sos.controller.ts` never passed `source`, so `isProvenLead` was false for everyone and real leads lost exact distances, the candidate list and the unredacted ticket list. | muse, opencode, suite | P1 |
+| An in-flight `refreshQrToken()` landing after a handover wrote the departed account's live attendance credential back into `#qr-local` and restarted the countdown — a desk scan inside the window would check the wrong person in and pay them. `clearQrToken()` closed the idle window, not this one. | muse, opencode | P0 |
+| `checkOut`'s `COMPLETED` CAS discarded its result while hours and karma were paid unconditionally: a cancellation in the window paid one seat twice. **Planted control — deliberately withheld from the brief.** | agy | P1 |
+| The handover cleared the inventory cache and never reloaded, and the incoming user's own request was discarded by the generation bump — so every A→B handover left B's bag and sticker book empty. `me.js` and `quests.js` both reload here; `app.js` only cleared. | muse | P1 |
+| `checkOut`'s new clamp capped the end of the paid interval and not the start, so checking in thirty minutes early was paid as work — and because `timeFactor` saturates at an hour, a five-minute appearance after an early scan paid 0.58 of the award instead of 0.08. | opencode | P2 |
+| The `SOS_TICKET_RESOLVED` frame carried the *actor's* id beside the *earner's* name, karma and balance, so a lead closing a ticket for a responder saw the responder's totals written over their own header. | agy | P1 |
+| `stop()` detached `onclose`, `onerror` and `onmessage` but not `onopen`, so a socket stopped while still CONNECTING opened afterwards, set `mode = 'ws'` with `state.ws === null`, sent a `hello` as the departed account, and left presence dead until reload because `start()` then refuses. | muse | P2 |
+| The idempotent "already checked in" short-circuit was moved above the coordinate requirement and the geofence, so a 200 and an attendance row — a disclosure that this person is checked in right now — could be had with no coordinates, from anywhere, at any hour. It belongs above the shift window and below those two. | muse | P2 |
+| `GET /me` set no `Cache-Control` while every sibling sets `no-store`; with an ETag and no directives it is heuristically cacheable, so a shared laptop could answer the next account's request from disk with the previous account's profile. The `/me/card` fix was one route short. | muse | P2 |
+| The torn-state repair CAS in the duplicate-key catch was conditional on `CONFIRMED`, left over from when the claim ran after the create. The claim runs first now, so it could never match and the loser of two simultaneous scans left the registration and the attendance row stamped with different clocks. | agy | P2 |
+
+### Recorded, not fixed
+
+`GET /me/shifts` treats `SWAP_PENDING` as workable while `generateToken` and `verifyAndCheckIn`
+accept only `CONFIRMED` and `CHECKED_IN`, so a shift offered as "next" would refuse to mint a
+token at the desk. agy ranked it P1. It is unreachable: `SWAP_PENDING` is never written —
+swaps rewrite the registration in place — and both plausible fixes are speculative, because
+checking in would also have to cancel the pending swap or the trade could hand the shift away
+underneath an attendance row. The coupling is now written down at both ends rather than
+guessed at.
+
+A residual on the check-in short-circuit is recorded in the code rather than closed: a caller
+who sends the venue's published coordinates satisfies the geofence, because a geofence cannot
+tell a spoofed fix from a real one. In `AUTH_MODE=required` that caller must already hold
+`SHIFT_LEAD` to reach `/verify`, and a lead can read the roster anyway. Closing it properly
+means binding the scan to the scanner, not reordering gates.
+
+### Reviewer mechanics, updated
+
+- **muse** and **opencode** both ran clean in a scratch copy; the tree hash was identical
+  before and after, so neither wrote anything. opencode worked this round, on a brief file
+  plus an explicit file list — the shape memory already records as the one that works.
+- **agy** produced nothing on the first attempt: headless mode auto-denies the `command`
+  permission and it had decided to run a shell command. Re-running with the prompt explicitly
+  forbidding shell and naming the files to read produced the report. It was given its own
+  `git init`-ed scratch copy, which removes both the "fails without git" problem and any risk
+  to the real tree.
+- The **live server** was used as a reviewer of last resort: the P0 was reproduced and then
+  disproved against a running instance, and the whole client was driven through all seven tabs
+  in a real browser with zero console errors. The campus tab reports `WEBGL2 UNAVAILABLE` in a
+  headless browser and degrades to a legible message with every other panel working, which is
+  the fallback behaving as designed rather than a defect.

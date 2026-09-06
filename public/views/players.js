@@ -241,6 +241,15 @@
     state.ws = ws;
 
     ws.onopen = () => {
+      // The same identity check `onclose` carries, for the same reason.
+      //
+      // `stop()` detaches the other three handlers but a socket still in CONNECTING has no
+      // close to detach from — it opens afterwards. The surviving `onopen` then set
+      // `state.mode = 'ws'` while `state.ws` was already null, sent `hello` on a socket
+      // nothing holds, and announced `presence:transport: ws`. The next `api.start()` refuses
+      // because the mode is no longer `off`, so presence was dead until a reload — and the
+      // ghost `hello` went out as the departed account.
+      if (state.ws !== ws) { try { ws.close(1000, 'superseded'); } catch { /* already gone */ } return; }
       state.mode = 'ws';
       state.failures = 0;
       state.backoff = BACKOFF_MIN_MS;
@@ -252,6 +261,15 @@
       else handleBinary(ev.data);
     };
     ws.onclose = () => {
+      // Only if this is still the socket we are using.
+      //
+      // `close()` is asynchronous: the handler fires a turn or more after `api.stop()` has
+      // already set `state.ws = null` and a new `connectWs()` has assigned its own socket. The
+      // unguarded version then nulled the NEW socket out from under itself — breaking `send`
+      // and `publish` — counted a failure that was a deliberate close, and scheduled a
+      // reconnect that opened a third connection. One handover, three sockets, none of them
+      // usable. The identity check is what makes a late close harmless.
+      if (state.ws !== ws) return;
       state.ws = null;
       if (state.mode === 'ws') state.mode = 'off';
       state.failures += 1;
@@ -358,7 +376,17 @@
    */
   api.stop = function stop({ tellServer = true } = {}) {
     if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
-    if (state.ws) { try { state.ws.send(JSON.stringify({ t: 'bye' })); state.ws.close(1000, 'opt out'); } catch { /* closing */ } }
+    if (state.ws) {
+      const ws = state.ws;
+      // Detached before closing, so the close we are about to cause cannot be mistaken for
+      // the network dropping and trigger the reconnect ladder. `onopen` is in the list
+      // because a socket stopped while still CONNECTING opens *after* this runs.
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.onopen = null;
+      try { ws.send(JSON.stringify({ t: 'bye' })); ws.close(1000, 'opt out'); } catch { /* closing */ }
+    }
     state.ws = null;
     state.mode = 'off';
     state.peers.clear();
@@ -463,7 +491,18 @@
   // `session` carries the user directly rather than as `{ user }`. Guarded on `mode === 'off'`
   // so a handover — which has its own listener below and restarts the socket itself — does
   // not start a second one.
-  N.onEvent('session', (user) => { if (user && state.mode === 'off') void onSignedIn({ user }); });
+  //
+  // Deferred by a turn, and cancelled if a handover follows. `setUser` emits `session` and
+  // then `session:handover` synchronously, so acting on the first opened a socket that the
+  // second immediately closed and replaced — two connections, a spurious failure count, and a
+  // reconnect ladder on top. The handover is the more specific event and owns the transport
+  // when it fires; this is only for a plain sign-in, where it never does.
+  let pendingSignIn = null;
+  N.onEvent('session', (user) => {
+    if (!user || state.mode !== 'off') return;
+    clearTimeout(pendingSignIn);
+    pendingSignIn = setTimeout(() => { if (state.mode === 'off') void onSignedIn({ user }); }, 0);
+  });
 
   /**
    * The browser changed hands without a sign-out, so the socket has to as well.
@@ -479,6 +518,9 @@
    * must not inherit a live publisher from whoever sat here before.
    */
   N.onEvent('session:handover', (user) => {
+    // This event owns the transport; the deferred plain-sign-in start above must not also run.
+    clearTimeout(pendingSignIn);
+    pendingSignIn = null;
     // See `api.stop`: the cookie is already the new account's, so a DELETE from here would
     // erase the person who has just sat down.
     api.stop({ tellServer: false });
