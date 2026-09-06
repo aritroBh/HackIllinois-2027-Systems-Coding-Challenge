@@ -172,16 +172,22 @@ export class BoothService {
       throw error;
     }
 
+    // Whether anything has been paid yet. The compensating delete below hands the booth back
+    // by removing the row that makes a scan once-ever — which is only safe while nothing has
+    // moved. Once karma is minted, deleting it converts a once-ever 60-karma booth into a
+    // repeatable one: any later failure (a sticker write, a power-up upsert, a network blip
+    // on either) unwound the guard and left the payment, and the next press paid again.
+    let paid = false;
     try {
       let awardedKarma = 0;
       let karmaCapped = false;
       if (booth.reward.karma > 0) {
-        // Through the ledger like every other award. `BOOTH` has no entry in the pack's
-        // `karmaCaps` and does not need one: the once-per-account rule above is a harder
-        // ceiling than a daily budget, and a fork that disagrees adds one line of pack.
+        // Through the ledger like every other award, and capped by `karmaCaps.BOOTH` —
+        // which every pack must now price, because an unpriced source is an unlimited one.
         const award = await KarmaService.awardKarma(accountId, booth.reward.karma, KARMA_SOURCE, { boothId, sponsor: booth.sponsor });
         awardedKarma = award.awarded;
         karmaCapped = award.capped;
+        paid = award.awarded > 0;
       }
 
       if (booth.reward.sticker) {
@@ -222,8 +228,18 @@ export class BoothService {
         powerUp,
       };
     } catch (error) {
-      // Hand the booth back rather than leaving it marked scanned and unpaid.
-      await BoothScan.deleteOne({ _id: scan._id });
+      // Hand the booth back only if nothing was paid. A failure after the award leaves the
+      // scan row standing: the money moved, so the once-ever guard has to stand with it.
+      // The caller still gets the error and can retry, and the retry gets a clean 409
+      // rather than a second payment.
+      if (!paid) {
+        await BoothScan.deleteOne({ _id: scan._id });
+      } else {
+        console.error(
+          `[booth] ${boothId} paid ${accountId} and then failed; scan row kept so the booth cannot be scanned twice.`,
+          error
+        );
+      }
       throw error;
     }
   }

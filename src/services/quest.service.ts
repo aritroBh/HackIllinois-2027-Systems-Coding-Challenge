@@ -347,19 +347,35 @@ export class QuestService {
     // payout that throws here would otherwise leave a quest marked complete, announced as
     // complete, and never paid, with no way to retry it. Failing before the broadcast is
     // recoverable; failing after it is a lie the player can see.
+    // Whether anything has been paid yet, for the same reason the booth scan tracks it: the
+    // compensating write below un-completes the quest, and un-completing a quest that has
+    // already paid makes a once-per-event reward repeatable. A sticker write failing after
+    // the karma landed did exactly that — the next matching event re-settled the quest and
+    // paid again, bounded only by the daily QUEST cap. The docblock at the top of this file
+    // says the reward is exactly-once; this is what makes that true rather than usually true.
+    let paid = false;
     try {
       if (quest.reward.karma > 0) {
-        await KarmaService.awardKarma(accountId, quest.reward.karma, KARMA_SOURCE, {
+        const award = await KarmaService.awardKarma(accountId, quest.reward.karma, KARMA_SOURCE, {
           questId: quest.id,
           windowKey: won.windowKey,
         });
+        paid = award.awarded > 0;
       }
       if (quest.reward.sticker) {
         await StickerService.award(accountId, quest.reward.sticker, `QUEST:${quest.id}`);
       }
     } catch (error) {
-      // Hand the completion back so the next matching event can try again.
-      await QuestProgress.updateOne({ _id: won._id }, { $set: { completedAt: null } });
+      // Hand the completion back only if nothing was paid; otherwise the completion stands
+      // and the failure is logged, because the alternative is paying for it twice.
+      if (!paid) {
+        await QuestProgress.updateOne({ _id: won._id }, { $set: { completedAt: null } });
+      } else {
+        console.error(
+          `[quest] ${quest.id} paid ${accountId} and then failed; completion kept so it cannot settle twice.`,
+          error
+        );
+      }
       throw error;
     }
 

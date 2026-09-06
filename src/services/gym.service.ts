@@ -79,10 +79,25 @@ export class GymService {
       throw ApiError.notFound('Volunteer not found.');
     }
 
+    // NEUTRAL is not a side you can fight for.
+    //
+    // The lock below only ran for a non-neutral declaration, and `isAlly` compares the
+    // declared faction to the gym's — so an account already bound to TEAM_KERNEL could
+    // declare `NEUTRAL`, skip the lock entirely, and then take the attack branch against
+    // any gym including its own, capture it for nobody, and be paid for it. The whole
+    // purpose of the lock is that one account cannot reinforce as an ally and attack as a
+    // rival at will, and `NEUTRAL` was the word that turned it off.
+    if (volunteerFaction === Faction.NEUTRAL) {
+      throw ApiError.badRequest(
+        'Pick a faction to contest a gym: NEUTRAL is the unclaimed state, not a side.',
+        { code: ErrorCode.VALIDATION_ERROR }
+      );
+    }
+
     // Faction lock: the client names a faction per request, so without this
     // one account could reinforce as an ally and attack as a rival at will.
-    // The first non-neutral battle binds the account; later mismatches fail.
-    if (volunteerFaction !== Faction.NEUTRAL) {
+    // The first battle binds the account; later mismatches fail.
+    {
       if (volunteer.faction && volunteer.faction !== volunteerFaction) {
         throw ApiError.conflict(
           `Faction allegiance locked to ${volunteer.faction}. Cannot battle as ${volunteerFaction}.`,

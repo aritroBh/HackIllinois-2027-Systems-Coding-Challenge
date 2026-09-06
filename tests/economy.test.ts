@@ -303,3 +303,84 @@ afterAll(async () => {
     await Promise.all([KarmaLedger.deleteMany({}), StickerLedger.deleteMany({}), BountyLedger.deleteMany({})]);
   }
 });
+
+describe('a compensating rollback never unwinds a guard the money has already passed', () => {
+  /**
+   * Both the sponsor-booth scan and quest settlement create their once-only guard first —
+   * a unique `BoothScan` row, a CAS on `completedAt: null` — then pay, then do the rest.
+   * Both then had a `catch` that removed that guard "to hand the reward back", which is
+   * right only while nothing has been paid. After the award, deleting the guard turns a
+   * once-ever reward into a repeatable one: the sticker write is a second database round
+   * trip and one transient failure was enough.
+   *
+   * The failure is injected on the sticker write because that is the real shape of it —
+   * `StickerService.award` writes to two collections, so a blip there is ordinary.
+   */
+  it('a booth scan that pays and then fails stays scanned, and cannot be scanned again', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { BoothService } = await import('../src/services/booth.service');
+    const { BoothScan } = await import('../src/models/boothScan.model');
+
+    // `booths.json` is optional in a pack, so read it the way the service does.
+    const boothsFile = path.join(pack.dir, 'booths.json');
+    if (!fs.existsSync(boothsFile)) return;
+    const booths = JSON.parse(fs.readFileSync(boothsFile, 'utf8')).booths as Array<{
+      id: string; reward: { karma: number; sticker?: string };
+    }>;
+    const booth = booths.find((b) => b.reward.karma > 0 && b.reward.sticker);
+    if (!booth) return; // no booth pays both karma and a sticker; nothing to assert
+    const boothId = booth.id;
+
+    const vol = await makeAccount('Booth Bella');
+    const spy = jest
+      .spyOn(StickerService, 'award')
+      .mockRejectedValueOnce(new Error('transient sticker failure'));
+
+    await expect(
+      BoothService.scan(String(vol._id), boothId, BoothService.codeFor(boothId))
+    ).rejects.toThrow(/transient sticker failure/);
+    spy.mockRestore();
+
+    const paid = (await Volunteer.findById(vol._id))!.karmaPoints;
+    // The guard stands even though the rest of the scan failed.
+    expect(await BoothScan.countDocuments({ accountId: vol._id, boothId })).toBe(1);
+
+    // And the second press is refused rather than paying again.
+    await expect(
+      BoothService.scan(String(vol._id), boothId, BoothService.codeFor(boothId))
+    ).rejects.toThrow(/already scanned/i);
+    expect((await Volunteer.findById(vol._id))!.karmaPoints).toBe(paid);
+  });
+});
+
+describe('NEUTRAL is not a side you can fight for', () => {
+  /**
+   * The faction lock only ran when the declared faction was non-neutral, and `isAlly`
+   * compares the declared faction to the gym's — so an account already bound to one team
+   * could declare `NEUTRAL`, skip the lock, take the attack branch against any gym
+   * including its own, capture it for nobody, and be paid for it. `NEUTRAL` was the word
+   * that turned the lock off.
+   */
+  it('refuses a battle declared as NEUTRAL, whatever the account is bound to', async () => {
+    const { GymService } = await import('../src/services/gym.service');
+    const { Gym, Faction } = await import('../src/models/gym.model');
+
+    const vol = await makeAccount('Turncoat Tom');
+    await Volunteer.updateOne({ _id: vol._id }, { $set: { faction: 'TEAM_KERNEL' } });
+    const gym = await Gym.create({
+      name: 'Test Shrine', locationName: 'Somewhere', latitude: 40.10992, longitude: -88.2284,
+      controllingFaction: Faction.TEAM_KERNEL, controlPoints: 100, maxControlPoints: 1000, level: 1,
+    });
+
+    await expect(
+      GymService.battleOrContribute(String(gym._id), String(vol._id), Faction.NEUTRAL, 200, {
+        latitude: 40.10992, longitude: -88.2284,
+      })
+    ).rejects.toThrow(/NEUTRAL/);
+
+    const after = await Gym.findById(gym._id);
+    expect(after!.controllingFaction).toBe(Faction.TEAM_KERNEL);
+    expect((await Volunteer.findById(vol._id))!.karmaPoints).toBe(0);
+  });
+});
