@@ -1,9 +1,10 @@
 /**
  * Volunteer routes — `/api/v1/volunteers`.
  *
- * Reads are open by design so the live dashboard works without credentials; note that
- * the list endpoint is unprojected and unpaginated, so it should gain both before it
- * carries real attendee data.
+ * Reads are open in `legacy` mode so the demo dashboard works without credentials and
+ * session-gated in `required` mode; every response is projected by role in the controller
+ * (contact details lead+ only, identities/sessionVersion never). Creation is organiser-only.
+ * The list is still unpaginated (plan M5).
  */
 import { Router } from 'express';
 import { VolunteerController } from '../../controllers/volunteer.controller';

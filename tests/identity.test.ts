@@ -442,6 +442,16 @@ describe('AUTH_MODE=required — review round 2 pins', () => {
     expect((await l.post('/api/v1/swaps/cycles/resolve').set('X-CSRF-Token', lCsrf).send({})).status).toBe(200);
   });
 
+  it('POST /volunteers echoes the projected account, never identities or sessionVersion', async () => {
+    const org = await makeVolunteer({ role: VolunteerRole.ORGANIZER });
+    const { agent, csrf } = await signIn(org.id);
+    const res = await agent.post('/api/v1/volunteers').set('X-CSRF-Token', csrf).send({ name: 'New Nia', email: `nia-${Date.now()}@illinois.edu` });
+    expect(res.status).toBe(201);
+    expect(res.body.data.name).toBe('New Nia');
+    expect(res.body.data.identities).toBeUndefined();
+    expect(res.body.data.sessionVersion).toBeUndefined();
+  });
+
   it('volunteer directory hides email/phone/identities/sessionVersion from non-leads and identities/sessionVersion from everyone', async () => {
     const target = await makeVolunteer({ name: 'Private Pat' });
     await Volunteer.updateOne({ _id: target._id }, { $set: { phone: '+1 217 555 0100' } });

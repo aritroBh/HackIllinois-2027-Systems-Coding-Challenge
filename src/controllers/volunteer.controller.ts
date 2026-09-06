@@ -5,11 +5,10 @@
  * which is the mass-assignment guard: `role`, `karmaPoints`, `prestigeTier` and `badges`
  * are server-owned and cannot be set at signup.
  *
- * `listVolunteers` and `getVolunteerById` project through `projectionFor`: contact details are
- * lead+ only and identities/sessionVersion are never returned. Pagination is still open.
- * including email and phone. It is also exempt from the mutation auth guard because it is
- * a GET, so it is readable in every posture — add a projection and a limit before this
- * carries real attendee data.
+ * Every response goes through `projectionFor`: contact details (email, phone) are visible to
+ * lead+ only, and identities/sessionVersion are never returned to anyone. Reads are open in
+ * `legacy` mode (the demo dashboard) and session-gated in `required` mode. Pagination on the
+ * list is still open (plan M5).
  */
 import { Request, Response, NextFunction } from 'express';
 import { Volunteer } from '../models/volunteer.model';
@@ -31,7 +30,10 @@ export class VolunteerController {
     try {
       // ponytail: picklist — `role` is never taken from the client (forced VOLUNTEER).
       const { name, email, phone, certifications } = req.body;
-      const volunteer = await Volunteer.create({ name, email, phone, certifications });
+      const created = await Volunteer.create({ name, email, phone, certifications });
+      // Same projection as list/get: the created document must not echo identities or
+      // sessionVersion either.
+      const volunteer = await Volunteer.findById(created._id).select(projectionFor(req));
       res.status(201).json({ success: true, data: volunteer });
     } catch (error) {
       next(error);

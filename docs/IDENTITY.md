@@ -90,9 +90,10 @@ lead/organiser powers; the model enforces `kind === HACKER ⇔ role === HACKER`.
 
 * Lost phone / leaked code: `POST /api/v1/auth/revoke/:accountId` (lead or above) bumps the
   account's `sessionVersion`; every cookie minted before it stops working within 60 s.
-* Promote/demote staff: `PATCH /api/v1/auth/accounts/:id/role {role}` (organiser). `ADMIN`
-  and `ORGANIZER` are treated identically everywhere today; ADMIN exists so a later
-  milestone can reserve destructive operations for it.
+* Promote/demote staff: `PATCH /api/v1/auth/accounts/:id/role {role}` (organiser). Role
+  changes and revocations follow a rank rule: a caller may only grant roles below their own
+  and only act on accounts below their own; `ADMIN` alone may create admins or revoke an
+  organiser or admin. Elsewhere `ADMIN` and `ORGANIZER` are treated identically.
 * Creating accounts (`POST /api/v1/volunteers`) is organiser-only in `required` mode, so
   nobody can mint accounts to multiply their per-account rate budget.
 * `POST /api/v1/auth/dev-login {accountId}` exists only outside production (the route is not
