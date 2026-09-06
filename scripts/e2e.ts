@@ -376,7 +376,23 @@ async function main(): Promise<void> {
   section('7. Turning up — a rotating, single-use, bound check-in token (docs/WORKFLOWS.md §3)');
 
   const attendee = cohort[1];
-  const attendShift = soloId;
+
+  // A shift that is running *now*. Check-in is refused outside half an hour either side of a
+  // shift, so the idempotency fixture above — sixty hours out — cannot be checked in to, and
+  // should not be: a token for a shift that has not happened is karma for work nobody did.
+  const live = await lead.post('/shifts', {
+    title: 'E2E Live Shift',
+    description: 'Running right now, so somebody can actually turn up to it.',
+    category: 'INFO_DESK',
+    location: 'Siebel Center Atrium',
+    startTime: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    endTime: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+    capacity: 5,
+    baseKarma: 100,
+  });
+  ok('a shift that is running right now can be created', live.status === 201 || live.status === 200,
+    `${live.status}`);
+  const attendShift = live.body.data._id ?? live.body.data.id;
   await attendee.post('/registrations', { shiftId: attendShift }, { 'Idempotency-Key': `e2e-attend-${Date.now()}` });
 
   const tok1 = await attendee.post('/attendance/token', { shiftId: attendShift });
@@ -400,6 +416,23 @@ async function main(): Promise<void> {
     coordinates: desk,
   });
   ok('a token with a tampered signature is refused', forged.status >= 400, `${forged.status}`);
+
+  // A valid token for a shift that has not happened yet: the token proves who and which
+  // shift, and this is the check that proves *when*.
+  const futureTok = await cohort[0].post('/attendance/token', { shiftId: soloId });
+  if (futureTok.status === 200 || futureTok.status === 201) {
+    const futureVerify = await lead.post('/attendance/verify', {
+      token: futureTok.body.data.token,
+      scannerId: 'E2E_DESK',
+      coordinates: desk,
+    });
+    ok("a token for a shift that has not started is refused, however valid the token",
+      futureVerify.status >= 400 && /not started/i.test(String(futureVerify.body?.message ?? '')),
+      `${futureVerify.status} ${String(futureVerify.body?.message ?? '').slice(0, 90)}`);
+  } else {
+    ok('a token for a shift that has not started is refused, however valid the token',
+      false, `could not mint a token for the future shift: ${futureTok.status}`);
+  }
 
   // ────────────────────────────────────────────────────────────────────────
   section('8. Distress — a guarded SOS lifecycle (docs/WORKFLOWS.md §5)');
