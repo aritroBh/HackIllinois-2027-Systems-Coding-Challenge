@@ -74,6 +74,12 @@ const envSchema = z.object({
   CONTENT_DIR: z.string().min(1).optional(),
   /** Live multiplayer presence (WebSocket + SSE fallback). */
   PRESENCE_ENABLED: z.string().default('true').transform((v) => v !== 'false' && v !== '0'),
+  /**
+   * Which plugins are activated at boot, comma-separated. Every plugin in the tree is
+   * statically imported so `tsc` sees it; this decides which of them actually run, so
+   * shipping a plugin and enabling it are two separate decisions.
+   */
+  PLUGINS: z.string().default(''),
 
   // --- capacity -------------------------------------------------------------
   // The per-IP rate limit must be tunable at deploy time. It was previously a

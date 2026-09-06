@@ -1,0 +1,356 @@
+/**
+ * me — the volunteer's own card (plan §C4).
+ *
+ * Every request on this tab goes to a `/me` endpoint rather than to a list filtered in
+ * the browser: `/me/shifts` for the next shift, `/me/inventory` for power-ups, `/me/card`
+ * for the short id and tier. The attendance token is minted against the account's own
+ * confirmed registration, and the server derives the volunteer from the session, so there
+ * is no id to pass and no way to mint one for somebody else.
+ *
+ * The walking ETA is local arithmetic. The renderer knows where the player is in world
+ * units, the content pack knows where the venue is in degrees, and both share the frame
+ * build-campus.py laid down (origin at the Main Quad, +x east, +z south). Nothing is
+ * asked of the server to work out how far away a shift is.
+ *
+ * Plain script under `script-src 'self'`: no inline handlers, and everything reaching
+ * innerHTML goes through esc().
+ */
+(function () {
+  'use strict';
+
+  const N = window.Nexus;
+  if (!N) { console.error('[me] nexus.js must load first'); return; }
+
+  const TAB_ID = 'tab-me';
+  const WALK_MPS = 1.3;
+  const TOKEN_WINDOW_S = 30;
+  const LEAD_ROLES = ['SHIFT_LEAD', 'ORGANIZER', 'ADMIN'];
+
+  const state = {
+    section: null,
+    visible: false,
+    shifts: [],
+    next: null,
+    inventory: [],
+    card: null,
+    loading: false,
+    token: null,          // { token, shiftId }
+    tokenError: null,
+    tokenBusy: false,
+    remaining: 0,
+    timer: null,
+  };
+
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* ------------------------------------------------------------------ *
+   * Where things are
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The client half of `resolveVenue` in src/common/utils/geo.ts: an exact venue key
+   * wins, then the longest matching hint. There is no HQ fallback here — a shift we
+   * cannot place gets no ETA rather than a confident distance to the wrong building.
+   */
+  function resolveVenue(location) {
+    const venues = N.content?.venues;
+    const raw = String(location || '').trim();
+    if (!venues || !raw) return null;
+    if (Object.prototype.hasOwnProperty.call(venues, raw)) return venues[raw];
+    const upper = raw.toUpperCase();
+    let best = null;
+    for (const venue of Object.values(venues)) {
+      for (const hint of venue.hints || []) {
+        if (upper.includes(hint) && (!best || hint.length > best.score)) best = { venue, score: hint.length };
+      }
+    }
+    return best ? best.venue : null;
+  }
+
+  /** Metres from the player's sprite to a shift's venue, or null when either is unknown. */
+  function metresToShift(shift) {
+    const meta = window.campusMeta;
+    const me = window.campus?.getPlayer?.();
+    const venue = shift && resolveVenue(shift.location);
+    if (!meta?.origin || !me || !venue) return null;
+    const mpu = meta.metersPerUnit || 10;
+    const [lat0, lng0] = meta.origin;
+    const x = ((venue.longitude - lng0) * 111320 * Math.cos((lat0 * Math.PI) / 180)) / mpu;
+    const z = -((venue.latitude - lat0) * 111320) / mpu;
+    return Math.hypot(x - me.x, z - me.z) * mpu;
+  }
+
+  const clockOf = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+  function relative(ms) {
+    const mins = Math.round(ms / 60000);
+    if (mins <= 0) return 'now';
+    if (mins < 60) return `in ${mins} min`;
+    const hours = Math.round(mins / 60);
+    return hours < 24 ? `in ${hours} h` : `in ${Math.round(hours / 24)} d`;
+  }
+
+  /**
+   * Consecutive days ending today or yesterday on which this account showed up. The
+   * server holds the authoritative counter; until `/me` carries it, worked days from
+   * `/me/shifts` are that same number computed from the same rows.
+   */
+  function streakDays() {
+    const held = N.session.user?.streak?.count;
+    if (Number.isFinite(held)) return held;
+    const key = (d) => new Date(d).toDateString();
+    const days = new Set(state.shifts.filter((s) => s.status === 'CHECKED_IN' || s.status === 'COMPLETED').map((s) => key(s.startTime)));
+    if (!days.size) return 0;
+    const cursor = new Date();
+    if (!days.has(key(cursor))) cursor.setDate(cursor.getDate() - 1);
+    let count = 0;
+    while (days.has(key(cursor))) { count += 1; cursor.setDate(cursor.getDate() - 1); }
+    return count;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Data
+   * ------------------------------------------------------------------ */
+
+  async function load() {
+    if (state.loading || !N.session.user) return;
+    state.loading = true;
+    const [shifts, inventory, card] = await Promise.all([
+      N.api('/api/v1/me/shifts', { lenient: true }),
+      N.api('/api/v1/me/inventory', { lenient: true }),
+      N.api('/api/v1/me/card', { lenient: true }),
+    ]).catch((err) => { console.debug('[me] load failed', err.message); return [null, null, null]; });
+    state.loading = false;
+    if (shifts?.success) { state.shifts = shifts.data.shifts || []; state.next = shifts.data.next || null; }
+    if (inventory?.success) state.inventory = Array.isArray(inventory.data) ? inventory.data : [];
+    if (card?.success) state.card = card.data;
+    // A token minted for a shift that is no longer the next one is not the one to show.
+    if (state.token && state.token.shiftId !== state.next?.shiftId) clearToken();
+    paint();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Attendance token
+   * ------------------------------------------------------------------ */
+
+  const canMint = () => N.session.user?.kind === 'VOLUNTEER'
+    && !!state.next && (state.next.status === 'CONFIRMED' || state.next.status === 'CHECKED_IN');
+
+  function clearToken() {
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    state.token = null;
+    state.remaining = 0;
+  }
+
+  async function mintToken() {
+    if (state.tokenBusy || !canMint()) return;
+    state.tokenBusy = true;
+    state.tokenError = null;
+    paint();
+    try {
+      const { data } = await N.api('/api/v1/attendance/token', { method: 'POST', body: { shiftId: state.next.shiftId } });
+      state.token = { token: data.token, shiftId: state.next.shiftId };
+      state.remaining = data.expiresInSeconds;
+      startCountdown();
+    } catch (err) {
+      clearToken();
+      state.tokenError = err.status === 403 ? 'Attendance tokens are for volunteers.'
+        : err.status === 400 ? 'You do not hold a confirmed spot on that shift yet.'
+          : err.message;
+    } finally {
+      state.tokenBusy = false;
+      paint();
+    }
+  }
+
+  /**
+   * A token is only valid inside its 30 s slice, so the countdown is the honest thing to
+   * draw. It re-mints while the tab is open and stops the moment it is not: a live HMAC
+   * ticking away behind a hidden panel is a token nobody asked for.
+   */
+  function startCountdown() {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(() => {
+      state.remaining -= 1;
+      if (state.remaining > 0) { paintCountdown(); return; }
+      clearInterval(state.timer);
+      state.timer = null;
+      if (state.visible) void mintToken(); else { clearToken(); paint(); }
+    }, 1000);
+    paintCountdown();
+  }
+
+  function paintCountdown() {
+    const fill = state.section?.querySelector('#me-token-fill');
+    const text = state.section?.querySelector('#me-token-text');
+    if (fill) {
+      fill.style.width = `${Math.max(0, (state.remaining / TOKEN_WINDOW_S) * 100)}%`;
+      fill.classList.toggle('low', state.remaining <= 8);
+    }
+    if (text && state.token) text.textContent = `Expires in ${Math.max(0, state.remaining)}s`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Markup
+   * ------------------------------------------------------------------ */
+
+  const cell = (value, label) => `<div class="stat"><div class="v">${esc(value)}</div><div class="hud-label">${esc(label)}</div></div>`;
+
+  function nextShiftPanel() {
+    const s = state.next;
+    if (!s) {
+      return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Next up</div><h3>Nothing booked</h3></div></div>
+        <div class="empty-state">No shift on your card yet.
+          <button class="pb" type="button" data-action="tab" data-tab="tab-shifts">Open the quest board</button></div></div>`;
+    }
+    const starts = new Date(s.startTime).getTime();
+    const metres = metresToShift(s);
+    const walkMin = metres === null ? null : Math.max(1, Math.round(metres / WALK_MPS / 60));
+    const leaveBy = walkMin === null ? 0 : starts - walkMin * 60000;
+    const walk = walkMin === null
+      ? 'Drop your trainer on the campus map for a walking time to the door.'
+      : `${Math.round(metres)} m away, about ${walkMin} min at a walk. ${leaveBy <= Date.now() ? 'Leave now.' : `Leave by ${clockOf(leaveBy)}.`}`;
+    return `
+      <div class="px">
+        <div class="panel-head">
+          <div><div class="eyebrow">Next up</div><h3>${esc(s.title)}</h3></div>
+          <span class="sticker ${s.active ? 'live' : 'flat'}">${esc(s.active ? 'ON NOW' : s.status)}</span>
+        </div>
+        <p>${esc(s.location)}</p>
+        <div class="vitals-row" style="margin-top:12px">
+          ${cell(clockOf(starts), relative(starts - Date.now()))}
+          ${cell(`${Number(s.baseKarma) || 0}`, 'karma')}
+          ${cell(String(s.category || '').replace(/_/g, ' ').slice(0, 10), 'category')}
+        </div>
+        <p class="ob-hint">${esc(walk)}</p>
+      </div>`;
+  }
+
+  function tokenPanel() {
+    if (N.session.user?.kind !== 'VOLUNTEER') return '';
+    if (!canMint()) {
+      return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Check in</div><h3>No token yet</h3></div></div>
+        <p class="ob-hint">A token is minted against a confirmed spot. Claim a shift and it appears here.</p></div>`;
+    }
+    const live = !!state.token;
+    return `
+      <div class="px">
+        <div class="panel-head">
+          <div><div class="eyebrow">Check in</div><h3>Show this at the desk</h3></div>
+          <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New token' : 'Mint token'}</button>
+        </div>
+        <div class="qr-container">
+          <div class="qr-box"><div id="me-token-code" style="width:100%;height:100%;overflow:hidden;word-break:break-all;font-size:12px;line-height:1.3;color:var(--prairie-lt)">${esc(live ? state.token.token : '')}</div></div>
+          <div>
+            <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
+            <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
+            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within 75 m of the venue, so mint it once you are there.</p>
+            ${state.tokenError ? `<div class="ob-status is-err">${esc(state.tokenError)}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function statsPanel() {
+    const u = N.session.user || {};
+    const streak = streakDays();
+    const carrying = state.inventory.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    return `
+      <div class="px">
+        <div class="panel-head"><div><div class="eyebrow">Standing</div><h3>${esc(state.card?.tier || u.prestigeTier || 'Rookie')}</h3></div></div>
+        <div class="ob-stats">
+          <span><b>${Number(u.karmaPoints) || 0}</b><small>KARMA</small></span>
+          <span><b>${(Number(u.hoursServed) || 0).toFixed(1)}</b><small>HOURS</small></span>
+          <span><b>${(u.badges || []).length}</b><small>BADGES</small></span>
+        </div>
+        <p class="ob-hint">${streak > 0
+          ? `${streak} day${streak === 1 ? '' : 's'} in a row. Serve a shift today to keep it.`
+          : 'No streak yet. Serve a shift on two days running to start one.'}</p>
+        <p class="ob-hint">Carrying ${carrying} power-up${carrying === 1 ? '' : 's'}.</p>
+      </div>`;
+  }
+
+  /** Plan §C7: what opting in actually discloses, said differently for each role. */
+  function privacyCopy() {
+    const u = N.session.user || {};
+    const base = 'Off, you are invisible and you see nobody. It is symmetric. On, other trainers see a position snapped to a 20 m grid, nudged a few metres, and released a second late.';
+    if (u.kind === 'HACKER') {
+      return `${base} A lead can read your exact position, and every read is logged for thirty days. Raising an SOS shares where you are whatever this switch says.`;
+    }
+    const volunteer = `${base} Off shift you stay hidden from everyone but a lead. Distress calls only reach volunteers who are opted in and on shift; opted out, dispatch falls back to your shift venue.`;
+    return LEAD_ROLES.includes(u.role)
+      ? `${volunteer} You can also read exact positions from the roster, and each of those reads is written to the audit log under your name.`
+      : volunteer;
+  }
+
+  function settingsPanel() {
+    const on = N.presence?.state?.optIn ?? N.session.user?.presenceOptIn;
+    return `
+      <div class="px">
+        <div class="panel-head"><div><div class="eyebrow">Settings</div><h3>Privacy</h3></div></div>
+        <div class="ob-row" style="align-items:center">
+          <input type="checkbox" id="pref-visible" data-action="presence-toggle" aria-labelledby="me-presence-label" aria-describedby="me-presence-copy"${on ? ' checked' : ''}>
+          <span class="hud-label" id="me-presence-label">Show me on the campus map</span>
+        </div>
+        <p class="ob-hint" id="me-presence-copy">${esc(privacyCopy())}</p>
+      </div>`;
+  }
+
+  function paint() {
+    const el = state.section;
+    if (!el) return;
+    const u = N.session.user;
+    if (!u) {
+      el.innerHTML = '<div class="empty-state">Sign in to see your card.<button class="pb" type="button" data-action="session">Sign in</button></div>';
+      return;
+    }
+    el.innerHTML = `
+      <div class="view-head">
+        <div>
+          <div class="eyebrow">${esc(u.kind === 'HACKER' ? 'Hacker' : String(u.role || 'Volunteer').replace(/_/g, ' '))}</div>
+          <h2>${esc(u.displayName || 'Trainer')}</h2>
+          <p>Your shift, your token, your standing. Nothing here is about anybody else.</p>
+        </div>
+        <div class="actions">
+          ${state.card ? `<span class="sticker rare">#${esc(state.card.shortId)}</span>` : ''}
+          <button class="pb pb-ghost pb-sm" type="button" data-action="me-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="split">
+        <div class="rail">${nextShiftPanel()}${tokenPanel()}</div>
+        <div class="rail">${statsPanel()}${settingsPanel()}</div>
+      </div>`;
+    paintCountdown();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Wiring
+   * ------------------------------------------------------------------ */
+
+  N.registerAction('me-token', () => { void mintToken(); });
+  N.registerAction('me-refresh', () => { void load(); });
+
+  N.registerTab({
+    id: TAB_ID,
+    label: 'Me',
+    order: 10,
+    roles: ['VOLUNTEER', 'SHIFT_LEAD', 'ORGANIZER', 'ADMIN', 'HACKER'],
+    render(section) { state.section = section; paint(); void load(); },
+    onShow() { state.visible = true; void load(); },
+    onHide() { state.visible = false; clearToken(); paint(); },
+  });
+
+  N.onEvent('session:ready', ({ user }) => { if (user) void load(); else paint(); });
+  N.onEvent('session', () => paint());
+
+  // Anything that moves a registration, a check-in or the inventory changes what this tab
+  // is showing. The rows are small and the tab is usually closed, so reloading all three
+  // is cheaper than tracking each mutation.
+  for (const type of ['SLOT_RESERVED', 'WAITLIST_PROMOTED', 'VOLUNTEER_CHECKED_IN', 'VOLUNTEER_CHECKED_OUT', 'SWAP_EXECUTED', 'HACKSTOP_SPUN', 'POWERUP_CONSUMED']) {
+    N.onEvent(type, () => { if (state.section) void load(); });
+  }
+
+  // players.js owns the toggle; repaint so the checkbox agrees with the transport.
+  N.onEvent('presence:transport', () => paint());
+  N.onEvent('presence:nack', () => paint());
+})();

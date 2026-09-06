@@ -240,7 +240,25 @@
   let activeTab = null;
   let navQueued = false;
 
-  const canSee = (def) => !def.roles?.length || (session.user && def.roles.includes(session.user.role));
+  /**
+   * The role router (plan §C2). A tab with no `roles` is for everyone; otherwise the
+   * signed-in account's role must be listed, and a hacker matches HACKER through either its
+   * role or its kind, because a hacker account carries both.
+   *
+   * Hiding a tab is presentation, never protection: every gated endpoint behind these tabs
+   * enforces its own role on the server. This just stops people being shown doors that will
+   * not open for them.
+   *
+   * With no session at all — the open legacy demo — nothing is hidden, which is what keeps
+   * the zero-setup dashboard usable.
+   */
+  const canSee = (def) => {
+    if (!def.roles?.length) return true;
+    const u = session.user;
+    if (!u) return true;
+    if (def.roles.includes(u.role)) return true;
+    return def.roles.includes('HACKER') && u.kind === 'HACKER';
+  };
   const orderedTabs = () => [...tabs.values()].sort((a, b) => (a.order - b.order) || a.label.localeCompare(b.label));
   const visibleTabs = () => orderedTabs().filter(canSee);
 
@@ -249,7 +267,8 @@
    *  - `id` is the section id (`tab-shifts`); an existing `<section id>` is
    *    adopted, otherwise one is created in <main> and `render(section)` is
    *    called on first show.
-   *  - `roles` empty → visible to everyone (the role router lands in M5).
+   *  - `roles` empty → visible to everyone; otherwise the signed-in role must be listed
+   *    (see `canSee` above). A tab is never a security boundary.
    *  - `badge` is a string/number or a function returning one, shown as a
    *    sticker on the nav button; call `Nexus.refreshNav()` after it changes.
    */

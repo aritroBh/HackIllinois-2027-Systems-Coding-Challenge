@@ -1,0 +1,48 @@
+{
+  "_about": "Quests. `event` names the domain event that advances the quest and `kind` says how: COUNT increments once per event, DISTINCT collects the payload field named by `distinctBy`, STREAK counts consecutive windows. `window` is the bucket progress is kept in — an hour, an event-local day, or the whole event — and for a STREAK it is the step of the streak instead. `anchoredToDuty` means progress only counts while the player is checked in to a shift. A `sticker` reward must be an item id from memorabilia.json, and its `drop` line there should describe the same thing this quest asks for.",
+  "quests": [
+    { "id": "first-shift", "title": "Sign the Roster", "blurb": "Claim a shift, any shift. The board empties faster than anyone expects.",
+      "kind": "COUNT", "target": 1, "window": "EVENT", "anchoredToDuty": false, "event": "registration.created",
+      "reward": { "karma": 50, "sticker": "illini-pennant" } },
+
+    { "id": "first-scan", "title": "Green Light", "blurb": "Hold your rotating token under a desk scanner and watch it go green.",
+      "kind": "COUNT", "target": 1, "window": "EVENT", "anchoredToDuty": false, "event": "checkin.completed",
+      "reward": { "karma": 40, "sticker": "block-i" } },
+
+    { "id": "supply-run", "title": "Supply Run", "blurb": "Two beacons inside the hour, without wandering off your post.",
+      "kind": "COUNT", "target": 2, "window": "HOURLY", "anchoredToDuty": true, "event": "hackstop.spun",
+      "reward": { "karma": 60 } },
+
+    { "id": "beacon-circuit", "title": "Beacon Circuit", "blurb": "Five different beacons in a day. The Quad is four hundred metres end to end.",
+      "kind": "DISTINCT", "distinctBy": "beaconId", "target": 5, "window": "DAILY", "anchoredToDuty": false, "event": "hackstop.spun",
+      "reward": { "karma": 120, "sticker": "cold-brew" } },
+
+    { "id": "four-desks", "title": "Four Desks", "blurb": "Check in at four different shifts over the weekend. Registration, food, hardware, the 3 AM one nobody wanted.",
+      "kind": "DISTINCT", "distinctBy": "shiftId", "target": 4, "window": "EVENT", "anchoredToDuty": false, "event": "checkin.completed",
+      "reward": { "karma": 180 } },
+
+    { "id": "dispatch-ready", "title": "Dispatch Ready", "blurb": "Close three distress calls in one day while you are on shift.",
+      "kind": "COUNT", "target": 3, "window": "DAILY", "anchoredToDuty": true, "event": "sos.resolved",
+      "reward": { "karma": 150 } },
+
+    { "id": "broad-triage", "title": "Broad Triage", "blurb": "Resolve calls in three different categories. A dead laptop and an empty stomach are the same emergency at 4 AM.",
+      "kind": "DISTINCT", "distinctBy": "category", "target": 3, "window": "EVENT", "anchoredToDuty": false, "event": "sos.resolved",
+      "reward": { "karma": 200 } },
+
+    { "id": "dependable", "title": "Dependable", "blurb": "Finish a shift on three days running. A missed day starts the count again.",
+      "kind": "STREAK", "target": 3, "window": "DAILY", "anchoredToDuty": false, "event": "checkout.completed",
+      "reward": { "karma": 300 } },
+
+    { "id": "double-back", "title": "Double Back", "blurb": "Two shifts finished on the same day. The second one is the one that counts.",
+      "kind": "COUNT", "target": 2, "window": "DAILY", "anchoredToDuty": false, "event": "checkout.completed",
+      "reward": { "karma": 110 } },
+
+    { "id": "hold-the-line", "title": "Hold the Line", "blurb": "Take three different strongholds for your faction. Altgeld rings for whoever holds it.",
+      "kind": "DISTINCT", "distinctBy": "gymId", "target": 3, "window": "EVENT", "anchoredToDuty": false, "event": "gym.captured",
+      "reward": { "karma": 400 } },
+
+    { "id": "sponsor-row", "title": "Sponsor Row", "blurb": "Scan four sponsor booths. They flew in to meet you, not the swag table.",
+      "kind": "DISTINCT", "distinctBy": "boothId", "target": 4, "window": "EVENT", "anchoredToDuty": false, "event": "booth.scanned",
+      "reward": { "karma": 200 } }
+  ]
+}

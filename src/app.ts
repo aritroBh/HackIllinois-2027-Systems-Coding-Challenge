@@ -42,6 +42,8 @@ import { eventHub } from './common/sse/eventHub';
 import { presenceService } from './presence/service';
 import { presenceStore } from './presence/store';
 import { schedulerStats } from './scheduler';
+import { mountPluginAssets } from './plugins';
+import { pluginRegistry } from './plugins/registry';
 import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
 import { pack } from './content/loader';
@@ -120,6 +122,9 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 const publicDir = path.join(__dirname, '../public');
 app.use('/dashboard/content', express.static(pack.dir, { maxAge: '1h', etag: true, index: false }));
 app.use('/dashboard', express.static(publicDir));
+// Plugin client assets: one explicit route per declared file, each behind the same
+// enabled-guard as the plugin's API routes, so a disabled plugin's JS is a 404 too.
+mountPluginAssets(app);
 app.get('/', (_req: Request, res: Response) => {
   res.redirect('/dashboard');
 });
@@ -183,6 +188,7 @@ app.get('/health', (_req: Request, res: Response) => {
     streams: eventHub.stats(),
     presence: { enabled: env.PRESENCE_ENABLED, ...presenceService.stats, tracked: presenceStore.size() },
     jobs: schedulerStats(),
+    plugins: pluginRegistry.stats(),
     timestamp: new Date().toISOString(),
   });
 });
