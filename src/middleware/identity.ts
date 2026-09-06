@@ -158,6 +158,7 @@ const ANONYMOUS_ALLOW = new Set<string>([
   'POST /auth/claim-codes',
   'POST /auth/claim-codes/bulk',
   'GET /content',
+  'GET /announcements', // the login screen shows public notices before anyone signs in
 ]);
 
 export function isAnonymousAllowed(method: string, path: string): boolean {

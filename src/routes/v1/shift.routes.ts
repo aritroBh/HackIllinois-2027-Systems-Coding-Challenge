@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { ShiftController } from '../../controllers/shift.controller';
 import { validate } from '../../middleware/validate';
-import { requireRole } from '../../middleware/identity';
+import { requireRole, requireSession } from '../../middleware/identity';
 import {
   createShiftSchema,
   updateShiftSchema,
@@ -24,5 +24,14 @@ export const shiftRouter = Router();
 shiftRouter.post('/', requireRole('SHIFT_LEAD'), validate(createShiftSchema), ShiftController.createShift);
 shiftRouter.get('/', validate(listShiftsQuerySchema), ShiftController.listShifts);
 shiftRouter.get('/:id', validate(getShiftParamsSchema), ShiftController.getShiftById);
+
+/**
+ * The lead's roster (plan §A7): who is signed up, who has arrived, and — for anyone
+ * publishing presence — how fresh their fix is and roughly where they are.
+ *
+ * The distance and freshness *buckets* are still a disclosure about named people, so the
+ * view is audited once (never once per row) and needs a real session, not a legacy claim.
+ */
+shiftRouter.get('/:id/roster', requireSession, requireRole('SHIFT_LEAD'), validate(getShiftParamsSchema), ShiftController.getRoster);
 shiftRouter.patch('/:id', requireRole('SHIFT_LEAD'), validate(updateShiftSchema), ShiftController.updateShift);
 shiftRouter.delete('/:id', requireRole('ORGANIZER'), validate(getShiftParamsSchema), ShiftController.deleteShift);

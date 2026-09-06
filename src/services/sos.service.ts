@@ -17,7 +17,7 @@
  * **Known gap:** the bounty is uncapped and caller-supplied at ticket creation.
  */
 import { Types } from 'mongoose';
-import { SOSTicket, ISOSTicket, SOSTicketStatus, SOSTicketCategory, SOSTicketUrgency } from '../models/sosTicket.model';
+import { SOSTicket, ISOSTicket, SOSTicketStatus, SOSTicketCategory, SOSTicketUrgency, canTransition } from '../models/sosTicket.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { Volunteer, IVolunteer, computePrestigeTier } from '../models/volunteer.model';
 import { IShift } from '../models/shift.model';
@@ -44,6 +44,9 @@ export interface ICreateSOSTicketDTO {
 
 /** A presence fix older than this is not a position any more; fall back to the venue. */
 const LIVE_POSITION_MAX_AGE_MS = 30_000;
+
+/** Lead-or-above, the only role that may reassign, cancel a dispatched ticket, or see exact distances. */
+const isLeadRole = (role?: string): boolean => /SHIFT_LEAD|ORGANIZER|ADMIN/.test(role ?? '');
 
 /** Distances shown to non-leads are rounded to this, so they cannot be used to range. */
 const DISTANCE_BUCKET_M = 10;
@@ -248,6 +251,141 @@ export class SOSService {
           }))
         : [],
     };
+  }
+
+  /**
+   * One guarded state change (plan §A7). Every move goes through the `SOS_TRANSITIONS`
+   * table and appends to `history`, so the ticket carries its own timeline and an illegal
+   * move is a 409 rather than a silently overwritten status. The CAS on `status` is what
+   * makes two coordinators pressing the same button safe.
+   */
+  private static async transition(
+    ticketId: string,
+    to: SOSTicketStatus,
+    actor: { id?: string; role?: string; kind?: string },
+    opts: { note?: string; set?: Record<string, unknown>; requireAssignee?: boolean } = {}
+  ): Promise<ISOSTicket> {
+    const ticket = await SOSTicket.findById(ticketId);
+    if (!ticket) throw ApiError.notFound('SOS ticket not found.');
+    const from = ticket.status;
+    if (!canTransition(from, to)) {
+      throw ApiError.conflict(`An SOS ticket cannot go from ${from} to ${to}.`, ErrorCode.SCHEDULE_CONFLICT);
+    }
+    if (opts.requireAssignee && !sameId(ticket.assignedVolunteerId, actor.id) && !isLeadRole(actor.role)) {
+      throw ApiError.forbidden('Only the assigned responder (or a lead) can do that.');
+    }
+    const updated = await SOSTicket.findOneAndUpdate(
+      { _id: ticket._id, status: from },
+      {
+        $set: { status: to, ...(opts.set ?? {}) },
+        $push: { history: { status: to, at: new Date(), by: actor.id ? new Types.ObjectId(actor.id) : null, note: opts.note } },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      throw ApiError.conflict('Someone else moved this ticket first.', ErrorCode.CONCURRENT_MUTATION_IN_PROGRESS);
+    }
+    SOSService.publish(updated, `SOS_TICKET_${to}`);
+    return updated;
+  }
+
+  /** The full ticket to lead+ and the parties; a redacted copy to everyone else. */
+  private static publish(ticket: ISOSTicket, type: string): void {
+    eventHub.broadcast({
+      type,
+      data: {
+        ticketId: ticket._id,
+        status: ticket.status,
+        venueKey: ticket.tableLocation,
+        category: ticket.category,
+        urgency: ticket.urgency,
+        hackerName: ticket.hackerName,
+        tableLocation: ticket.tableLocation,
+        assignedVolunteerId: ticket.assignedVolunteerId,
+      },
+    });
+    // The creator and the assignee always get the full ticket on their own channel.
+    for (const party of [ticket.createdById, ticket.assignedVolunteerId]) {
+      if (party) eventHub.sendToAccount(String(party), { type, data: { ticketId: ticket._id, status: ticket.status, ticket } });
+    }
+  }
+
+  /** The responder says "on my way". */
+  public static acknowledge(ticketId: string, actor: { id?: string; role?: string }): Promise<ISOSTicket> {
+    return SOSService.transition(ticketId, SOSTicketStatus.ACKNOWLEDGED, actor, {
+      requireAssignee: true,
+      set: { acknowledgedAt: new Date() },
+    });
+  }
+
+  /** The responder is standing there. */
+  public static arrive(ticketId: string, actor: { id?: string; role?: string }): Promise<ISOSTicket> {
+    return SOSService.transition(ticketId, SOSTicketStatus.ON_SCENE, actor, {
+      requireAssignee: true,
+      set: { onSceneAt: new Date() },
+    });
+  }
+
+  /**
+   * Cancel. The creator may only cancel while the ticket is still OPEN — once somebody is
+   * walking towards them, calling it off is a decision for the person who dispatched.
+   * A lead may cancel from any non-terminal state.
+   */
+  public static async cancel(ticketId: string, actor: { id?: string; role?: string }, note?: string): Promise<ISOSTicket> {
+    const ticket = await SOSTicket.findById(ticketId);
+    if (!ticket) throw ApiError.notFound('SOS ticket not found.');
+    const isCreator = sameId(ticket.createdById, actor.id);
+    const lead = isLeadRole(actor.role);
+    if (!lead && !(isCreator && ticket.status === SOSTicketStatus.OPEN)) {
+      throw ApiError.forbidden('Only a lead can cancel a ticket once it has been dispatched.');
+    }
+    return SOSService.transition(ticketId, SOSTicketStatus.CANCELLED, actor, { note, set: { assignedVolunteerId: null } });
+  }
+
+  /** Send it back to the queue for someone else (lead+ only). */
+  public static async reassign(ticketId: string, actor: { id?: string; role?: string }, note?: string): Promise<ISOSTicket> {
+    if (!isLeadRole(actor.role)) throw ApiError.forbidden('Only a lead can reassign a ticket.');
+    return SOSService.transition(ticketId, SOSTicketStatus.OPEN, actor, {
+      note,
+      set: { assignedVolunteerId: null, dispatchedAt: null, acknowledgedAt: null, onSceneAt: null },
+    });
+  }
+
+  /**
+   * Escalation sweep (plan §A7): a ticket dispatched more than three minutes ago that
+   * nobody has acknowledged is shouted about once. The public `announce` copy carries no
+   * coordinates, table text or names — it is readable by anyone — while lead+ subscribers
+   * get the full ticket on `sos`.
+   */
+  public static async escalateStale(now: Date = new Date(), afterMs = 3 * 60_000): Promise<number> {
+    const cutoff = new Date(now.getTime() - afterMs);
+    const stale = await SOSTicket.find({
+      status: SOSTicketStatus.DISPATCHED,
+      dispatchedAt: { $lte: cutoff },
+      escalatedAt: null,
+    }).limit(50);
+    for (const ticket of stale) {
+      const claimed = await SOSTicket.findOneAndUpdate(
+        { _id: ticket._id, escalatedAt: null },
+        { $set: { escalatedAt: now } },
+        { new: true }
+      );
+      if (!claimed) continue; // another instance got there first
+      eventHub.broadcastChannel('announce', {
+        type: 'SOS_ESCALATED',
+        data: {
+          ticketId: claimed._id,
+          venueKey: claimed.tableLocation,
+          urgency: claimed.urgency,
+          minutesOpen: Math.round((now.getTime() - new Date(claimed.createdAt).getTime()) / 60_000),
+        },
+      });
+      eventHub.broadcastChannel('sos', {
+        type: 'SOS_ESCALATED_FULL',
+        data: { ticketId: claimed._id, ticket: claimed },
+      });
+    }
+    return stale.length;
   }
 
   /**

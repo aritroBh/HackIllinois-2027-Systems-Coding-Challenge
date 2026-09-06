@@ -52,3 +52,9 @@ export const listSOSTicketsSchema = z.object({
     status: z.nativeEnum(SOSTicketStatus).optional(),
   }),
 });
+
+/** Acknowledge / on-scene / cancel / reassign: the id in the path, an optional note. */
+export const ticketActionSchema = z.object({
+  params: z.object({ id: objectId('Invalid SOS ticket id') }),
+  body: z.object({ note: z.string().max(280).optional() }).optional(),
+});

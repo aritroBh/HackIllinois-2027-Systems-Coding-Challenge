@@ -12,7 +12,46 @@ import { SOSService } from '../services/sos.service';
 import { SOSTicketStatus } from '../models/sosTicket.model';
 import { resolveActorId } from '../middleware/identity';
 
+/** Who is asking, for the lifecycle guards. */
+const actorOf = (req: Request) => ({ id: resolveActorId(req), role: req.account?.role, kind: req.account?.kind });
+
 export class SOSController {
+  public static async acknowledge(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const ticket = await SOSService.acknowledge(req.params.id as string, actorOf(req));
+      res.status(200).json({ success: true, data: ticket });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async arrive(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const ticket = await SOSService.arrive(req.params.id as string, actorOf(req));
+      res.status(200).json({ success: true, data: ticket });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async cancel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const ticket = await SOSService.cancel(req.params.id as string, actorOf(req), req.body?.note);
+      res.status(200).json({ success: true, data: ticket });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async reassign(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const ticket = await SOSService.reassign(req.params.id as string, actorOf(req), req.body?.note);
+      res.status(200).json({ success: true, data: ticket });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async createTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const ticket = await SOSService.createTicket(req.body);

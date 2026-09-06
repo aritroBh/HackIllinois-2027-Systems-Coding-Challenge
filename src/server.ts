@@ -13,6 +13,7 @@ import { Application } from 'express';
 import { env } from './config/env';
 import { attachPresenceWs } from './presence/wsTransport';
 import { presenceService } from './presence/service';
+import { startScheduler, stopScheduler } from './scheduler';
 
 export interface ServerHooks {
   /** Called with the server before it listens; presence attaches its upgrade handler here. */
@@ -45,6 +46,10 @@ export function createServer(app: Application, hooks: ServerHooks = {}): http.Se
     presenceService.start();
     server.on('close', () => presenceService.stop());
   }
+
+  // Periodic work (SOS escalation, the SSE presence sweep) — one timer for the process.
+  startScheduler();
+  server.on('close', () => stopScheduler());
 
   for (const attach of hooks.attach ?? []) attach(server);
   return server;
