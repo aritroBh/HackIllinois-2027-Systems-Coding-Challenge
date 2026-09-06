@@ -291,3 +291,43 @@ drives a real `PresenceSession`, and asserts on the frame the client receives: r
 cluster counts equal everybody but the viewer, at five rungs, with the viewer seated both at
 the centre of its cell and on the rim — because the two corrections are triggered by opposite
 seatings, and one seating alone tests only half of the fix.
+
+---
+
+## Round five — the client-facing services and the wiring, 2026-09-06
+
+**muse**, **opencode** and **agy**, all three read-only on one scratch copy. The copy was
+verified afterwards two ways: its tree hash matched the pre-review hash exactly, and a full
+`diff -rq` against the commit it was taken from (`e0c8964`) showed no tracked file changed.
+
+Verdicts: opencode 2 findings, muse 2 plus a stale comment, agy 7. Nine survived checking.
+All three reported the presence layer, the SSE hub, the swap ring, the auth stack and the
+rate limiter sound, which is the first round where the concurrency work drew no findings at
+all.
+
+### Closed
+
+| Finding | Source | Fix |
+|---|---|---|
+| **`RaidService.subscribe()` and `RaidService.tick()` had no caller.** For the whole of M6 a raid window opened and closed in the pack with no `RAID_OPENED` and no `RAID_CLOSED` on the wire, and nobody was ever enrolled — `RaidJoin` stayed empty and every board reported zero joins. The scheduler's own docblock had promised since M6 that raid timers lived there. | agy | 128cea9 |
+| Replay ignored the audience filter the live send applies. `announce` is the one channel needing no session, so reconnecting with a `Last-Event-ID` — anonymously — read back the last minute of staff-only announcements. The buffer recorded what was said and not who it was said to. | agy | 128cea9 |
+| `GET /pokeshift/hackstops` returned `lastSpunUsers` on every beacon: an unauthenticated who-was-at-which-beacon-when timeline for the whole event, joinable against ids that are public by design, with no audit row anywhere. | opencode | 128cea9 |
+| `POST /avatars/:hash/flag` used `requireAccount` rather than `requireSession`, and one lead flag unpublishes on its own. In legacy mode `?volunteerId=<any lead id>` censored any attendee's avatar in one unauthenticated request, and rotating the claimed id also walked past the per-reporter hourly cap. | agy | 128cea9 |
+| `presenceService.invalidate()` deleted the cached facts, and the tick only acts when it *has* facts — so invalidating an account destroyed the evidence that would have demoted its live session. A lead demoted mid-event kept lead vision for as long as the socket stayed open. | agy | 128cea9 |
+| Tier-2 dispatch checked only that a shift had not *ended*. A volunteer confirmed for tomorrow afternoon has an `endTime` in the future, so at 3.30 a.m. the ticket went to somebody not at the event — and was marked `DISPATCHED`, which stops anybody else looking at it. | agy | 128cea9 |
+| The booth's compensating delete was guarded by a flag tracking the karma award alone, and the reward is three things. A booth paying zero karma that grants a power-up left the flag false, so a failure after the grant handed the booth back with the power-up already in the inventory, and the retry `$inc`d a second one. | muse | 128cea9 |
+| `boothCatalog` validated `venue` and `powerUp` but not `reward.sticker`, so a pack typo surfaced as a 404 at scan time — after the karma had been paid — instead of at pack load. | muse | (see below) |
+| Three stale comments: two claiming `POST /adonix/sync` is unauthenticated when it has been organiser-only since the identity round, and one of mine in `resolveTicket` saying the bounty follows the actor, directly above the code that makes it follow the assignment. | agy, muse | 128cea9 |
+
+### Test quality
+
+`tests/masterEndToEnd.test.ts` had nobody genuinely on duty at its SOS step — Ada checks out
+in System 4 and every other registration is for a shift hours away. The old dispatch answered
+that by sending the ticket to a volunteer whose shift was the next day, so the fixture passed
+while describing something that could not happen. It now puts a certified responder on a shift
+that is actually running, which is what it always meant.
+
+`tests/wiring.test.ts` is new and exists for one class of defect: a function that works,
+is tested directly, and is connected to nothing. Its tests assert the wiring — that the bus
+listener is attached, that the scheduler job runs, that teardown detaches — rather than the
+behaviour behind it, because the behaviour was never what was broken.
