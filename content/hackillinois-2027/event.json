@@ -68,10 +68,13 @@
     "maxDetail": 60
   },
   "karmaCaps": {
+    "CHECKOUT": 2000,
     "GYM": 600,
     "HACKSTOP": 400,
+    "POWERUP": 300,
     "QUEST": 500,
-    "SOS": 1000
+    "SOS": 1000,
+    "BOOTH": 500
   },
   "bountyCap": {
     "LOW": 100,

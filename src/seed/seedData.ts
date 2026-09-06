@@ -18,6 +18,7 @@
  * empty database. Use `npm run demo` (`scripts/devSeeded.ts`), which shares one instance
  * between seeding and serving, or set `MONGODB_URI` so both attach to the same database.
  */
+import mongoose from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { Volunteer, VolunteerRole, PrestigeTier } from '../models/volunteer.model';
@@ -40,7 +41,13 @@ export async function seedDatabase(): Promise<void> {
     process.exit(1);
   }
   console.log('🌱 [SEED] Starting database hydration with HackIllinois scenarios...');
-  await connectDatabase();
+  // Only when nobody has connected for us. `connectDatabase()` with no `MONGODB_URI` starts
+  // a *new* in-memory replica set and repoints mongoose at it, so calling it unconditionally
+  // from a caller that already holds a connection — the test suite, most of all — silently
+  // moves the seed into a second database and leaves the caller reading an empty first one.
+  // That is what kept the seeded scenario untestable, and an untested seed is how the demo's
+  // headline trade ring came to be wired so that it could never execute.
+  if (mongoose.connection.readyState !== 1) await connectDatabase();
 
   // Clear existing collections (every collection, including attendance,
   // SOS, inventory, and lock/idempotency state — stale check-in nonces or
@@ -85,7 +92,12 @@ export async function seedDatabase(): Promise<void> {
       email: 'alice@illinois.edu',
       phone: '217-555-0101',
       role: VolunteerRole.VOLUNTEER,
-      certifications: ['DRIVERS_LICENSE', 'FOOD_HANDLING'],
+      // HARDWARE_EXPERIENCE because Alice asks for the hardware desk in the trade ring
+      // below, and the cyclic resolver refuses to hand anybody a shift they are not
+      // certified for. Seeding the ask without the certification made the demo's headline
+      // three-way ring permanently unexecutable: cycle detection found it every time and
+      // then failed every leg with "receiver lacks certifications".
+      certifications: ['DRIVERS_LICENSE', 'FOOD_HANDLING', 'HARDWARE_EXPERIENCE'],
       karmaPoints: 1250,
       hoursServed: 10.5,
       prestigeTier: PrestigeTier.SIEBEL_GUARDIAN,
@@ -96,7 +108,9 @@ export async function seedDatabase(): Promise<void> {
       email: 'bob@illinois.edu',
       phone: '217-555-0102',
       role: VolunteerRole.VOLUNTEER,
-      certifications: ['HARDWARE_EXPERIENCE', 'FIRST_AID'],
+      // DRIVERS_LICENSE for the same reason: Bob's leg of the ring receives the airport
+      // shuttle, which requires one.
+      certifications: ['HARDWARE_EXPERIENCE', 'FIRST_AID', 'DRIVERS_LICENSE'],
       karmaPoints: 2400,
       hoursServed: 18.0,
       prestigeTier: PrestigeTier.MIDNIGHT_KRAKEN,
@@ -160,9 +174,11 @@ export async function seedDatabase(): Promise<void> {
       location: 'Siebel Center Atrium',
       startTime: shift1Start,
       endTime: shift1End,
-      capacity: 3,
-      filledSlots: 2,
-      waitlistCount: 1,
+      // Two, not three. This is the demo's "contested" shift and it seeds two confirmed
+      // holders and one waitlisted volunteer — which at capacity three meant Evan was
+      // queueing for a seat that was standing empty, a state the live system cannot
+      // produce and cannot resolve (nothing promotes until somebody cancels).
+      capacity: 2,
       requiredSkills: ['FOOD_HANDLING'],
       baseKarma: 120,
       manualSurgeMultiplier: 1.0,
@@ -177,8 +193,6 @@ export async function seedDatabase(): Promise<void> {
       startTime: shift2Start,
       endTime: shift2End,
       capacity: 2,
-      filledSlots: 1,
-      waitlistCount: 0,
       requiredSkills: ['HARDWARE_EXPERIENCE'],
       baseKarma: 150,
       manualSurgeMultiplier: 1.2,
@@ -193,8 +207,6 @@ export async function seedDatabase(): Promise<void> {
       startTime: shift3Start,
       endTime: shift3End,
       capacity: 2,
-      filledSlots: 1,
-      waitlistCount: 0,
       requiredSkills: ['DRIVERS_LICENSE'],
       baseKarma: 180,
       manualSurgeMultiplier: 1.0,
@@ -209,8 +221,6 @@ export async function seedDatabase(): Promise<void> {
       startTime: midnightStart,
       endTime: midnightEnd,
       capacity: 4,
-      filledSlots: 0,
-      waitlistCount: 0,
       requiredSkills: [],
       baseKarma: 220,
       manualSurgeMultiplier: 3.5, // High Surge Shift!
@@ -225,8 +235,6 @@ export async function seedDatabase(): Promise<void> {
       startTime: new Date(baseTime.getTime() + 24 * 3600 * 1000),
       endTime: new Date(baseTime.getTime() + 27 * 3600 * 1000),
       capacity: 5,
-      filledSlots: 2,
-      waitlistCount: 0,
       requiredSkills: [],
       baseKarma: 100,
       manualSurgeMultiplier: 1.0,
@@ -247,7 +255,6 @@ export async function seedDatabase(): Promise<void> {
     idempotencyKey: 'seed_reg_ops',
     confirmedAt: new Date(baseTime.getTime() - 5400000),
   });
-  await Shift.updateOne({ _id: shifts[3]._id }, { $inc: { filledSlots: 1 } });
 
   await Registration.create([
     {
@@ -286,6 +293,29 @@ export async function seedDatabase(): Promise<void> {
       confirmedAt: new Date(baseTime.getTime() - 3600000),
     },
   ]);
+
+  // 3b. Derive the denormalised counters from the rows that were just written.
+  //
+  // These used to be hand-written literals on each `Shift.create` above, kept in step with
+  // the registrations by eye. They were not in step. "Opening Ceremony Swag Distribution"
+  // claimed two filled seats and had no registrations at all — two of its five seats
+  // permanently occupied by nobody — and only one shift had its counter maintained, by an
+  // ad-hoc `$inc` that no other shift got.
+  //
+  // `filledSlots` is what the capacity guard reads, so a seeded value that disagrees with
+  // the rows is the same corruption the whole reservation path exists to prevent, shipped
+  // as the starting state. Computing it here means the demo cannot drift again: add a
+  // registration and the counter follows.
+  for (const shift of shifts) {
+    const [occupied, waiting] = await Promise.all([
+      Registration.countDocuments({
+        shiftId: shift._id,
+        status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] },
+      }),
+      Registration.countDocuments({ shiftId: shift._id, status: RegistrationStatus.WAITLISTED }),
+    ]);
+    await Shift.updateOne({ _id: shift._id }, { $set: { filledSlots: occupied, waitlistCount: waiting } });
+  }
 
   // 4. Create a 3-Way Circular Trade Scenario:
   // Alice holds Pizza Shift -> wants HW Shift

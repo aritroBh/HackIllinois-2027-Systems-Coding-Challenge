@@ -37,6 +37,7 @@ import { Types } from 'mongoose';
 import { QuestProgress, IQuestProgress } from '../models/questProgress.model';
 import { CheckIn } from '../models/checkin.model';
 import { eventDay } from '../models/karmaLedger.model';
+import { KarmaSourceKey } from '../common/karmaSources';
 import { KarmaService } from './karma.service';
 import { StickerService } from './sticker.service';
 import { eventHub } from '../common/sse/eventHub';
@@ -45,7 +46,7 @@ import { pack } from '../content/loader';
 import { Quest, QuestWindow, questsSchema } from '../content/quests.schema';
 
 /** The cap bucket quest rewards are paid from; matched against `pack.event.karmaCaps`. */
-const KARMA_SOURCE = 'QUEST';
+const KARMA_SOURCE: KarmaSourceKey = 'QUEST';
 
 /** The window key of a quest that runs once for the whole event. */
 const EVENT_WINDOW_KEY = 'event';

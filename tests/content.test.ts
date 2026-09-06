@@ -9,6 +9,7 @@ import request from 'supertest';
 import { app } from '../src/app';
 import { pack, loadPack, ContentPackError, toLocal, fromLocal, inBbox } from '../src/content/loader';
 import { env } from '../src/config/env';
+import { KARMA_SOURCES } from '../src/common/karmaSources';
 
 function copyPack(mutate: (dir: string) => void): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-'));
@@ -55,6 +56,47 @@ describe('content pack', () => {
     expect((err as ContentPackError).issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: 'territories.json', path: 'territories[0].venue' })])
     );
+  });
+
+  it('a karma source with no daily cap refuses to load, because unpriced means unlimited', () => {
+    // `KarmaService.capFor` returns null for a source the pack does not mention, and null
+    // routes the award to `spendUncapped`. So an omitted ceiling is not a missing tuning
+    // value that falls back to something sensible — it is an economy with no limit on that
+    // source, indistinguishable from a configured one until somebody reads the leaderboard.
+    // `POWERUP`, `CHECKOUT` and `BOOTH` were all missing, and they are the three highest-
+    // yield paths in the game.
+    for (const source of KARMA_SOURCES) {
+      const dir = copyPack((d) =>
+        rewrite(d, 'event.json', (doc) => {
+          const caps = doc.karmaCaps as Record<string, number>;
+          delete caps[source];
+        })
+      );
+      let err: unknown;
+      try {
+        loadPack(dir);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ContentPackError);
+      expect((err as ContentPackError).issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file: 'event.json', path: `karmaCaps.${source}` }),
+        ])
+      );
+    }
+  });
+
+  it('both shipped packs price every karma source the code mints against', () => {
+    for (const dir of ['content/hackillinois-2027', 'content/example-campus']) {
+      const event = JSON.parse(fs.readFileSync(path.join(dir, 'event.json'), 'utf8')) as {
+        karmaCaps?: Record<string, number>;
+      };
+      expect({ dir, missing: KARMA_SOURCES.filter((s) => !(s in (event.karmaCaps ?? {}))) }).toEqual({
+        dir,
+        missing: [],
+      });
+    }
   });
 
   it('a missing NEUTRAL faction is a cross-reference error; a bad venue key is a file error', () => {

@@ -37,6 +37,7 @@ import path from 'path';
 import { Types } from 'mongoose';
 import { BoothScan } from '../models/boothScan.model';
 import { PowerUpInventory, PowerUpType, POWER_UP_CATALOG } from '../models/powerup.model';
+import { KarmaSourceKey } from '../common/karmaSources';
 import { KarmaService } from './karma.service';
 import { StickerService } from './sticker.service';
 import { eventHub } from '../common/sse/eventHub';
@@ -48,7 +49,7 @@ import { pack } from '../content/loader';
 import { Booth, boothsSchema } from '../content/booths.schema';
 
 /** The cap bucket booth rewards are paid from; matched against `pack.event.karmaCaps`. */
-const KARMA_SOURCE = 'BOOTH';
+const KARMA_SOURCE: KarmaSourceKey = 'BOOTH';
 
 /** Domain separation, so a booth code can never be replayed as some other HMAC in this app. */
 const CODE_PREFIX = 'booth:v1:';

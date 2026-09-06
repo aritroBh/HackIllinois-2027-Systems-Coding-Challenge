@@ -15,10 +15,17 @@
  * calls this service. Quests that happen to require walking somewhere pay for the quest.
  *
  * **The cap.** `pack.event.karmaCaps` maps a source key to its ceiling for one event-local
- * day. A source with no entry is uncapped, which is a deliberate default: a new source
- * added by a fork should work before it is tuned, and an operator who wants it bounded
- * writes one line of pack. An award larger than the remaining budget is clamped, not
- * refused. Half a HackStop payout is a better answer than an error at a beacon.
+ * day. An award larger than the remaining budget is clamped, not refused: half a HackStop
+ * payout is a better answer than an error at a beacon.
+ *
+ * A source with no entry is uncapped — the lookup fails **open**, so that a new source a
+ * fork invents works before it is tuned. That default is fine for a source nobody has
+ * written yet and dangerous for one this codebase already mints from, and the difference
+ * was not enforced: `POWERUP`, `CHECKOUT` and `BOOTH` were all being minted with no
+ * ceiling, and `content/example-campus` shipped with no `karmaCaps` key at all. Every
+ * source in `KARMA_SOURCES` must therefore be priced by every pack, checked by
+ * `crossValidate` at load, so the fail-open path is reachable only by a source that is
+ * genuinely new.
  *
  * **What is atomic and what is not.** The ledger spend and the balance increment are two
  * writes with no transaction between them, and this file spends first. Both orders can be
@@ -35,17 +42,20 @@ import { Volunteer, computePrestigeTier } from '../models/volunteer.model';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { pack } from '../content/loader';
+import { KARMA_SOURCES, KarmaSourceKey } from '../common/karmaSources';
 import { RaidService } from './raid.service';
 
-/** Source keys used by the shipped pack. A fork may award against any string it likes. */
-export const KarmaSource = {
-  CHECKOUT: 'CHECKOUT',
-  GYM: 'GYM',
-  HACKSTOP: 'HACKSTOP',
-  POWERUP: 'POWERUP',
-  QUEST: 'QUEST',
-  SOS: 'SOS',
-} as const;
+/**
+ * Source keys karma may be minted against.
+ *
+ * Built from `KARMA_SOURCES` rather than written out again, because the content schema
+ * requires a pack to price every entry — and a source that exists here but not there is a
+ * source with no daily ceiling, since `capFor` fails open. Keeping one list means the two
+ * cannot drift apart, which is how `POWERUP`, `CHECKOUT` and `BOOTH` came to be uncapped.
+ */
+export const KarmaSource = Object.fromEntries(KARMA_SOURCES.map((s) => [s, s])) as {
+  readonly [K in KarmaSourceKey]: K;
+};
 
 export interface IKarmaAward {
   /** Karma actually added to the balance, after the daily cap was applied. */

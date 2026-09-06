@@ -13,6 +13,7 @@
  * original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
  */
 import { z } from 'zod';
+import { KARMA_SOURCES } from '../common/karmaSources';
 
 const latLng = z.tuple([z.number().min(-90).max(90), z.number().min(-180).max(180)]);
 const bbox = z.tuple([z.number(), z.number(), z.number(), z.number()]); // south, west, north, east
@@ -224,6 +225,25 @@ export function crossValidate(pack: Omit<ContentPack, 'factionIds' | 'files'>): 
   const monumentIds = new Set(pack.monuments.map((m) => m.id));
 
   if (!venueKeys.has(pack.event.hqVenue)) issues.push({ file: 'event.json', path: 'hqVenue', message: `unknown venue ${pack.event.hqVenue}` });
+
+  // Every source this codebase mints against must carry a daily ceiling.
+  //
+  // `KarmaService.capFor` returns null for an unpriced source and null means *uncapped*, so
+  // a missing key is not a missing tuning value — it is an economy with no limit, and it
+  // looks identical to a correctly configured one from the outside. Three of the seven were
+  // missing from the shipped pack and all seven were missing from `example-campus`, which
+  // is a fork's starting point. Refusing to load is the same bargain the rest of this file
+  // makes: a typo in a ceiling should stop the server at boot, not surface as a leaderboard
+  // nobody can explain at three in the morning.
+  for (const source of KARMA_SOURCES) {
+    if (!Object.prototype.hasOwnProperty.call(pack.event.karmaCaps, source)) {
+      issues.push({
+        file: 'event.json',
+        path: `karmaCaps.${source}`,
+        message: `no daily cap for karma source ${source} (an unpriced source is minted without limit)`,
+      });
+    }
+  }
   if (!factionIds.has('NEUTRAL')) issues.push({ file: 'factions.json', path: 'factions', message: 'a NEUTRAL faction is required' });
   pack.factions.forEach((f, i) => {
     if (f.hqVenue && !venueKeys.has(f.hqVenue)) issues.push({ file: 'factions.json', path: `factions[${i}].hqVenue`, message: `unknown venue ${f.hqVenue}` });

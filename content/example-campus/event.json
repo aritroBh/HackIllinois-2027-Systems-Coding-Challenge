@@ -16,5 +16,14 @@
     "mascot": "",
     "stickerBookTitle": "Example memorabilia"
   },
+  "karmaCaps": {
+    "CHECKOUT": 2000,
+    "GYM": 600,
+    "HACKSTOP": 400,
+    "POWERUP": 300,
+    "QUEST": 500,
+    "SOS": 1000,
+    "BOOTH": 500
+  },
   "plugins": []
 }
