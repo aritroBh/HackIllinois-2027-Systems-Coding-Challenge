@@ -99,6 +99,15 @@ function questCatalog(): QuestCatalog {
   const parsed = questsSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
   const byEvent = new Map<string, Quest[]>();
   for (const quest of parsed.quests) {
+    // A sticker id the pack never declared, refused at load rather than at settlement.
+    //
+    // `settle()` pays the karma and then grants the sticker, and a 404 from the grant leaves
+    // a quest that has been paid for and cannot be completed — recoverable only because the
+    // `paid` flag keeps the completion. Better not to reach that at all: this is a typo in a
+    // JSON file, and the moment to say so is when the file is read.
+    if (quest.reward.sticker && !StickerService.knows(quest.reward.sticker)) {
+      throw new Error(`quests.json: quest "${quest.id}" rewards sticker "${quest.reward.sticker}", which memorabilia.json does not declare.`);
+    }
     const listening = byEvent.get(quest.event);
     if (listening) listening.push(quest);
     else byEvent.set(quest.event, [quest]);

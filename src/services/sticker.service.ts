@@ -79,6 +79,18 @@ export interface OwnedStickers {
 
 export class StickerService {
   /**
+   * Whether the pack declares this sticker id.
+   *
+   * For the catalogs that *reward* a sticker — booths, quests — so they can refuse a typo at
+   * boot instead of at the moment somebody scans a poster. `award` throws on an unknown id,
+   * which is correct there and far too late here: by then the karma has been paid, the
+   * failure is a 404 to the scanner, and the reward is lost with no path that repairs it.
+   */
+  public static knows(stickerId: string): boolean {
+    return stickerCatalog().byId.has(stickerId);
+  }
+
+  /**
    * Grant `stickerId` to `accountId`. Returns true when the sticker was new to this account
    * and false when it already held it.
    */

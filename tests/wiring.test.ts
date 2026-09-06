@@ -23,6 +23,20 @@ import { BoothService } from '../src/services/booth.service';
 import { KarmaService } from '../src/services/karma.service';
 import { PowerUpInventory } from '../src/models/powerup.model';
 import { Volunteer, AccountKind, VolunteerRole } from '../src/models/volunteer.model';
+import { StickerService } from '../src/services/sticker.service';
+import { pack } from '../src/content/loader';
+import fs from 'fs';
+import path from 'path';
+
+/** The shipped pack's own reward lists, read straight off disk rather than through a service. */
+function packJson(name: string): Record<string, unknown> {
+  const file = path.join(pack.dir, name);
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+}
+const boothsOfPack = (): Array<{ reward: { sticker?: string } }> =>
+  ((packJson('booths.json').booths as Array<{ reward: { sticker?: string } }>) ?? []);
+const questsOfPack = (): Array<{ reward: { sticker?: string } }> =>
+  ((packJson('quests.json').quests as Array<{ reward: { sticker?: string } }>) ?? []);
 
 afterEach(() => {
   __resetEconomyWiring();
@@ -140,5 +154,29 @@ describe('a booth hands itself back only when nothing has moved', () => {
     await expect(BoothService.scan(String(account._id), boothId, code)).rejects.toThrow(/already scanned/i);
     const stillOne = await PowerUpInventory.findOne({ volunteerId: account._id });
     expect(stillOne?.quantity).toBe(1);
+  });
+});
+
+describe('a reward names something the pack actually has', () => {
+  it('refuses a booth or a quest whose sticker id is not in memorabilia.json', () => {
+    // The failure this moves: `settle()` and `scan()` both pay the karma and then grant the
+    // sticker, so an id the pack never declared surfaced as a 404 *after* the money moved.
+    // The scanner got an error, the sticker and the power-up were lost, and nothing repaired
+    // it. Venue and power-up were already cross-checked at load; the sticker is the third
+    // vocabulary these files draw on and was the only one that was not.
+    //
+    // Asserted through `knows` rather than by loading a broken pack, because the catalogs are
+    // read once per process and a suite cannot un-read one.
+    expect(StickerService.knows('siebel-keycard')).toBe(true);
+    expect(StickerService.knows('sponser-foo')).toBe(false);
+
+    // And every reward the shipped pack actually declares resolves, which is the assertion
+    // that fails if somebody adds a booth or a quest with a typo in it.
+    for (const booth of boothsOfPack()) {
+      if (booth.reward.sticker) expect(StickerService.knows(booth.reward.sticker)).toBe(true);
+    }
+    for (const quest of questsOfPack()) {
+      if (quest.reward.sticker) expect(StickerService.knows(quest.reward.sticker)).toBe(true);
+    }
   });
 });

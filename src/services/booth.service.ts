@@ -88,6 +88,16 @@ function boothCatalog(): BoothCatalog {
     if (booth.reward.powerUp && !Object.prototype.hasOwnProperty.call(POWER_UP_CATALOG, booth.reward.powerUp)) {
       throw new Error(`booths.json: booth "${booth.id}" rewards power-up "${booth.reward.powerUp}", which the power-up catalog does not define.`);
     }
+    // The sticker too, which the comment above already claimed and this did not do.
+    //
+    // A typo here used to surface at scan time, from inside the grant: the karma was paid,
+    // `StickerService.award` threw a 404, the scan row stayed (correctly — money had moved),
+    // and the scanner got an error with the sticker and the power-up lost for good and no
+    // path that repairs it. The venue and the power-up were both checked at load; this is the
+    // third vocabulary the file draws on and the only one that was not.
+    if (booth.reward.sticker && !StickerService.knows(booth.reward.sticker)) {
+      throw new Error(`booths.json: booth "${booth.id}" rewards sticker "${booth.reward.sticker}", which memorabilia.json does not declare.`);
+    }
   }
 
   catalog = { byId: new Map(parsed.booths.map((booth) => [booth.id, booth])), all: parsed.booths };
