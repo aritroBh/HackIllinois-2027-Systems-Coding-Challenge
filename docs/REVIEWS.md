@@ -406,3 +406,75 @@ onboarding escaping, `nexus.js`'s registry and focus trap, `a11y.js`, `lite.js`,
 streamer's LOD and hysteresis, the bake worker's unit conversions, `checkCampus`,
 `checkProps`, `cspAudit`, the pipeline's determinism, and every cross-reference in the shipped
 pack.
+
+---
+
+## Round seven — reviewing the fixes, 2026-09-06
+
+The brief put the round-six changes first and said so plainly: *a fix that introduces a worse
+problem than it closed is the most valuable thing you can find here.* That instruction earned
+its keep twice over.
+
+### The gate that could not fail
+
+`scripts/verify.sh` ended its suite step with:
+
+```sh
+npm test --silent 2>&1 | grep -E "Tests:|Suites:|✕|FAIL" || true
+```
+
+`set -euo pipefail` is on at the top of the file, and `|| true` discards the pipeline status
+it would otherwise have used. A run with red tests printed `FAIL`, `grep` matched it and
+exited 0, and the script walked on to `step "done"` and exited green. Every claim this gate
+has made about the suite — in this log, in commit messages, in the README — rested on a human
+reading the summary it printed rather than on the gate itself.
+
+It now captures the status before filtering, still prints the summary, and on failure dumps
+the whole log and exits non-zero. Verified the only way worth verifying: by adding a failing
+test and watching `scripts/verify.sh full` exit 1.
+
+### The hole the previous round's fix was covering
+
+Round six made the client pick the nearest gym for a power-up deploy, which looked like the
+fix and was not the problem. `POST /pokeshift/inventory/use` took a gym id, **no coordinates,
+and no faction check**. Spins and battles have enforced the 75 m geofence server-side since
+the beginning; this path enforced nothing, so a volunteer who earned a core at the event could
+spend it days later from home — +250 control points and its karma bonus for an action nobody
+performed — or drop a two-hour shield on any gym on campus, which makes every legitimate
+on-site attacker's battle throw a conflict.
+
+Both gym items *strengthen* their target, so there is a faction rule too: spending one on a
+rival's stronghold hands the other side two hours of immunity out of your own inventory.
+
+The same change fixed the other half of it, which agy found from the opposite direction:
+requiring a position for *every* item locked out the ones that need none — a Cold Brew Elixir
+is drunk, not aimed — and locked out lite mode entirely, where there is no renderer and
+therefore never a player position.
+
+### Closed
+
+| Finding | Source | Fix |
+|---|---|---|
+| `verify.sh`'s test step could not fail. | muse, agy | ab0f8c3 |
+| Gym-targeted power-up deploy had no geofence and no faction check, server-side. | opencode | ab0f8c3 |
+| Requiring a position for personal items locked out lite mode and the items that need no gym. | agy | ab0f8c3 |
+| A hacker whose ticket settled while their tab was shut was permanently stuck: no Cancel (OPEN only), no Clear (settled only), and no further SSE for a finished call. `sos.routes.ts` had claimed since M5 that `/me` carries a hacker's own ticket; no such route existed. | agy | ab0f8c3 |
+| The round-six handover teardown cleared three `localStorage` keys and left the service-worker card, `sessionStorage` and every in-memory copy — so the next person still saw the previous person's face, sticker book and open ticket, and the next `saveFlags()` wrote the old flags back into the key just emptied. | muse | ab0f8c3 |
+| Sticker and power-up vocabularies were cross-checked inside a *lazy* catalog read, so a pack typo surfaced at the first scan — after the karma was paid — rather than at boot, which three docblocks claimed. | opencode | ab0f8c3 |
+| The beacon cooldown was reported to whatever identity the request carried; in legacy mode that is a query parameter, so polling with a victim's public id rebuilt their last-spin time at every beacon, and beacon locations are public. | opencode | ab0f8c3 |
+| `checkShell.mjs` scanned only quoted strings, so `SHELL`'s first entry — the `INDEX` constant — was skipped and the one file the offline shell exists for was never checked. | agy | ab0f8c3 |
+| Two stale comments: the hackstop controller still described the geofence fallback round six removed, and `sos.js` claimed staff take a path only hackers reach. Its `hackerName === displayName` match went with it — a display name is not an identifier and defaults to "A hacker". | opencode, muse | ab0f8c3 |
+
+### Browser verification
+
+The round-six client fixes have no jest coverage, so they were checked in Chrome against the
+running demo:
+
+- 24 Spin buttons, all disabled, titled "Walk to within 75 m to spin".
+- With `campus.getPlayer` stubbed to null — the exact bug case — `playerCoords()` returns
+  null, the guard refuses, and **no spin, battle or deploy request leaves the page**. Before
+  the fix, spin and battle each sent the target's own coordinates and were paid.
+- Logout clears `nexus.sos.ticket`, `nexus.avatar.v1` and `nexus.stickers.v1`, and leaves
+  `nexus.lite.v1` — a device preference, not a fact about a person — in place.
+- The service worker deletes the cached trainer card and acknowledges on the port, so the
+  `await` in `logout` is a real handshake rather than a timeout.
