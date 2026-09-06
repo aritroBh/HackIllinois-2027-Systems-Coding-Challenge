@@ -11,6 +11,8 @@
  * Every section mirrors a journey in docs/WORKFLOWS.md and prints what it proved.
  */
 
+// `E2E_BASE` so a run can point at a server on any port — useful when something else
+// already holds 3000.
 const BASE = process.env.E2E_BASE ?? 'http://localhost:3000';
 const API = `${BASE}/api/v1`;
 
@@ -158,11 +160,20 @@ async function main(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   section('0. The process is up and the database is behind it');
 
-  const health = await fetch(`${BASE}/health`).then((r) => r.json());
+  let health = await fetch(`${BASE}/health`).then((r) => r.json());
   ok('GET /health reports HEALTHY', health.status === 'HEALTHY', `authMode=${health.authMode}`);
   const ready = await fetch(`${BASE}/ready`);
   const readyBody = await ready.json();
   ok('GET /ready is 200 and the database is connected', ready.status === 200 && readyBody.database === 'connected');
+
+  // Polled, not sampled once. The tick runs on an interval, so a run that starts the instant
+  // the server finishes booting can legitimately observe zero — which says nothing about
+  // whether the loop is alive, and asserting on it made the run's verdict depend on how
+  // quickly the process got here.
+  for (let i = 0; i < 20 && !(health.presence?.ticks > 0); i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+    health = await fetch(`${BASE}/health`).then((r) => r.json());
+  }
   ok('the presence tick loop is running', typeof health.presence?.ticks === 'number' && health.presence.ticks > 0,
     `${health.presence?.ticks} ticks, p95 ${health.presence?.p95TickMs}ms`);
   ok('background jobs are scheduled', Array.isArray(health.jobs) && health.jobs.length > 0,
