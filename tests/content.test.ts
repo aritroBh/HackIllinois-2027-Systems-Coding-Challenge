@@ -1,0 +1,105 @@
+/**
+ * Content pack (plan M2): the active pack loads, cross-references are enforced, and the
+ * server's local frame agrees with the pipeline's baked model.
+ */
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import request from 'supertest';
+import { app } from '../src/app';
+import { pack, loadPack, ContentPackError, toLocal, fromLocal, inBbox } from '../src/content/loader';
+
+function copyPack(mutate: (dir: string) => void): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-'));
+  for (const f of fs.readdirSync(pack.dir)) {
+    if (f === 'campus.json') continue; // keep the fixture small; the id cross-check is tested separately
+    fs.copyFileSync(path.join(pack.dir, f), path.join(dir, f));
+  }
+  mutate(dir);
+  return dir;
+}
+
+function rewrite(dir: string, file: string, fn: (doc: Record<string, unknown>) => void): void {
+  const full = path.join(dir, file);
+  const doc = JSON.parse(fs.readFileSync(full, 'utf8')) as Record<string, unknown>;
+  fn(doc);
+  fs.writeFileSync(full, JSON.stringify(doc));
+}
+
+describe('content pack', () => {
+  it('the active pack loads with the UIUC content and the baked model agrees on monument ids', () => {
+    expect(pack.event.id).toBe('hackillinois-2027');
+    expect(Object.keys(pack.venues)).toHaveLength(15);
+    expect(pack.monuments).toHaveLength(14);
+    expect(pack.territories).toHaveLength(14);
+    expect(pack.beacons).toHaveLength(12);
+    expect(pack.factionIds.has('NEUTRAL')).toBe(true);
+    expect(pack.campusMonumentIds).toHaveLength(14);
+  });
+
+  it('a territory pointing at an unknown venue fails at the right path', () => {
+    const dir = copyPack((d) =>
+      rewrite(d, 'territories.json', (doc) => {
+        (doc.territories as Array<{ venue: string }>)[0].venue = 'NOWHERE';
+      })
+    );
+    let err: unknown;
+    try {
+      loadPack(dir);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ContentPackError);
+    expect((err as ContentPackError).issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: 'territories.json', path: 'territories[0].venue' })])
+    );
+  });
+
+  it('a missing NEUTRAL faction is a cross-reference error; a bad venue key is a file error', () => {
+    const noNeutral = copyPack((d) =>
+      rewrite(d, 'factions.json', (doc) => {
+        doc.factions = (doc.factions as Array<{ id: string }>).filter((f) => f.id !== 'NEUTRAL');
+      })
+    );
+    expect(() => loadPack(noNeutral)).toThrow(/NEUTRAL faction is required/);
+
+    const badKey = copyPack((d) =>
+      rewrite(d, 'venues.json', (doc) => {
+        doc['bad-key'] = doc.SIEBEL_ATRIUM;
+      })
+    );
+    expect(() => loadPack(badKey)).toThrow(/venues.json bad-key/);
+  });
+
+  it('the local frame round-trips and matches the baked model within 5 m', () => {
+    const [lat0, lng0] = pack.event.campus.origin;
+    const origin = toLocal(lat0, lng0);
+    expect(Math.abs(origin.x)).toBeLessThan(1e-9);
+    expect(Math.abs(origin.z)).toBeLessThan(1e-9);
+    const back = fromLocal(12.5, -7.25);
+    const again = toLocal(back.latitude, back.longitude);
+    expect(again.x).toBeCloseTo(12.5, 6);
+    expect(again.z).toBeCloseTo(-7.25, 6);
+
+    const alma = pack.monuments.find((m) => m.id === 'alma-mater')!;
+    const baked = (JSON.parse(fs.readFileSync(path.join(pack.dir, 'campus.json'), 'utf8')) as { monuments: Array<{ id: string; c: [number, number] }> })
+      .monuments.find((m) => m.id === 'alma-mater')!;
+    const local = toLocal(alma.at![0], alma.at![1]);
+    const metres = Math.hypot(local.x - baked.c[0], local.z - baked.c[1]) * pack.event.campus.metersPerUnit;
+    expect(metres).toBeLessThan(5);
+
+    expect(inBbox(40.1075, -88.2271)).toBe(true);
+    expect(inBbox(41.88, -87.63)).toBe(false); // Chicago
+  });
+
+  it('GET /api/v1/content is public and points at the pack files under /dashboard/content', async () => {
+    const res = await request(app).get('/api/v1/content');
+    expect(res.status).toBe(200);
+    expect(res.body.data.pack).toBe('hackillinois-2027');
+    expect(res.body.data.files.campus).toBe('/dashboard/content/campus.json');
+    expect(res.body.data.factions.some((f: { id: string }) => f.id === 'NEUTRAL')).toBe(true);
+    const file = await request(app).get('/dashboard/content/venues.json');
+    expect(file.status).toBe(200);
+    expect(file.body.SIEBEL_ATRIUM.latitude).toBeCloseTo(40.1138, 3);
+  });
+});

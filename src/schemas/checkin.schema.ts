@@ -6,10 +6,10 @@
  * is a fail-open bypass of the whole anti-fraud path. Latitude and longitude are bounded
  * to real values so a malformed pair is a 400 rather than a NaN distance downstream.
  *
- * `checkOutSchema` requires `volunteerId` in the body as owner proof — the service
- * compares it to the check-in's owner so one volunteer cannot close another's shift and
- * collect their karma. Note this is authorisation by assertion, not authentication;
- * binding it to a real session is the outstanding hardening step.
+ * Checkout is bound to the caller: the controller derives the actor from the session
+ * (`resolveActorId`), and the service compares it to the check-in's owner so one volunteer
+ * cannot close another's shift and collect their karma. `volunteerId` in the body is only a
+ * legacy-mode fallback (AUTH_MODE=legacy).
  */
 import { z } from 'zod';
 import { objectId } from './common';

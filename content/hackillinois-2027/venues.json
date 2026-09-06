@@ -1,0 +1,18 @@
+{
+  "_about": "Campus gazetteer. Keys are the canonical venue ids used by shifts, gyms, beacons and monuments; coordinates were cross-checked against OpenStreetMap building centroids (ODbL). `hints` are the free-text substrings resolveVenue() scores (longest match wins).",
+  "SIEBEL_ATRIUM": { "name": "Siebel Center Atrium", "latitude": 40.113812, "longitude": -88.224937, "hints": ["SIEBEL", "ATRIUM", "1404", "1100"] },
+  "SIEBEL_BASEMENT": { "name": "Siebel Center Basement", "latitude": 40.113725, "longitude": -88.22481, "hints": ["BASEMENT", "0220"] },
+  "ECEB_LOBBY": { "name": "ECEB Lobby", "latitude": 40.114828, "longitude": -88.228056, "hints": ["ECEB", "ROOM 1020", "MICROELECTRONICS"] },
+  "KENNEY_GYM": { "name": "Kenney Gym", "latitude": 40.113054, "longitude": -88.228012, "hints": ["KENNEY", "PAVILION", "MAIN STAGE", "GYM"] },
+  "DCL_BRIDGE": { "name": "DCL Bridge", "latitude": 40.113215, "longitude": -88.2265, "hints": ["DCL", "BRIDGE"] },
+  "GRAINGER_LIBRARY": { "name": "Grainger Engineering Library", "latitude": 40.1124, "longitude": -88.22687, "hints": ["GRAINGER"] },
+  "BECKMAN_INSTITUTE": { "name": "Beckman Institute", "latitude": 40.11562, "longitude": -88.22748, "hints": ["BECKMAN"] },
+  "ALMA_MATER": { "name": "Alma Mater", "latitude": 40.10992, "longitude": -88.2284, "hints": ["ALMA", "GREEN & WRIGHT", "GREEN AND WRIGHT"] },
+  "ILLINI_UNION": { "name": "Illini Union", "latitude": 40.10954, "longitude": -88.22734, "hints": ["UNION", "COURTYARD CAFE"] },
+  "ALTGELD_HALL": { "name": "Altgeld Hall", "latitude": 40.10937, "longitude": -88.2284, "hints": ["ALTGELD", "CHIME"] },
+  "FOELLINGER_AUDITORIUM": { "name": "Foellinger Auditorium", "latitude": 40.10603, "longitude": -88.22721, "hints": ["FOELLINGER"] },
+  "MAIN_LIBRARY": { "name": "Main Library", "latitude": 40.10455, "longitude": -88.22885, "hints": ["MAIN LIBRARY", "STACKS"] },
+  "KRANNERT_CENTER": { "name": "Krannert Center", "latitude": 40.10802, "longitude": -88.22294, "hints": ["KRANNERT"] },
+  "MEMORIAL_STADIUM": { "name": "Memorial Stadium", "latitude": 40.09925, "longitude": -88.23597, "hints": ["MEMORIAL STADIUM", "STADIUM", "ZUPPKE"] },
+  "STATE_FARM_CENTER": { "name": "State Farm Center", "latitude": 40.09622, "longitude": -88.23599, "hints": ["STATE FARM CENTER", "STATE FARM", "ASSEMBLY HALL"] }
+}

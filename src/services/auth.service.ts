@@ -134,8 +134,26 @@ export class AuthService {
 
   public static clearSessionCookies(res: Response): void {
     const names = cookieNames();
-    res.clearCookie(names.session, { path: '/' });
-    res.clearCookie(names.csrf, { path: '/' });
+    // Attributes must match the ones the cookies were set with, or the browser keeps them.
+    const { maxAge: _s, ...sessionOpts } = sessionCookieOptions();
+    const { maxAge: _c, ...csrfOpts } = csrfCookieOptions();
+    void _s;
+    void _c;
+    res.clearCookie(names.session, sessionOpts);
+    res.clearCookie(names.csrf, csrfOpts);
+  }
+
+  /**
+   * Sign out = revoke. The token is stateless, so clearing the cookie alone would leave a
+   * copied cookie valid for the rest of its 48 h; bumping `sessionVersion` kills every
+   * session of the account (all tabs, all devices), which is the right semantics on the
+   * shared laptops and borrowed phones of an event.
+   */
+  public static async logout(res: Response, accountId: string | undefined): Promise<void> {
+    if (accountId) {
+      await Volunteer.updateOne({ _id: accountId }, { $inc: { sessionVersion: 1 } });
+    }
+    this.clearSessionCookies(res);
   }
 
   /** Revocation: every token minted before the bump stops verifying within the cache window. */
@@ -225,7 +243,7 @@ export class AuthService {
 
   // -------------------------------------------------------------- magic link
 
-  public static async requestMagicLink(email: string): Promise<{ delivered: boolean; debugLink?: string }> {
+  public static async requestMagicLink(email: string): Promise<{ delivered: boolean }> {
     if (!magicLinkEnabled()) throw new ApiError(403, ErrorCode.PROVIDER_DISABLED, 'Email sign-in is not enabled on this deployment.');
     const account = await Volunteer.findOne({ email: email.toLowerCase() });
     // Always 202 to the caller: whether an address exists is not for an anonymous client to learn.
@@ -243,7 +261,9 @@ export class AuthService {
       subject: 'Your Nexus Quest sign-in link',
       text: `Tap to sign in (valid 15 minutes, single use):\n\n${link}\n\nIf you did not ask for this, ignore it.`,
     });
-    return { delivered: true, ...(env.NODE_ENV !== 'production' ? { debugLink: link } : {}) };
+    // The link is never returned to the caller (that would make the 202 an enumeration
+    // oracle); in development the console mailer prints it to the server log instead.
+    return { delivered: true };
   }
 
   public static async redeemMagic(token: string): Promise<IVolunteer> {
@@ -261,27 +281,49 @@ export class AuthService {
 
   // ------------------------------------------------------------------ adonix
 
-  public static async adonixLogin(token: string): Promise<IVolunteer> {
+  /**
+   * Adonix trust boundary. The Adonix subject is the only thing we match on. An email that
+   * happens to equal an existing account's email is NOT a link: upstream email is unverified
+   * from our point of view, so honouring it would let a spoofed or compromised SSO mint a
+   * session for any volunteer whose address is known. Linking requires an already signed-in
+   * session (`currentAccountId`) — "sign in with your badge code, then connect Adonix".
+   *
+   * New Adonix accounts are always HACKER. Staff accounts are created by organisers (CSV /
+   * claim codes) and link Adonix afterwards; an upstream role claim never mints staff here.
+   */
+  public static async adonixLogin(token: string, currentAccountId?: string): Promise<IVolunteer> {
     const identity = await verifyAdonixToken(token);
-    const mapped = mapAdonixRoles(identity.roles);
+    // Role mapping is still evaluated so an unmapped role set fails closed (403).
+    mapAdonixRoles(identity.roles);
 
-    let account = await Volunteer.findOne({ identities: { $elemMatch: { provider: 'adonix', subject: identity.subject } } });
-    if (!account && identity.email) {
-      account = await Volunteer.findOne({ email: identity.email.toLowerCase() });
+    const bySubject = await Volunteer.findOne({ identities: { $elemMatch: { provider: 'adonix', subject: identity.subject } } });
+    if (bySubject) return bySubject;
+
+    if (currentAccountId) {
+      const current = await Volunteer.findById(currentAccountId);
+      if (!current) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
+      await this.linkIdentity(current, 'adonix', identity.subject);
+      return current;
     }
-    if (!account) {
-      account = await Volunteer.create({
-        name: identity.name ?? `Hacker ${identity.subject.slice(-4)}`,
-        email: identity.email?.toLowerCase() ?? null,
-        kind: mapped.kind,
-        role: mapped.role,
-        identities: [{ provider: 'adonix', subject: identity.subject, linkedAt: new Date() }],
-      });
-      return account;
+
+    if (identity.email) {
+      const byEmail = await Volunteer.exists({ email: identity.email.toLowerCase() });
+      if (byEmail) {
+        throw new ApiError(
+          409,
+          ErrorCode.ACCOUNT_LINK_REQUIRED,
+          'An account with this email already exists. Sign in with your badge code first, then connect HackIllinois from your profile.'
+        );
+      }
     }
-    // An existing volunteer keeps their staff role; Adonix never downgrades a known account.
-    await this.linkIdentity(account, 'adonix', identity.subject);
-    return account;
+
+    return Volunteer.create({
+      name: identity.name ?? `Hacker ${identity.subject.slice(-4)}`,
+      email: identity.email?.toLowerCase() ?? null,
+      kind: AccountKind.HACKER,
+      role: VolunteerRole.HACKER,
+      identities: [{ provider: 'adonix', subject: identity.subject, linkedAt: new Date() }],
+    });
   }
 
   // ------------------------------------------------------------- development

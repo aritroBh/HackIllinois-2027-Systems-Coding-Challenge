@@ -52,6 +52,7 @@
  * its own map.
  */
 import { Request, Response } from 'express';
+import { env } from '../../config/env';
 import { AccountContext, isLeadOrAbove } from '../types/account';
 import { ErrorCode } from '../errors/errorCodes';
 import { streamLimits, SlotHandle } from '../streamLimits';
@@ -156,12 +157,9 @@ export function redactSos(data: unknown): {
 
 type AuthMode = 'legacy' | 'required';
 
-/**
- * TODO(identity): `env.AUTH_MODE` arrives with the identity middleware; read `process.env`
- * defensively until then so an unset value keeps today's open behaviour.
- */
+/** The resolved identity mode (AUTH_MODE, or the REQUIRE_AUTH alias) — never process.env directly. */
 function authMode(): AuthMode {
-  return process.env.AUTH_MODE === 'required' ? 'required' : 'legacy';
+  return env.AUTH_MODE === 'required' ? 'required' : 'legacy';
 }
 
 interface IClient {

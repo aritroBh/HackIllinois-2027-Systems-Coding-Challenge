@@ -65,6 +65,45 @@ describe('Session tokens', () => {
   });
 });
 
+describe('Adonix token verification (C5)', () => {
+  const { verifyHs256Jwt } = require('../src/auth/adonix') as typeof import('../src/auth/adonix');
+  const crypto = require('crypto') as typeof import('crypto');
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const sign = (payload: unknown, secret = 's3cret') => {
+    const h = b64({ alg: 'HS256', typ: 'JWT' });
+    const p = b64(payload);
+    const sig = crypto.createHmac('sha256', secret).update(`${h}.${p}`).digest('base64url');
+    return `${h}.${p}.${sig}`;
+  };
+  it('accepts a signed token with a future numeric exp and rejects missing, string or past exp', () => {
+    const future = Math.floor(Date.now() / 1000) + 600;
+    expect(verifyHs256Jwt(sign({ id: 'u1', exp: future }), 's3cret')).toMatchObject({ id: 'u1' });
+    expect(() => verifyHs256Jwt(sign({ id: 'u1' }), 's3cret')).toThrow(/no expiry/);
+    expect(() => verifyHs256Jwt(sign({ id: 'u1', exp: 'never' }), 's3cret')).toThrow(/no expiry/);
+    expect(() => verifyHs256Jwt(sign({ id: 'u1', exp: future - 1200 }), 's3cret')).toThrow(/expired/);
+    expect(() => verifyHs256Jwt(sign({ id: 'u1', exp: future }, 'wrong'), 's3cret')).toThrow(/signature/);
+  });
+});
+
+describe('Anonymous stream slots (C7)', () => {
+  const { StreamLimits } = require('../src/common/streamLimits') as typeof import('../src/common/streamLimits');
+  it('anonymous connections cannot exhaust the table, even from a trusted IP', () => {
+    const table = new StreamLimits({ totalSlots: 50, anonSlots: 10, anonPerIp: 5, trustedCidrs: ['10.0.0.0/8'] });
+    let refused: string | null = null;
+    for (let i = 0; i < 60; i++) {
+      const r = table.tryAcquire({ transport: 'sse', ip: `10.0.0.${(i % 3) + 1}` });
+      if (!r.ok) {
+        refused = r.reason;
+        break;
+      }
+    }
+    expect(refused).toMatch(/ANON|PER_IP/);
+    expect(table.stats().anonymous).toBeLessThanOrEqual(10);
+    const authed = table.tryAcquire({ transport: 'sse', accountId: 'acct1', ip: '10.0.0.1' });
+    expect(authed.ok).toBe(true);
+  });
+});
+
 describe('Providers and dev login', () => {
   it('lists providers with the current mode', async () => {
     const res = await request(app).get('/api/v1/auth/providers');
@@ -265,6 +304,44 @@ describe('AUTH_MODE=required', () => {
     expect(wrong.status).toBe(403);
     const none = await request(app).post('/api/v1/auth/claim-codes').send({ accountId: vol.id });
     expect(none.status).toBe(401);
+  });
+
+  it('swap proposals and acceptances act as the session, never as a body id (C1)', async () => {
+    const a = await makeVolunteer();
+    const b = await makeVolunteer();
+    const shift = await Shift.create({
+      title: 'Desk',
+      description: 'x',
+      category: ShiftCategory.INFO_DESK,
+      location: 'Siebel Center Atrium',
+      startTime: new Date('2027-02-27T10:00:00Z'),
+      endTime: new Date('2027-02-27T12:00:00Z'),
+      capacity: 2,
+    });
+    const { agent, csrf } = await signIn(a.id);
+    // Naming B as the proposer trips the identity check.
+    const spoof = await agent
+      .post('/api/v1/swaps')
+      .set('X-CSRF-Token', csrf)
+      .send({ proposerVolunteerId: b.id, proposerShiftId: shift.id, targetShiftId: shift.id });
+    expect(spoof.status).toBe(403);
+    expect(spoof.body.error).toBe('IDENTITY_MISMATCH');
+    // Accepting "as B" is ignored: the acceptor is A, who is not the target → the service refuses.
+    const accept = await agent.post(`/api/v1/swaps/${shift.id}/accept`).set('X-CSRF-Token', csrf).send({ targetVolunteerId: b.id });
+    expect([403, 404, 409]).toContain(accept.status);
+    expect(accept.status).not.toBe(200);
+  });
+
+  it('logout revokes: the same cookie no longer works (C3)', async () => {
+    const vol = await makeVolunteer();
+    const { agent, csrf } = await signIn(vol.id);
+    const rawCookie = ((await agent.get('/api/v1/me')).request as unknown as { header: Record<string, string> }).header?.cookie;
+    expect((await agent.get('/api/v1/me')).status).toBe(200);
+    const out = await agent.post('/api/v1/auth/logout').set('X-CSRF-Token', csrf).send({});
+    expect(out.status).toBe(200);
+    // A copy of the pre-logout cookie must be dead too, not just cleared in this jar.
+    const replay = await request(app).get('/api/v1/me').set('Cookie', rawCookie ?? '');
+    expect(replay.status).toBe(401);
   });
 
   it('the model refuses an incoherent kind/role pair', async () => {

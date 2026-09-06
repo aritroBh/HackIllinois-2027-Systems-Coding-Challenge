@@ -1,0 +1,12 @@
+{
+  "_source": "Fixture text.",
+  "clock-tower": {
+    "title": "Clock Tower",
+    "year": 1859,
+    "architect": "Unknown",
+    "style": "Gothic Revival",
+    "facts": [
+      "Everybody meets here."
+    ]
+  }
+}

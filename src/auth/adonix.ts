@@ -81,8 +81,9 @@ export function verifyHs256Jwt(token: string, secret: string): Record<string, un
   } catch {
     throw ApiError.unauthorized('Malformed Adonix token.');
   }
-  const exp = typeof payload.exp === 'number' ? payload.exp : undefined;
-  if (exp !== undefined && exp * 1000 <= Date.now()) throw ApiError.unauthorized('Adonix token expired.');
+  // A token that never expires is not a credential. `exp` must be a number, and in the future.
+  if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) throw ApiError.unauthorized('Adonix token has no expiry.');
+  if (payload.exp * 1000 <= Date.now()) throw ApiError.unauthorized('Adonix token expired.');
   return payload;
 }
 

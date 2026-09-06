@@ -1,0 +1,1 @@
+{ "territories": [ { "name": "Clock Tower Keep", "locationName": "Clock Tower", "venue": "CLOCK_TOWER", "monument": "clock-tower", "faction": "NEUTRAL", "cp": 500, "max": 2000, "level": 2 } ] }

@@ -9,11 +9,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { SwapService } from '../services/swap.service';
 import { SwapStatus } from '../models/swap.model';
+import { resolveActorId } from '../middleware/identity';
 
 export class SwapController {
   public static async createSwapRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const swap = await SwapService.createSwapRequest(req.body);
+      // The proposer is always the caller. `targetVolunteerId` in the body is the other
+      // party to a bilateral swap, not an identity claim, and stays as submitted.
+      const swap = await SwapService.createSwapRequest({
+        ...req.body,
+        proposerVolunteerId: resolveActorId(req, 'proposerVolunteerId') as string,
+      });
       res.status(201).json({ success: true, data: swap });
     } catch (error) {
       next(error);
@@ -22,7 +28,8 @@ export class SwapController {
 
   public static async acceptSwap(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const swap = await SwapService.acceptBilateralSwap(req.params.id as string, req.body.targetVolunteerId);
+      // Only the swap's target can accept it, and the target is the caller.
+      const swap = await SwapService.acceptBilateralSwap(req.params.id as string, resolveActorId(req, 'targetVolunteerId') as string);
       res.status(200).json({ success: true, data: swap });
     } catch (error) {
       next(error);

@@ -9,8 +9,8 @@
  * can be typed into the login screen, and a wrong guess matches no document at all — which
  * is also why there is no per-code attempt counter (nothing to decrement): brute force is
  * bounded by the per-IP limiter on `POST /auth/claim` plus the global `CLAIM_BRUTE_FORCE`
- * alarm. Codes are 10 characters of Crockford base32 (50 bits), so 30 guesses a minute
- * would need on the order of 10^9 years to expect a hit.
+ * alarm. Codes are 10 characters of Crockford base32 (50 bits): at 30 guesses a minute the
+ * expected time to a hit is about 7 × 10^7 years (2^50 / 30 minutes).
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 

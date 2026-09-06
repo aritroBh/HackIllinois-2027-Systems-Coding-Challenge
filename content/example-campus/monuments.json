@@ -1,0 +1,6 @@
+{
+  "_about": "One synthetic landmark so the fixture builds without an OSM extract.",
+  "monuments": [
+    { "id": "clock-tower", "short": "CLOCK", "name": "Clock Tower", "mat": "limestone", "kind": "belltower", "venue": "Clock Tower", "venueKey": "CLOCK_TOWER", "at": [51.5008, -0.1265], "synth": [12, 12, 60], "blurb": "The landmark everybody meets under." }
+  ]
+}

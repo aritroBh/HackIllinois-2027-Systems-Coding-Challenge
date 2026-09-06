@@ -1,0 +1,19 @@
+{
+  "_about": "Seed state for the 14 territory gyms. `venue` must be a key in venues.json; `monument` must be an id in monuments.json. Read by src/seed/seedData.ts.",
+  "territories": [
+    { "name": "Siebel Core Coliseum", "locationName": "Siebel Center for CS", "venue": "SIEBEL_ATRIUM", "monument": "siebel", "faction": "TEAM_KERNEL", "cp": 1680, "max": 2000, "level": 5 },
+    { "name": "ECEB Silicon Bastion", "locationName": "ECE Building (ECEB)", "venue": "ECEB_LOBBY", "monument": "eceb", "faction": "TEAM_TENSOR", "cp": 1240, "max": 2000, "level": 4 },
+    { "name": "Kenney Thunderdome", "locationName": "Kenney Gym Annex", "venue": "KENNEY_GYM", "monument": "kenney", "faction": "TEAM_SILICON", "cp": 950, "max": 2000, "level": 3 },
+    { "name": "DCL Relay Keep", "locationName": "Digital Computer Laboratory", "venue": "DCL_BRIDGE", "monument": "dcl", "faction": "TEAM_KERNEL", "cp": 780, "max": 2000, "level": 3 },
+    { "name": "Grainger Archive Vault", "locationName": "Grainger Engineering Library", "venue": "GRAINGER_LIBRARY", "monument": "grainger", "faction": "TEAM_KERNEL", "cp": 1420, "max": 2000, "level": 4 },
+    { "name": "Beckman Deep Lab", "locationName": "Beckman Institute", "venue": "BECKMAN_INSTITUTE", "monument": "beckman", "faction": "TEAM_TENSOR", "cp": 1580, "max": 2000, "level": 5 },
+    { "name": "Alma Mater Shrine", "locationName": "Alma Mater Plaza", "venue": "ALMA_MATER", "monument": "alma-mater", "faction": "NEUTRAL", "cp": 500, "max": 2500, "level": 2 },
+    { "name": "Union Grand Hall", "locationName": "Illini Union", "venue": "ILLINI_UNION", "monument": "illini-union", "faction": "TEAM_SILICON", "cp": 1310, "max": 2000, "level": 4 },
+    { "name": "Altgeld Chime Tower", "locationName": "Altgeld Hall", "venue": "ALTGELD_HALL", "monument": "altgeld", "faction": "TEAM_TENSOR", "cp": 690, "max": 2000, "level": 3 },
+    { "name": "Foellinger Rotunda", "locationName": "Foellinger Auditorium", "venue": "FOELLINGER_AUDITORIUM", "monument": "foellinger", "faction": "TEAM_SILICON", "cp": 1120, "max": 2000, "level": 4 },
+    { "name": "Main Library Stacks", "locationName": "Main Library", "venue": "MAIN_LIBRARY", "monument": "main-library", "faction": "NEUTRAL", "cp": 400, "max": 2000, "level": 2 },
+    { "name": "Krannert Stage Nexus", "locationName": "Krannert Center", "venue": "KRANNERT_CENTER", "monument": "krannert", "faction": "TEAM_TENSOR", "cp": 860, "max": 2000, "level": 3 },
+    { "name": "Memorial Stadium Bowl", "locationName": "Memorial Stadium", "venue": "MEMORIAL_STADIUM", "monument": "stadium", "faction": "TEAM_SILICON", "cp": 1940, "max": 2500, "level": 6 },
+    { "name": "State Farm Dome", "locationName": "State Farm Center", "venue": "STATE_FARM_CENTER", "monument": "state-farm", "faction": "TEAM_KERNEL", "cp": 1050, "max": 2500, "level": 4 }
+  ]
+}

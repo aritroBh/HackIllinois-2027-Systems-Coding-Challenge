@@ -41,6 +41,11 @@ export function __clearAccountCache(): void {
   accountCache.clear();
 }
 
+/** Drop one account from the cache so a revocation on THIS instance is immediate. */
+export function evictAccountCache(accountId: string): void {
+  accountCache.delete(accountId);
+}
+
 async function loadAccount(id: string, nowMs: number): Promise<Omit<AccountContext, 'source'> | null> {
   const cached = accountCache.get(id);
   if (cached && nowMs - cached.fetchedAt < ACCOUNT_CACHE_TTL_MS) return cached.ctx;
@@ -67,7 +72,10 @@ function isMutation(method: string): boolean {
 
 function legacyIdFrom(req: Request): string | undefined {
   const body = req.body as Record<string, unknown> | undefined;
-  const candidates = [body?.volunteerId, req.query?.volunteerId, req.params?.volunteerId];
+  // Every body field that names the CALLER. (`targetVolunteerId` on a swap proposal names the
+  // other party and is deliberately not here; on `accept` the controller derives the acceptor
+  // from the session regardless.)
+  const candidates = [body?.volunteerId, body?.proposerVolunteerId, req.query?.volunteerId, req.params?.volunteerId];
   for (const c of candidates) {
     if (typeof c === 'string' && OBJECT_ID_PATTERN.test(c)) return c.toLowerCase();
   }

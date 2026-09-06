@@ -1,0 +1,7 @@
+{
+  "factions": [
+    { "id": "TEAM_RED", "label": "Team Red", "short": "Red", "color": "#e63946", "hqVenue": "MAIN_HALL" },
+    { "id": "TEAM_BLUE", "label": "Team Blue", "short": "Blue", "color": "#457b9d", "hqVenue": "CLOCK_TOWER" },
+    { "id": "NEUTRAL", "label": "Unclaimed", "short": "Unclaimed", "color": "#7c8daa" }
+  ]
+}

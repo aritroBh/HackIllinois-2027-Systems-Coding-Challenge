@@ -18,8 +18,12 @@
  *  - **`PER_IP` = 800** is an anti-abuse ceiling, not a capacity control. 1,200 people on
  *    venue Wi-Fi arrive from a handful of NAT egress addresses, so a per-IP figure low
  *    enough to matter against one attacker would lock out the venue. Addresses inside
- *    `TRUSTED_EGRESS_CIDRS` are unlimited; everyone else gets 800, which still lets four
- *    egress IPs carry the whole event.
+ *    `TRUSTED_EGRESS_CIDRS` are exempt from PER_IP; everyone else gets 800, which still lets
+ *    four egress IPs carry the whole event.
+ *  - **Anonymous streams are boxed in separately** (`ANON_SLOTS` = 400 total,
+ *    `ANON_PER_IP` = 20, applied even on trusted egress). Without an account there is
+ *    nothing else to cap them by, and a single venue address could otherwise hold every
+ *    slot and lock out signed-in users.
  *
  * Only IPv4 CIDRs are parsed (plus IPv4-mapped IPv6 `::ffff:a.b.c.d`, which is how Node
  * reports a v4 peer on a dual-stack listener). The venue's egress ranges are v4; an IPv6
@@ -28,6 +32,8 @@
  * Everything here is in-memory and per-process, like the hub it serves. A second replica
  * would need its own table or an external one; the event runs one instance.
  */
+
+import { env } from '../config/env';
 
 export type StreamTransport = 'sse' | 'ws';
 
@@ -47,11 +53,13 @@ export type AcquireRequest = {
 
 export type AcquireResult =
   | { ok: true; slot: SlotHandle; evict?: SlotHandle }
-  | { ok: false; reason: 'TOTAL' | 'PER_IP' };
+  | { ok: false; reason: 'TOTAL' | 'PER_IP' | 'ANON' };
 
 export interface StreamLimitStats {
   total: number;
   totalSlots: number;
+  anonymous: number;
+  anonSlots: number;
   byTransport: Record<StreamTransport, number>;
   accounts: number;
   ips: number;
@@ -63,6 +71,8 @@ export interface StreamLimitsOptions {
   perIp?: number;
   /** Explicit trusted CIDR list; defaults to `TRUSTED_EGRESS_CIDRS` from the environment. */
   trustedCidrs?: string[];
+  anonSlots?: number;
+  anonPerIp?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,15 +135,9 @@ export function ipInCidrs(ip: string | undefined, cidrs: readonly Cidr[]): boole
 
 let envCidrs: Cidr[] | null = null;
 
-/**
- * Trusted egress ranges from the environment, parsed once.
- *
- * TODO(identity): `env.TRUSTED_EGRESS_CIDRS` lands in `src/config/env.ts` with the
- * identity work; until then this reads `process.env` directly so the table is usable now.
- * Switch to `env` once the schema field exists.
- */
+/** Trusted egress ranges from the validated environment, parsed once. */
 export function trustedEgressCidrs(): readonly Cidr[] {
-  if (envCidrs === null) envCidrs = parseCidrList(process.env.TRUSTED_EGRESS_CIDRS);
+  if (envCidrs === null) envCidrs = parseCidrList(env.TRUSTED_EGRESS_CIDRS);
   return envCidrs;
 }
 
@@ -149,21 +153,31 @@ export class StreamLimits {
   public static readonly TOTAL_SLOTS = 2600;
   public static readonly PER_ACCOUNT = 2;
   public static readonly PER_IP = 800;
+  /** Anonymous streams (no account to cap them) share this small pool… */
+  public static readonly ANON_SLOTS = 400;
+  /** …and this per-IP cap, which applies even on trusted egress. */
+  public static readonly ANON_PER_IP = 20;
 
   private readonly totalSlots: number;
   private readonly perAccount: number;
   private readonly perIp: number;
+  private readonly anonSlots: number;
+  private readonly anonPerIp: number;
   private readonly trusted: readonly Cidr[] | null;
 
   private nextId = 1;
+  private anonCount = 0;
   private readonly slots = new Map<number, SlotHandle>();
   private readonly byAccount = new Map<string, SlotHandle[]>();
   private readonly byIp = new Map<string, number>();
+  private readonly byIpAnon = new Map<string, number>();
 
   constructor(opts: StreamLimitsOptions = {}) {
     this.totalSlots = opts.totalSlots ?? StreamLimits.TOTAL_SLOTS;
     this.perAccount = opts.perAccount ?? StreamLimits.PER_ACCOUNT;
     this.perIp = opts.perIp ?? StreamLimits.PER_IP;
+    this.anonSlots = opts.anonSlots ?? StreamLimits.ANON_SLOTS;
+    this.anonPerIp = opts.anonPerIp ?? StreamLimits.ANON_PER_IP;
     this.trusted = opts.trustedCidrs ? parseCidrList(opts.trustedCidrs.join(',')) : null;
   }
 
@@ -185,6 +199,18 @@ export class StreamLimits {
     const freed = evict ? 1 : 0;
     if (this.slots.size - freed >= this.totalSlots) {
       return { ok: false, reason: 'TOTAL' };
+    }
+
+    // 2. Anonymous connections have no account to cap them, so they draw from their own
+    //    small pool and a per-IP cap that applies even on trusted egress. Otherwise one
+    //    address on the venue NAT could hold every slot and lock out signed-in users.
+    if (!req.accountId) {
+      if (this.anonCount >= this.anonSlots) {
+        return { ok: false, reason: 'ANON' };
+      }
+      if ((this.byIpAnon.get(ip) ?? 0) >= this.anonPerIp) {
+        return { ok: false, reason: 'PER_IP' };
+      }
     }
 
     const trustedIp = isTrustedEgress(ip, this.trusted ?? trustedEgressCidrs());
@@ -210,6 +236,9 @@ export class StreamLimits {
       const list = this.byAccount.get(slot.accountId);
       if (list) list.push(slot);
       else this.byAccount.set(slot.accountId, [slot]);
+    } else {
+      this.anonCount += 1;
+      this.byIpAnon.set(ip, (this.byIpAnon.get(ip) ?? 0) + 1);
     }
 
     return evict ? { ok: true, slot, evict } : { ok: true, slot };
@@ -230,6 +259,11 @@ export class StreamLimits {
         if (remaining.length === 0) this.byAccount.delete(slot.accountId);
         else this.byAccount.set(slot.accountId, remaining);
       }
+    } else {
+      this.anonCount = Math.max(0, this.anonCount - 1);
+      const anonIp = (this.byIpAnon.get(slot.ip) ?? 1) - 1;
+      if (anonIp <= 0) this.byIpAnon.delete(slot.ip);
+      else this.byIpAnon.set(slot.ip, anonIp);
     }
   }
 
@@ -239,6 +273,8 @@ export class StreamLimits {
     return {
       total: this.slots.size,
       totalSlots: this.totalSlots,
+      anonymous: this.anonCount,
+      anonSlots: this.anonSlots,
       byTransport,
       accounts: this.byAccount.size,
       ips: this.byIp.size,

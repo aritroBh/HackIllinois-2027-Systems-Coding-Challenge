@@ -6,6 +6,7 @@
  * never ends. Identity is simulated by a test-only middleware that sets `req.account` —
  * these tests must not depend on the identity middleware being present or wired.
  */
+import { env } from '../src/config/env';
 import express, { Application } from 'express';
 import http from 'http';
 import { AddressInfo } from 'net';
@@ -150,7 +151,7 @@ const isEvent = (frame: Frame) => frame.event !== 'CONNECTED';
 describe('SSE hub v2', () => {
   let server: http.Server;
   const open: Stream[] = [];
-  const originalAuthMode = process.env.AUTH_MODE;
+  const originalAuthMode = env.AUTH_MODE;
 
   const stream = async (path: string, headers?: Record<string, string>) => {
     const s = await openStream(server, path, headers);
@@ -166,7 +167,7 @@ describe('SSE hub v2', () => {
 
   afterEach(async () => {
     for (const s of open.splice(0)) s.close();
-    process.env.AUTH_MODE = originalAuthMode;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = originalAuthMode;
     await waitFor(() => eventHub.getConnectedCount() === 0);
   });
 
@@ -248,7 +249,7 @@ describe('SSE hub v2', () => {
 
   describe('authorisation (AUTH_MODE=required)', () => {
     beforeEach(() => {
-      process.env.AUTH_MODE = 'required';
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'required';
     });
 
     it('anonymous callers keep only announce; asking for nothing else yields 403', async () => {

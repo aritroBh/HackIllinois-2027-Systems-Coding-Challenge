@@ -1,0 +1,20 @@
+{
+  "packVersion": 1,
+  "minServerVersion": "1.0.0",
+  "id": "example-campus",
+  "name": "Example Quest",
+  "eventName": "Example Hackathon",
+  "tagline": "Fork me",
+  "timezone": "UTC",
+  "startsAt": "2027-01-01T09:00:00Z",
+  "endsAt": "2027-01-02T18:00:00Z",
+  "hqVenue": "MAIN_HALL",
+  "campus": { "label": "Example campus", "origin": [51.5007, -0.1246], "bbox": [51.49, -0.14, 51.51, -0.11], "metersPerUnit": 10, "vscale": 2.6, "geofenceMeters": 75 },
+  "branding": {
+    "palette": { "orange": "#E8590C", "blue": "#1B2A41", "patina": "#2A9D8F", "harvest": "#E9C46A", "prairie": "#2D6A4F", "earth": "#7F5539", "storm": "#6C757D", "arches": "#4CC9F0", "industrial": "#3A5A99", "berry": "#6D1B7B" },
+    "fonts": { "hud": "Silkscreen", "numbers": "Jersey 10", "headings": "Pixelify Sans", "body": "VT323" },
+    "mascot": "",
+    "stickerBookTitle": "Example memorabilia"
+  },
+  "plugins": []
+}

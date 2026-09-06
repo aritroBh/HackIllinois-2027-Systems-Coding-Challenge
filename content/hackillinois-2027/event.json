@@ -1,0 +1,60 @@
+{
+  "packVersion": 1,
+  "minServerVersion": "1.0.0",
+  "id": "hackillinois-2027",
+  "name": "Nexus Quest",
+  "eventName": "HackIllinois 2027",
+  "tagline": "Volunteer Ops",
+  "timezone": "America/Chicago",
+  "startsAt": "2027-02-26T17:00:00-06:00",
+  "endsAt": "2027-02-28T15:00:00-06:00",
+  "hqVenue": "SIEBEL_ATRIUM",
+  "campus": {
+    "label": "UIUC campus",
+    "origin": [40.10746, -88.22713],
+    "bbox": [40.095, -88.2405, 40.1175, -88.2195],
+    "coreBbox": [40.102, -88.234, 40.117, -88.221],
+    "metersPerUnit": 10,
+    "vscale": 2.6,
+    "geofenceMeters": 75
+  },
+  "branding": {
+    "palette": {
+      "orange": "#FF5F05",
+      "blue": "#13294B",
+      "patina": "#007E8E",
+      "harvest": "#FCB316",
+      "prairie": "#006230",
+      "earth": "#7D3E13",
+      "storm": "#707372",
+      "arches": "#009FD4",
+      "industrial": "#1D58A7",
+      "berry": "#5C0E41"
+    },
+    "fonts": {
+      "hud": "Silkscreen",
+      "numbers": "Jersey 10",
+      "headings": "Pixelify Sans",
+      "body": "VT323"
+    },
+    "mascot": "boneyard-duck",
+    "stickerBookTitle": "HackIllinois memorabilia"
+  },
+  "presence": {
+    "maxAccuracyMeters": 50,
+    "maxSpeedMps": 15,
+    "fuzzGridMeters": 20,
+    "interestRadiusMeters": 300,
+    "cellMeters": 50,
+    "maxDetail": 60
+  },
+  "karmaCaps": {
+    "GYM": 600,
+    "HACKSTOP": 400,
+    "QUEST": 500,
+    "SOS": 1000
+  },
+  "bountyCap": { "LOW": 100, "MEDIUM": 200, "HIGH": 400, "CRITICAL": 800 },
+  "hackerBountyBudgetPerDay": 600,
+  "plugins": []
+}

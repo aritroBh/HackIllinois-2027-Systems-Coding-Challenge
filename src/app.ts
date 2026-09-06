@@ -41,6 +41,7 @@ import { streamEventsHandler } from './routes/v1/stats.routes';
 import { eventHub } from './common/sse/eventHub';
 import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
+import { pack, publicContent } from './content/loader';
 
 export const app: Application = express();
 
@@ -92,14 +93,24 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 if (env.NODE_ENV !== 'test') {
-  app.use(morgan('dev'));
+  // Same shape as morgan's `dev` format, with one redaction: the Adonix landing page may be
+  // reached with the SSO token in the query string (`?token=…`) before the page can move it
+  // into the fragment, and a credential must never land in an access log.
+  morgan.token('safe-url', (req) => {
+    const url = (req as Request).originalUrl ?? req.url ?? '';
+    return url.startsWith('/dashboard/auth/adonix') ? url.split('?')[0] + '?<redacted>' : url;
+  });
+  app.use(morgan(':method :safe-url :status :response-time ms - :res[content-length]'));
 }
 
 // 2. Swagger OpenAPI Documentation at /docs
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-// 3. Static Assets for Live War-Room Dashboard at /dashboard
+// 3. Static Assets for Live War-Room Dashboard at /dashboard, and the active content pack
+// (campus model, memorabilia, monument dossiers) at /dashboard/content. The pack is
+// served from its own directory so a fork only changes CONTENT_PACK, never a client path.
 const publicDir = path.join(__dirname, '../public');
+app.use('/dashboard/content', express.static(pack.dir, { maxAge: '1h', etag: true, index: false }));
 app.use('/dashboard', express.static(publicDir));
 app.get('/', (_req: Request, res: Response) => {
   res.redirect('/dashboard');
@@ -123,6 +134,13 @@ const legacyMutationAuth: typeof requireOrganizerAuth = (req, res, next) => {
   }
   requireOrganizerAuth(req, res, next);
 };
+
+// Public content descriptor: branding, venues, factions, monuments and the URLs of the pack
+// files. Anonymous by design (it is what the login screen renders from) and cacheable.
+app.get('/api/v1/content', (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  res.status(200).json({ success: true, data: publicContent() });
+});
 
 // The live event stream is mounted BEFORE the API limiter: an open SSE connection is not
 // an API call and must never consume (or be refused by) the request budget. Identity still

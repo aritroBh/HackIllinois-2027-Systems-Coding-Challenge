@@ -23,6 +23,8 @@ export enum ErrorCode {
   CREDENTIAL_INVALID = 'CREDENTIAL_INVALID',
   /** The requested identity provider is not enabled on this deployment. */
   PROVIDER_DISABLED = 'PROVIDER_DISABLED',
+  /** An SSO identity matched an existing account by email only; link it from a signed-in session. */
+  ACCOUNT_LINK_REQUIRED = 'ACCOUNT_LINK_REQUIRED',
 
   // Not Found (404)
   SHIFT_NOT_FOUND = 'SHIFT_NOT_FOUND',

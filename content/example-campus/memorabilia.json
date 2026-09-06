@@ -1,0 +1,74 @@
+{
+  "_about": "Fixture sticker book: two items and one gym badge. Replace with your event's memorabilia.",
+  "palette_note": "Each item's palette lists hex colours; grid characters a-h index into it.",
+  "items": [
+    {
+      "id": "alma-pin",
+      "name": "Alma Mater Pin",
+      "kind": "pin",
+      "rarity": "RARE",
+      "drop": "Spin the Alma Mater Reliquary",
+      "flavour": "To thy happy children of the future, those of the past send greetings.",
+      "palette": [
+        "#5A4A32",
+        "#8C7A55",
+        "#3F4045",
+        "#FF5F05"
+      ],
+      "pixel": [
+        "----------------",
+        "------aaaa------",
+        "-----aaaaaa-----",
+        "----aabaabaa----",
+        "----aaaaaaaa----",
+        "-----aaaaaa-----",
+        "----baaaaaab----",
+        "---baaaaaaaab---",
+        "--baaaaaaaaaab--",
+        "-----aaaaaa-----",
+        "-----aaaaaa-----",
+        "----cccccccc----",
+        "----cccccccc----",
+        "----ccdccdcc----",
+        "----cccccccc----",
+        "----------------"
+      ]
+    },
+    {
+      "id": "grainger-mug",
+      "name": "Grainger All-Nighter Mug",
+      "kind": "item",
+      "rarity": "UNCOMMON",
+      "drop": "Spin the Grainger Reading Cache after midnight",
+      "flavour": "The reading gallery seats 1,254. At 3 AM it feels like 1,253 of them are you.",
+      "palette": [
+        "#E9E6DC",
+        "#FF5F05",
+        "#3A2A1A",
+        "#13294B"
+      ],
+      "pixel": [
+        "----------------",
+        "----------------",
+        "---aaaaaaaa-----",
+        "---abbbbbba-aa--",
+        "---abbbbbba-aa--",
+        "---abbbbbba--a--",
+        "---aaaaaaaa--a--",
+        "---acccccca--a--",
+        "---acccccca--a--",
+        "---accccccaaa---",
+        "---acccccca-----",
+        "---acccccca-----",
+        "---aaaaaaaa-----",
+        "----aaaaaa------",
+        "----------------",
+        "----------------"
+      ]
+    }
+  ],
+  "gym_badges": {
+    "_note": "one per monument, earned by holding it",
+    "clock-tower": "alma-pin"
+  }
+}

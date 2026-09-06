@@ -16,7 +16,7 @@ import { objectId } from './common';
 
 export const createSwapRequestSchema = z.object({
   body: z.object({
-    proposerVolunteerId: objectId('Invalid Volunteer ObjectId'),
+    proposerVolunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the proposer
     proposerShiftId: objectId('Invalid Shift ObjectId'),
     targetVolunteerId: objectId('Invalid Volunteer ObjectId').optional(),
     targetShiftId: objectId('Invalid Shift ObjectId'),
@@ -29,6 +29,6 @@ export const acceptSwapSchema = z.object({
     id: objectId('Invalid Swap ObjectId'),
   }),
   body: z.object({
-    targetVolunteerId: objectId('Invalid Volunteer ObjectId'),
+    targetVolunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the acceptor
   }),
 });

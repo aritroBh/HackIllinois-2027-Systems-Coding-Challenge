@@ -1,0 +1,12 @@
+{
+  "_about": "HackStop spin loot. Weights are relative; karma per spin is uniform in [karmaMin, karmaMax] plus the item's bonus. Item types must match the PowerUpType enum until M6 makes power-ups pack-defined.",
+  "karmaMin": 25,
+  "karmaMax": 49,
+  "items": [
+    { "type": "COLD_BREW_ELIXIR", "weight": 40 },
+    { "type": "INSOMNIA_COOKIE_SHIELD", "weight": 25 },
+    { "type": "OVERCLOCK_SOLDER_CORE", "weight": 20 },
+    { "type": "RUBBER_DUCK_OMNISCIENCE", "weight": 10 },
+    { "type": "ANKER_GAUNTLET", "weight": 5 }
+  ]
+}

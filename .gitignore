@@ -9,3 +9,6 @@ coverage
 # Cached OpenStreetMap extracts (~6.5 MB). The committed .overpass queries
 # refetch them; public/gl/uiuc-campus.json is the built artefact that ships.
 design/osm/*.json
+
+# The pipeline provenance manifest is small and worth tracking; the raw OSM extracts are not.
+!design/osm/manifest.json

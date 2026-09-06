@@ -1,0 +1,5 @@
+{
+  "_about": "Minimal gazetteer for the CI fixture and the fork guide. Replace with your campus.",
+  "MAIN_HALL": { "name": "Main Hall", "latitude": 51.5007, "longitude": -0.1246, "hints": ["MAIN HALL", "HALL"] },
+  "CLOCK_TOWER": { "name": "Clock Tower", "latitude": 51.5008, "longitude": -0.1265, "hints": ["CLOCK", "TOWER"] }
+}

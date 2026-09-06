@@ -121,6 +121,10 @@ if (!parsedEnv.success) {
 // alias maps true → required; otherwise legacy (the zero-setup demo).
 const resolvedAuthMode: 'legacy' | 'required' =
   parsedEnv.data.AUTH_MODE ?? (parsedEnv.data.REQUIRE_AUTH ? 'required' : 'legacy');
+// Written back so anything that (defensively) reads process.env agrees with `env` — the
+// SSE hub once read process.env.AUTH_MODE and silently stayed in legacy under the
+// REQUIRE_AUTH alias.
+process.env.AUTH_MODE = resolvedAuthMode;
 
 // Fail fast in production: the committed HMAC default mints forgeable attendance
 // tokens (proven live), and the organizer default neuters REQUIRE_AUTH.

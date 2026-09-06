@@ -1,0 +1,9 @@
+{
+  "_about": "Faction ids are validated against this list by the gym model and the battle schema. NEUTRAL is the unclaimed state and must exist. Colours drive the map, HUD and sticker tints.",
+  "factions": [
+    { "id": "TEAM_KERNEL", "label": "Team Kernel", "short": "Kernel", "color": "#22d3ee", "hqVenue": "SIEBEL_ATRIUM", "theme": "Systems & Infrastructure" },
+    { "id": "TEAM_TENSOR", "label": "Team Tensor", "short": "Tensor", "color": "#a78bfa", "hqVenue": "ECEB_LOBBY", "theme": "AI & ML" },
+    { "id": "TEAM_SILICON", "label": "Team Silicon", "short": "Silicon", "color": "#fbbf24", "hqVenue": "KENNEY_GYM", "theme": "Hardware & Robotics" },
+    { "id": "NEUTRAL", "label": "Unclaimed", "short": "Unclaimed", "color": "#7c8daa" }
+  ]
+}

@@ -12,6 +12,7 @@ import { Volunteer, VolunteerRole, AccountKind } from '../models/volunteer.model
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { env } from '../config/env';
+import { evictAccountCache } from '../middleware/identity';
 
 export class AuthController {
   public static providers(_req: Request, res: Response): void {
@@ -30,11 +31,12 @@ export class AuthController {
 
   public static async magicLink(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await AuthService.requestMagicLink(req.body.email);
-      // 202 either way: the response must not reveal whether the address exists.
+      await AuthService.requestMagicLink(req.body.email);
+      // 202 with an identical body either way: the response must not reveal whether the
+      // address exists, in any environment.
       res.status(202).json({
         success: true,
-        data: { message: 'If that address belongs to an account, a sign-in link is on its way.', ...(result.debugLink ? { debugLink: result.debugLink } : {}) },
+        data: { message: 'If that address belongs to an account, a sign-in link is on its way.' },
       });
     } catch (error) {
       next(error);
@@ -53,7 +55,9 @@ export class AuthController {
 
   public static async adonix(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const account = await AuthService.adonixLogin(req.body.token);
+      // A signed-in caller is LINKING Adonix to their existing account; anonymous callers
+      // sign in (or get 409 ACCOUNT_LINK_REQUIRED if the email is already taken).
+      const account = await AuthService.adonixLogin(req.body.token, req.account?.source === 'session' ? req.account.id : undefined);
       const { csrf } = AuthService.setSessionCookies(res, account);
       res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), csrf } });
@@ -72,9 +76,15 @@ export class AuthController {
     }
   }
 
-  public static logout(_req: Request, res: Response): void {
-    AuthService.clearSessionCookies(res);
-    res.status(200).json({ success: true, data: { message: 'Signed out.' } });
+  public static async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const accountId = req.account?.source === 'session' ? req.account.id : undefined;
+      await AuthService.logout(res, accountId);
+      if (accountId) evictAccountCache(accountId);
+      res.status(200).json({ success: true, data: { message: 'Signed out everywhere.' } });
+    } catch (error) {
+      next(error);
+    }
   }
 
   public static async revoke(req: Request, res: Response, next: NextFunction): Promise<void> {

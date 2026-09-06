@@ -131,13 +131,16 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     message: envelope('from this IP', MINUTE_MS),
   });
 
+  // Trusted egress (the venue NAT) is where hundreds of people share one address — and also
+  // where an attacker on venue Wi-Fi sits. So it never skips the credential limiter; it gets
+  // a 10× allowance (300/min by default: ~5 sign-ins a second, far above any real doorway
+  // rush, while still bounding brute force at 2^50 codes to ~7 million years).
   const authExchangeLimiter = rateLimit({
     ...common,
     windowMs: MINUTE_MS,
-    limit: ceiling(opts.authExchangeMax),
+    limit: (req) => ceiling(trusted(req) ? opts.authExchangeMax * 10 : opts.authExchangeMax),
     requestPropertyName: 'rateLimitAuthExchange',
     keyGenerator: (req) => `auth:${ipOf(req)}`,
-    skip: (req) => trusted(req),
     message: envelope('to sign in from this IP', MINUTE_MS),
   });
 
@@ -153,13 +156,14 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
     message: envelope('for this account (mutations)', MINUTE_MS),
   });
 
+  // Same principle for the anonymous sum ceiling: trusted egress gets 10×, never unlimited.
   const ipCeilingLimiter = rateLimit({
     ...common,
     windowMs: MINUTE_MS,
-    limit: ceiling(opts.ipCeilingMax),
+    limit: (req) => ceiling(trusted(req) ? opts.ipCeilingMax * 10 : opts.ipCeilingMax),
     requestPropertyName: 'rateLimitIpCeiling',
     keyGenerator: (req) => `ceil:${ipOf(req)}`,
-    skip: (req) => !!req.account || trusted(req),
+    skip: (req) => !!req.account,
     message: envelope('from this IP', MINUTE_MS),
   });
 

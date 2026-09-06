@@ -21,7 +21,7 @@ export const swaggerDocument = {
     title: 'WaveShift Nexus API',
     version: '1.0.0',
     description:
-      'High-Performance Volunteer Scheduling, SOS Spatial Dispatch & PokéShift Operations Engine for HackIllinois Systems Team. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, bounded elementary-cycle swap discovery, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',
+      'Volunteer scheduling, SOS spatial dispatch and PokéShift operations engine. Identity (plan M1): cookie sessions with badge-code, magic-link and Adonix adapters; in AUTH_MODE=required every mutation acts as the signed-in account and any body volunteerId is a legacy-mode fallback only. Features atomic WiredTiger CAS guarantees, autonomous waitlist cascades, fatigue rest buffers, bounded elementary-cycle swap discovery, dynamic 30s HMAC-SHA256 attendance tokens, 75m geodesic geofencing, spatial SOS dispatch, campus Gym turf wars, and HackStop supply beacons.',
     contact: {
       name: 'HackIllinois Systems Team Candidate',
       url: 'https://github.com/HackIllinois/adonix',
@@ -44,8 +44,113 @@ export const swaggerDocument = {
     { name: 'Stats', description: 'Real-time telemetry, leaderboards & Server-Sent Events (SSE)' },
     { name: 'Volunteers', description: 'Volunteer records, certifications & faction allegiance' },
     { name: 'Operations', description: 'Liveness and readiness probes for orchestrators' },
+    { name: 'Identity', description: 'Cookie sessions: badge claim codes, email magic links, Adonix SSO, revocation (docs/IDENTITY.md)' },
+    { name: 'Content', description: 'The active content pack: branding, venues, factions, monuments and pack file URLs' },
   ],
   paths: {
+    '/auth/providers': {
+      get: {
+        summary: 'Sign-in providers enabled on this deployment and the current AUTH_MODE',
+        tags: ['Identity'],
+        responses: { 200: { description: '{ mode, providers:[{id, enabled, label, startUrl?}] }' } },
+      },
+    },
+    '/auth/claim': {
+      post: {
+        summary: 'Redeem a badge claim code (single use) — sets the session and CSRF cookies',
+        description: '30/min per IP (300/min for TRUSTED_EGRESS_CIDRS). The session token is only ever in the HttpOnly cookie; the body carries the public account and the CSRF nonce.',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['code'], properties: { code: { type: 'string', minLength: 10, maxLength: 16 } } } } } },
+        responses: { 200: { description: 'Signed in' }, 401: { description: 'CREDENTIAL_INVALID — unknown, expired or used code' } },
+      },
+    },
+    '/auth/magic-link': {
+      post: {
+        summary: 'Request an email sign-in link (always 202; identical body whether or not the address exists)',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email' } } } } } },
+        responses: { 202: { description: 'Accepted' }, 403: { description: 'PROVIDER_DISABLED (no SMTP_URL in production)' } },
+      },
+    },
+    '/auth/magic': {
+      post: {
+        summary: 'Redeem a magic-link token (#magic= fragment; 15 min; single use)',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Signed in' }, 401: { description: 'CREDENTIAL_INVALID' } },
+      },
+    },
+    '/auth/adonix': {
+      post: {
+        summary: 'Sign in (or, from a signed-in session, link) with an Adonix token',
+        description: 'Matches on the Adonix subject only. New subjects become HACKER accounts. A subject whose email matches an existing account is refused with 409 ACCOUNT_LINK_REQUIRED; link from a signed-in session instead.',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Signed in / linked' }, 401: { description: 'Invalid or expired token' }, 403: { description: 'PROVIDER_DISABLED or unmapped roles' }, 409: { description: 'ACCOUNT_LINK_REQUIRED' } },
+      },
+    },
+    '/auth/dev-login': {
+      post: {
+        summary: 'Development only — mint a session for any account (route is not registered in production)',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['accountId'], properties: { accountId: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' } } } } } },
+        responses: { 200: { description: 'Signed in' }, 404: { description: 'Production' } },
+      },
+    },
+    '/auth/logout': {
+      post: {
+        summary: 'Sign out everywhere: bumps sessionVersion (revokes every cookie for the account) and clears cookies',
+        tags: ['Identity'],
+        responses: { 200: { description: 'Signed out' } },
+      },
+    },
+    '/auth/claim-codes': {
+      post: {
+        summary: 'Issue a badge claim code for one account (organiser session or X-Organizer-Secret)',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { accountId: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' }, email: { type: 'string', format: 'email' }, ttlHours: { type: 'integer', minimum: 1, maximum: 336 } } } } } },
+        responses: { 201: { description: '{ code, accountId, expiresAt }' }, 401: { description: 'No credential' }, 403: { description: 'Wrong secret / role' } },
+      },
+    },
+    '/auth/claim-codes/bulk': {
+      post: {
+        summary: 'Issue one claim code per account, as JSON rows or CSV (Accept: text/csv) for badge printing',
+        tags: ['Identity'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { kind: { type: 'string', enum: ['VOLUNTEER', 'HACKER'] }, ttlHours: { type: 'integer' } } } } } },
+        responses: { 201: { description: 'Rows or CSV' } },
+      },
+    },
+    '/auth/revoke/{id}': {
+      post: {
+        summary: 'Revoke every session of an account (lead or above)',
+        tags: ['Identity'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' } }],
+        responses: { 200: { description: '{ accountId, sessionVersion }' }, 403: { description: 'INSUFFICIENT_PERMISSIONS' } },
+      },
+    },
+    '/auth/accounts/{id}/role': {
+      patch: {
+        summary: 'Change a volunteer account role (organiser)',
+        tags: ['Identity'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['role'], properties: { role: { type: 'string', enum: ['VOLUNTEER', 'SHIFT_LEAD', 'ORGANIZER', 'ADMIN'] } } } } } },
+        responses: { 200: { description: 'Public account' } },
+      },
+    },
+    '/me': {
+      get: {
+        summary: 'The signed-in account (401 without a session)',
+        tags: ['Identity'],
+        responses: { 200: { description: '{ account, source }' }, 401: { description: 'UNAUTHORIZED' } },
+      },
+    },
+    '/content': {
+      get: {
+        summary: 'Active content pack descriptor: event branding, venues, factions, monuments and pack file URLs',
+        tags: ['Content'],
+        responses: { 200: { description: 'Content descriptor (public, cacheable 60 s)' } },
+      },
+    },
     '/shifts': {
       get: {
         summary: 'List shifts with dynamic Karma surge pricing',
@@ -175,7 +280,7 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['shiftId', 'volunteerId'],
+                required: ['shiftId'], // volunteerId is a legacy-mode fallback; the session is the actor
                 properties: {
                   shiftId: { type: 'string', example: '65e7a9b0c123456789abcdef' },
                   volunteerId: { type: 'string', example: '65e7a9b0c123456789abcde0' },
@@ -373,7 +478,7 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['volunteerId', 'faction', 'power'],
+                required: ['faction', 'power'],
                 properties: {
                   volunteerId: { type: 'string' },
                   faction: { type: 'string', enum: ['TEAM_KERNEL', 'TEAM_TENSOR', 'TEAM_SILICON'] },
@@ -416,7 +521,7 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['volunteerId', 'coordinates'],
+                required: ['coordinates'],
                 properties: {
                   volunteerId: { type: 'string' },
                   coordinates: {
@@ -459,7 +564,7 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['volunteerId', 'itemType'],
+                required: ['itemType'],
                 properties: {
                   volunteerId: { type: 'string' },
                   itemType: { type: 'string', enum: ['COLD_BREW_ELIXIR', 'INSOMNIA_COOKIE_SHIELD', 'OVERCLOCK_SOLDER_CORE', 'RUBBER_DUCK_OMNISCIENCE', 'ANKER_GAUNTLET'] },
