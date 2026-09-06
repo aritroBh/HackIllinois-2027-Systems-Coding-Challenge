@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { CheckInController } from '../../controllers/checkin.controller';
 import { validate } from '../../middleware/validate';
+import { requireVolunteerKind } from '../../middleware/identity';
 import {
   generateQrTokenSchema,
   verifyCheckInSchema,
@@ -18,6 +19,6 @@ import {
 
 export const checkinRouter = Router();
 
-checkinRouter.post('/token', validate(generateQrTokenSchema), CheckInController.generateToken);
-checkinRouter.post('/verify', validate(verifyCheckInSchema), CheckInController.verifyCheckIn);
-checkinRouter.post('/:id/checkout', validate(checkOutSchema), CheckInController.checkOut);
+checkinRouter.post('/token', requireVolunteerKind, validate(generateQrTokenSchema), CheckInController.generateToken);
+checkinRouter.post('/verify', requireVolunteerKind, validate(verifyCheckInSchema), CheckInController.verifyCheckIn);
+checkinRouter.post('/:id/checkout', requireVolunteerKind, validate(checkOutSchema), CheckInController.checkOut);

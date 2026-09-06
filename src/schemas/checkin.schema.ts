@@ -17,7 +17,7 @@ import { objectId } from './common';
 export const generateQrTokenSchema = z.object({
   body: z.object({
     shiftId: objectId('Invalid Shift ObjectId'),
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
   }),
 });
 
@@ -39,6 +39,6 @@ export const checkOutSchema = z.object({
   }),
   // ponytail: owner proof — only the checked-in volunteer may check out.
   body: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
   }),
 });

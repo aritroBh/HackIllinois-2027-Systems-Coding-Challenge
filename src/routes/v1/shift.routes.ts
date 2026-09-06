@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { ShiftController } from '../../controllers/shift.controller';
 import { validate } from '../../middleware/validate';
+import { requireRole } from '../../middleware/identity';
 import {
   createShiftSchema,
   updateShiftSchema,
@@ -19,8 +20,9 @@ import {
 
 export const shiftRouter = Router();
 
-shiftRouter.post('/', validate(createShiftSchema), ShiftController.createShift);
+// Shift definitions are an organiser's job (leads may edit; legacy anonymous callers pass).
+shiftRouter.post('/', requireRole('SHIFT_LEAD'), validate(createShiftSchema), ShiftController.createShift);
 shiftRouter.get('/', validate(listShiftsQuerySchema), ShiftController.listShifts);
 shiftRouter.get('/:id', validate(getShiftParamsSchema), ShiftController.getShiftById);
-shiftRouter.patch('/:id', validate(updateShiftSchema), ShiftController.updateShift);
-shiftRouter.delete('/:id', validate(getShiftParamsSchema), ShiftController.deleteShift);
+shiftRouter.patch('/:id', requireRole('SHIFT_LEAD'), validate(updateShiftSchema), ShiftController.updateShift);
+shiftRouter.delete('/:id', requireRole('ORGANIZER'), validate(getShiftParamsSchema), ShiftController.deleteShift);

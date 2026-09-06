@@ -41,7 +41,7 @@ export const resolveSOSTicketSchema = z.object({
     id: objectId('Invalid Ticket ObjectId'),
   }),
   body: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
   }),
 });
 

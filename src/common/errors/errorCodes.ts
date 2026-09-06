@@ -15,6 +15,14 @@ export enum ErrorCode {
   UNAUTHORIZED = 'UNAUTHORIZED',
   FORBIDDEN = 'FORBIDDEN',
   INSUFFICIENT_PERMISSIONS = 'INSUFFICIENT_PERMISSIONS',
+  /** A body/query `volunteerId` named someone other than the session's account. */
+  IDENTITY_MISMATCH = 'IDENTITY_MISMATCH',
+  /** Cookie-authenticated mutation without a matching X-CSRF-Token / subprotocol nonce. */
+  CSRF_INVALID = 'CSRF_INVALID',
+  /** Claim code / magic token unknown, expired or already used. */
+  CREDENTIAL_INVALID = 'CREDENTIAL_INVALID',
+  /** The requested identity provider is not enabled on this deployment. */
+  PROVIDER_DISABLED = 'PROVIDER_DISABLED',
 
   // Not Found (404)
   SHIFT_NOT_FOUND = 'SHIFT_NOT_FOUND',

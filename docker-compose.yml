@@ -21,10 +21,13 @@ services:
       NODE_ENV: production
       MONGODB_URI: mongodb://mongo:27017/waveshift?replicaSet=rs0
       QR_HMAC_SECRET: ${QR_HMAC_SECRET:?set QR_HMAC_SECRET in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       ORGANIZER_SECRET: ${ORGANIZER_SECRET:?set ORGANIZER_SECRET in .env}
-      REQUIRE_AUTH: "true"
+      AUTH_MODE: required
       REQUIRE_GEOFENCE: "true"
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      TRUSTED_EGRESS_CIDRS: ${TRUSTED_EGRESS_CIDRS:-}
     depends_on:
       mongo-init:
         condition: service_completed_successfully

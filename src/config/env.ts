@@ -44,6 +44,32 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
   ORGANIZER_SECRET: z.string().default('waveshift_change_me_in_production'),
 
+  // --- identity (plan M1) ---------------------------------------------------
+  // `legacy` keeps the open-demo contract: mutations may name a `volunteerId` in the body
+  // and it is believed. `required` makes the session cookie the only identity and turns
+  // every unauthenticated non-allow-listed API request into a 401. Production forces
+  // `required` (guard below). `REQUIRE_AUTH=true` is accepted as a deprecated alias.
+  AUTH_MODE: z.enum(['legacy', 'required']).optional(),
+  // HMAC key for the session cookie. Like QR_HMAC_SECRET: ephemeral per boot outside
+  // production, refused on the committed default in production.
+  SESSION_SECRET: z.string().default('nexus_session_change_me'),
+  // Origin the browser sees, e.g. https://nexus.hackillinois.org. Used for the WebSocket
+  // Origin check, the Adonix redirect and magic-link URLs. Defaults to the local demo.
+  PUBLIC_URL: z.string().url().default('http://localhost:3000'),
+  // Magic-link mail. Unset → the provider is reported disabled and dev prints the link.
+  SMTP_URL: z.string().optional(),
+  MAIL_FROM: z.string().default('Nexus Quest <no-reply@nexus.local>'),
+  // Adonix (HackIllinois SSO). ADONIX_URL is env-only, never pack-configurable (SSRF).
+  ADONIX_URL: z.string().url().default('https://adonix.hackillinois.org'),
+  ADONIX_JWT_SECRET: z.string().optional(),
+  ADONIX_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+  // Comma-separated IPv4 CIDRs of the venue's NAT egress; per-IP anti-abuse ceilings do
+  // not apply to them (capacity is controlled per account).
+  TRUSTED_EGRESS_CIDRS: z.string().default(''),
+
   // --- capacity -------------------------------------------------------------
   // The per-IP rate limit must be tunable at deploy time. It was previously a
   // hardcoded 300/min whose only escape hatch was NODE_ENV=test — an env under
@@ -91,6 +117,11 @@ if (!parsedEnv.success) {
   process.exit(1);
 }
 
+// Resolve the identity mode once. Explicit AUTH_MODE wins; the deprecated REQUIRE_AUTH
+// alias maps true → required; otherwise legacy (the zero-setup demo).
+const resolvedAuthMode: 'legacy' | 'required' =
+  parsedEnv.data.AUTH_MODE ?? (parsedEnv.data.REQUIRE_AUTH ? 'required' : 'legacy');
+
 // Fail fast in production: the committed HMAC default mints forgeable attendance
 // tokens (proven live), and the organizer default neuters REQUIRE_AUTH.
 if (parsedEnv.data.NODE_ENV === 'production') {
@@ -110,20 +141,29 @@ if (parsedEnv.data.NODE_ENV === 'production') {
     console.error('❌ Refusing to boot: MONGODB_URI is required in production (in-memory Mongo loses all data on restart).');
     process.exit(1);
   }
-  // Every mutating route is otherwise open to anyone on the venue Wi-Fi. The flag stays
+  // Every mutating route is otherwise open to anyone on the venue Wi-Fi. The mode stays
   // optional for demos; production must opt in explicitly so the choice is visible.
-  if (!parsedEnv.data.REQUIRE_AUTH) {
-    console.error('❌ Refusing to boot: REQUIRE_AUTH must be true in production (mutating routes would be unauthenticated).');
+  if (resolvedAuthMode !== 'required') {
+    console.error('❌ Refusing to boot: AUTH_MODE must be "required" in production (set AUTH_MODE=required or REQUIRE_AUTH=true).');
+    process.exit(1);
+  }
+  if (parsedEnv.data.SESSION_SECRET === 'nexus_session_change_me') {
+    console.error('❌ Refusing to boot: SESSION_SECRET is the committed default. Set a strong secret.');
     process.exit(1);
   }
 }
 
-export const env = parsedEnv.data;
+export const env = { ...parsedEnv.data, AUTH_MODE: resolvedAuthMode };
+
+if (env.NODE_ENV !== 'production' && env.SESSION_SECRET === 'nexus_session_change_me') {
+  env.SESSION_SECRET = `ephemeral_dev_${crypto.randomBytes(24).toString('hex')}`;
+  if (env.NODE_ENV !== 'test') console.warn('⚠️  SESSION_SECRET not set: using an ephemeral per-boot secret (sessions invalidate on restart).');
+}
 
 // ponytail: outside production, a committed-default secret is swapped for an ephemeral
 // random one per boot — offline forgery with the public string then fails even in demos
 // (previously proven live), at zero demo cost. Production refuses to boot instead (above).
 if (env.NODE_ENV !== 'production' && env.QR_HMAC_SECRET === 'hackillinois_waveshift_secret_key_2027') {
   env.QR_HMAC_SECRET = `ephemeral_dev_${crypto.randomBytes(24).toString('hex')}`;
-  console.warn('⚠️  QR_HMAC_SECRET not set: using an ephemeral per-boot secret (tokens invalidate on restart).');
+  if (env.NODE_ENV !== 'test') console.warn('⚠️  QR_HMAC_SECRET not set: using an ephemeral per-boot secret (tokens invalidate on restart).');
 }

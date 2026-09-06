@@ -34,8 +34,11 @@ import path from 'path';
 import swaggerUi from 'swagger-ui-express';
 import { v1Router } from './routes/v1';
 import { errorHandler } from './middleware/errorHandler';
-import { apiRateLimiter } from './middleware/rateLimiter';
+import { apiRateLimiter, mutationLimiter, ipCeilingLimiter } from './middleware/rateLimiter';
 import { requireOrganizerAuth } from './middleware/requireAuth';
+import { attachIdentity, enforceAuthMode, requireCsrf } from './middleware/identity';
+import { streamEventsHandler } from './routes/v1/stats.routes';
+import { eventHub } from './common/sse/eventHub';
 import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
 
@@ -102,18 +105,45 @@ app.get('/', (_req: Request, res: Response) => {
   res.redirect('/dashboard');
 });
 
-// 4. API v1 Routes with Rate Limiting + opt-in organizer auth for mutations.
-// GET/HEAD/OPTIONS stay open (live dashboard reads); POST/PATCH/PUT/DELETE
-// require X-Organizer-Secret only when REQUIRE_AUTH=true (default false,
-// preserving the open-demo contract the test suite exercises).
-const mutationAuth: typeof requireOrganizerAuth = (req, res, next) => {
-  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+// 4. API v1 Routes.
+//
+// Order: identity first (so the limiter can key by account), then the rate limiter, then
+// the auth-mode gate (anonymous requests outside the allow-list → 401 in `required`), then
+// CSRF for cookie-authenticated mutations, then the routers.
+//
+// `AUTH_MODE=legacy` keeps the original open-demo contract: `attachIdentity` accepts a
+// body/query `volunteerId` as a legacy identity, `enforceAuthMode` passes everything, and
+// the organizer-secret gate below still applies to mutations when REQUIRE_AUTH=true — the
+// pre-M1 production posture, kept so existing deployments do not change behaviour until
+// they opt into `required`.
+const legacyMutationAuth: typeof requireOrganizerAuth = (req, res, next) => {
+  if (env.AUTH_MODE === 'required' || req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     next();
     return;
   }
   requireOrganizerAuth(req, res, next);
 };
-app.use('/api/v1', apiRateLimiter, mutationAuth, v1Router);
+
+// The live event stream is mounted BEFORE the API limiter: an open SSE connection is not
+// an API call and must never consume (or be refused by) the request budget. Identity still
+// runs first so the hub can authorise channels per account; per-channel auth and the
+// stream-slot table live inside the hub.
+app.get('/api/v1/stats/events', attachIdentity, streamEventsHandler);
+
+// Limiter stack (identity-first, see rateLimiter.ts): anonymous traffic is bounded by the
+// per-IP sum ceiling and the anonymous bucket; authenticated traffic only by its account
+// bucket, plus the tighter mutation bucket for writes.
+app.use(
+  '/api/v1',
+  attachIdentity,
+  ipCeilingLimiter,
+  apiRateLimiter,
+  mutationLimiter,
+  enforceAuthMode,
+  requireCsrf,
+  legacyMutationAuth,
+  v1Router
+);
 
 // 5. Health checks.
 //
@@ -130,6 +160,8 @@ app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     status: 'HEALTHY',
     service: 'WaveShift Nexus',
+    authMode: env.AUTH_MODE,
+    streams: eventHub.stats(),
     timestamp: new Date().toISOString(),
   });
 });

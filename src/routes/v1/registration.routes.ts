@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { RegistrationController } from '../../controllers/registration.controller';
 import { validate } from '../../middleware/validate';
+import { requireVolunteerKind } from '../../middleware/identity';
 import {
   reserveShiftSchema,
   cancelRegistrationSchema,
@@ -18,6 +19,7 @@ import {
 
 export const registrationRouter = Router();
 
-registrationRouter.post('/', validate(reserveShiftSchema), RegistrationController.reserveShift);
-registrationRouter.delete('/:id', validate(cancelRegistrationSchema), RegistrationController.cancelRegistration);
+// Shifts are staff work: a signed-in hacker is refused (legacy anonymous callers pass).
+registrationRouter.post('/', requireVolunteerKind, validate(reserveShiftSchema), RegistrationController.reserveShift);
+registrationRouter.delete('/:id', requireVolunteerKind, validate(cancelRegistrationSchema), RegistrationController.cancelRegistration);
 registrationRouter.get('/', validate(listRegistrationsQuerySchema), RegistrationController.listRegistrations);

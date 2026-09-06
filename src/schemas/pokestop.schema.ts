@@ -19,7 +19,7 @@ export const battleGymSchema = z.object({
     id: objectId('Invalid Gym ObjectId'),
   }),
   body: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
     faction: z.nativeEnum(Faction),
     power: z.number().min(10, 'Power must be at least 10').max(500, 'Power cannot exceed 500 per strike'),
     coordinates: z.object({
@@ -34,7 +34,7 @@ export const spinBeaconSchema = z.object({
     beaconId: z.string().min(1, 'Beacon ID is required'),
   }),
   body: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
     coordinates: z.object({
       latitude: z.number().min(-90).max(90),
       longitude: z.number().min(-180).max(180),
@@ -44,13 +44,13 @@ export const spinBeaconSchema = z.object({
 
 export const getInventorySchema = z.object({
   params: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
   }),
 });
 
 export const usePowerUpSchema = z.object({
   body: z.object({
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
     itemType: z.nativeEnum(PowerUpType),
     targetGymId: objectId('Invalid Gym ObjectId').optional(),
   }),

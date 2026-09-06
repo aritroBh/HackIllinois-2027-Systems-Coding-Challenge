@@ -19,6 +19,28 @@ export enum VolunteerRole {
   SHIFT_LEAD = 'SHIFT_LEAD',
   ORGANIZER = 'ORGANIZER',
   ADMIN = 'ADMIN',
+  /** Hackers are accounts too (they play gyms, spin HackStops, raise SOS) but hold no shifts. */
+  HACKER = 'HACKER',
+}
+
+/**
+ * The only axis for "is this a staff member" decisions. Shifts, check-in, swaps, SOS
+ * resolution and rosters are VOLUNTEER-only; gyms, HackStops, quests, stickers, presence,
+ * avatars and SOS *creation* accept either kind. `role` stays the lead/organiser ladder
+ * and is bound to `kind` by the invariant enforced in the pre-validate hook below.
+ */
+export enum AccountKind {
+  VOLUNTEER = 'VOLUNTEER',
+  HACKER = 'HACKER',
+}
+
+export type IdentityProvider = 'claim' | 'email' | 'adonix';
+
+export interface IIdentity {
+  provider: IdentityProvider;
+  /** Provider-scoped subject: the claim code id, the lowercased email, or the Adonix user id. */
+  subject: string;
+  linkedAt: Date;
 }
 
 export enum PrestigeTier {
@@ -32,9 +54,20 @@ export enum PrestigeTier {
 
 export interface IVolunteer extends Document {
   name: string;
-  email: string;
+  /** Optional since M1: badge-claim hackers have no email. Sparse-unique when present. */
+  email?: string | null;
   phone?: string;
+  kind: AccountKind;
   role: VolunteerRole;
+  identities: IIdentity[];
+  /** Bumped to revoke every session minted for this account (lost phone, leaked code). */
+  sessionVersion: number;
+  /** Content hash of the approved avatar sheet; null until an upload is approved. */
+  avatarHash?: string | null;
+  /** Presence is opt-in and symmetric: off means neither seen nor seeing. */
+  presenceOptIn: boolean;
+  streak: { count: number; lastDay: string | null };
+  reliability: { completed: number; noShow: number };
   certifications: string[];
   karmaPoints: number;
   hoursServed: number;
@@ -51,12 +84,42 @@ export interface IVolunteer extends Document {
 const VolunteerSchema = new Schema<IVolunteer>(
   {
     name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
+    // Sparse + unique: two volunteers cannot share an email, but any number of hackers may
+    // have none. (`scripts/migrate.ts` drops the old non-sparse unique index.)
+    email: { type: String, lowercase: true, trim: true, default: null },
     phone: { type: String, trim: true },
+    kind: {
+      type: String,
+      enum: Object.values(AccountKind),
+      default: AccountKind.VOLUNTEER,
+      index: true,
+    },
     role: {
       type: String,
       enum: Object.values(VolunteerRole),
       default: VolunteerRole.VOLUNTEER,
+    },
+    identities: {
+      type: [
+        {
+          _id: false,
+          provider: { type: String, enum: ['claim', 'email', 'adonix'], required: true },
+          subject: { type: String, required: true },
+          linkedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    sessionVersion: { type: Number, default: 0 },
+    avatarHash: { type: String, default: null },
+    presenceOptIn: { type: Boolean, default: false },
+    streak: {
+      count: { type: Number, default: 0 },
+      lastDay: { type: String, default: null },
+    },
+    reliability: {
+      completed: { type: Number, default: 0 },
+      noShow: { type: Number, default: 0 },
     },
     certifications: { type: [String], default: [] },
     karmaPoints: { type: Number, default: 0, min: 0, index: true },
@@ -72,6 +135,27 @@ const VolunteerSchema = new Schema<IVolunteer>(
   },
   { timestamps: true }
 );
+
+// Sparse unique indexes: uniqueness only among documents that have the field.
+VolunteerSchema.index({ email: 1 }, { unique: true, sparse: true });
+VolunteerSchema.index({ 'identities.provider': 1, 'identities.subject': 1 }, { unique: true, sparse: true });
+
+/**
+ * `kind === HACKER ⇔ role === HACKER`. Lead/organiser checks read `role`, staff-only checks
+ * read `kind`; binding the two means neither check can be fooled by an incoherent document
+ * (a "hacker" with SHIFT_LEAD, or a "volunteer" whose role says HACKER).
+ */
+VolunteerSchema.pre('validate', function (next) {
+  const isHackerKind = this.kind === AccountKind.HACKER;
+  const isHackerRole = this.role === VolunteerRole.HACKER;
+  if (isHackerKind !== isHackerRole) {
+    next(new Error(`Incoherent account: kind=${this.kind} role=${this.role} (kind HACKER must pair with role HACKER)`));
+    return;
+  }
+  // An email of "" would collide under the unique index; normalise to absent.
+  if (this.email === '') this.email = null;
+  next();
+});
 
 /**
  * Calculates current prestige tier from karma points.

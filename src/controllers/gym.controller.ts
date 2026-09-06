@@ -8,6 +8,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { GymService } from '../services/gym.service';
+import { resolveActorId } from '../middleware/identity';
 
 export class GymController {
   public static async listGyms(_req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -21,10 +22,12 @@ export class GymController {
 
   public static async battleOrContribute(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { volunteerId, faction, power, coordinates } = req.body;
+      const { faction, power, coordinates } = req.body;
+      // The actor is the session (or, in legacy mode, the body id) — never a body id over a session.
+      const volunteerId = resolveActorId(req);
       const result = await GymService.battleOrContribute(
         req.params.id as string,
-        volunteerId,
+        volunteerId as string,
         faction,
         power,
         coordinates

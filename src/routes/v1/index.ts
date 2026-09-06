@@ -19,9 +19,13 @@ import { statsRouter } from './stats.routes';
 import { sosRouter } from './sos.routes';
 import { adonixRouter } from './adonix.routes';
 import { pokeShiftRouter } from './pokestop.routes';
+import { authRouter } from './auth.routes';
+import { meRouter } from './me.routes';
 
 export const v1Router = Router();
 
+v1Router.use('/auth', authRouter);
+v1Router.use('/me', meRouter);
 v1Router.use('/shifts', shiftRouter);
 v1Router.use('/volunteers', volunteerRouter);
 v1Router.use('/registrations', registrationRouter);

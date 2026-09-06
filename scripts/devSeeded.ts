@@ -31,20 +31,18 @@ async function main(): Promise<void> {
 
   const { app } = await import('../src/app');
   const { env } = await import('../src/config/env');
+  const { createServer } = await import('../src/server');
 
-  const server = app.listen(env.PORT, () => {
+  // Same factory as the production entry point: timeouts and raw-server attachments
+  // (presence upgrade handler from M4) cannot drift between the two.
+  const server = createServer(app);
+  server.listen(env.PORT, () => {
     console.log('===============================================================');
-    console.log('🌊 WaveShift Nexus — seeded demo');
+    console.log(`🌊 WaveShift Nexus — seeded demo (auth=${env.AUTH_MODE})`);
     console.log(`🎛️  War Room:   http://localhost:${env.PORT}/dashboard`);
     console.log(`📖 Swagger UI:  http://localhost:${env.PORT}/docs`);
     console.log('===============================================================');
   });
-
-  // Match the production entry point's slowloris bounds so the demo behaves the same,
-  // reading the same configuration rather than duplicating the numbers.
-  server.requestTimeout = env.REQUEST_TIMEOUT_MS;
-  server.headersTimeout = env.HEADERS_TIMEOUT_MS;
-  server.keepAliveTimeout = env.KEEP_ALIVE_TIMEOUT_MS;
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n🛑 ${signal} — shutting down.`);

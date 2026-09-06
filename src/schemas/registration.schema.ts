@@ -23,7 +23,7 @@ import { objectId } from './common';
 export const reserveShiftSchema = z.object({
   body: z.object({
     shiftId: objectId('Invalid Shift ObjectId'),
-    volunteerId: objectId('Invalid Volunteer ObjectId'),
+    volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
   }),
   headers: z.object({
     'idempotency-key': z.string().min(8, 'idempotency-key header must be at least 8 characters').optional(),

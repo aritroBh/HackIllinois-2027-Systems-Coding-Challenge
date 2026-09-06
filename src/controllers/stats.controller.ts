@@ -39,11 +39,12 @@ export class StatsController {
 
   /**
    * Real-time Server-Sent Events (SSE) stream endpoint for live War Room updates.
+   *
+   * Channel selection (`?channels=`, `?v=2`, `Last-Event-ID`), per-channel authorisation
+   * against `req.account`, slot accounting and the 503 at capacity all happen inside
+   * `registerClient` — the hub owns the socket from here.
    */
   public static streamEvents(req: Request, res: Response): void {
-    const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const userId = req.headers['x-user-id'] as string | undefined;
-
-    eventHub.registerClient(clientId, res, userId);
+    eventHub.registerClient(req, res);
   }
 }

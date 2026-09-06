@@ -12,11 +12,13 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { CheckInService } from '../services/checkin.service';
+import { resolveActorId } from '../middleware/identity';
 
 export class CheckInController {
   public static async generateToken(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await CheckInService.generateToken(req.body.volunteerId, req.body.shiftId);
+      // A token is only ever minted for the caller's own account (legacy mode: the body id).
+      const result = await CheckInService.generateToken(resolveActorId(req) as string, req.body.shiftId);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
@@ -38,7 +40,7 @@ export class CheckInController {
 
   public static async checkOut(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const checkIn = await CheckInService.checkOut(req.params.id as string, req.body.volunteerId);
+      const checkIn = await CheckInService.checkOut(req.params.id as string, resolveActorId(req));
       res.status(200).json({ success: true, data: checkIn });
     } catch (error) {
       next(error);

@@ -1,41 +1,83 @@
 /**
  * Server-Sent Events broadcast hub — the push half of the live war room.
  *
- * SSE rather than WebSockets, deliberately. Every update in this system travels
- * server → browser: a waitlist promotion, a gym flip, an SOS dispatch. Nothing needs a
- * client→server channel that HTTP does not already provide, and SSE buys automatic
- * browser reconnection, plain HTTP semantics through proxies, and no second protocol to
- * secure or scale. WebSockets would add a bidirectional channel this app has no use for.
+ * SSE carries the ops events: a waitlist promotion, a gym flip, an SOS dispatch. It buys
+ * automatic browser reconnection, plain HTTP semantics through proxies, and no second
+ * protocol to secure. Presence — a 1 Hz bidirectional position stream — will ride a
+ * WebSocket instead (plan A4) with SSE `presence` as its fallback; both transports share
+ * the stream-limit table in `src/common/streamLimits.ts`, so a device's connections are
+ * counted in one place.
  *
- * Three defences make an open socket per viewer safe to expose:
+ * **Channels.** Every event lives on exactly one of `ops | sos | game | presence |
+ * presence:exact | announce | me`. The ~20 existing `broadcast({type, data})` call sites
+ * name no channel; `CHANNEL_OF_TYPE` infers it from the type prefix so they stay untouched.
+ * Clients subscribe with `?channels=a,b` (default `ops,sos,game,announce`).
  *
- *  1. **A hard client ceiling.** `MAX_CLIENTS` caps the map at 1,000 and refuses further
- *     streams with a 503. An unbounded map of live responses is a memory-DoS with no
- *     authentication required — every connection costs a socket and a map entry that only
- *     the client can release.
- *  2. **Eviction on write, not only on close.** A half-open socket (laptop lid closed,
- *     network dropped) never fires `close`. All three write paths — broadcast, single-client
- *     send, and the heartbeat — therefore check `destroyed` and `writableEnded` before
- *     writing and drop the client, so dead entries cannot accumulate and buffer writes
- *     nobody will read. The heartbeat matters most here: it is the loop that runs every
- *     15 s for the life of the process.
- *  3. **A 15-second heartbeat.** A comment frame keeps proxies from reaping an idle
- *     connection. It is `unref`'d so it never holds the process open, and skipped under
- *     `NODE_ENV=test` so Jest exits cleanly instead of hanging on a live timer.
+ * **Authorisation is per channel and enforced here**, because the route is mounted before
+ * the API limiter and the identity middleware only *attaches* `req.account` — it does not
+ * decide who may see what. In `AUTH_MODE=required` every channel except `announce` needs an
+ * account, `presence:exact` needs lead-or-above, and `sos` is *redacted* for everyone below
+ * lead (`redactSos`: ticket id, status, venue, category, urgency — no coordinates, no table
+ * text, no hacker name). The ticket's own parties get the full ticket over the targeted
+ * `me` channel via `sendToAccount`. In `legacy` mode the stream stays open exactly as
+ * before so the existing suites and the demo dashboard keep working. Unauthorised channels
+ * are dropped silently; a client left with nothing gets a 403.
+ *
+ * **Wire format.** v1 (`event: TYPE\ndata: <json>`) is byte-identical to what shipped, for
+ * clients that never send `v=2`. v2 adds `id: <seq>` and wraps the payload in
+ * `{v, ts, ch, data}` so a client can tell channels apart and resume.
+ *
+ * **Replay.** A per-channel ring buffer (200 events / 60 s) for `ops`, `sos`, `game`,
+ * `announce` — never `presence` (stale positions are worse than none) or `me` (targeted).
+ * A client reconnecting with `Last-Event-ID` gets the events it missed, filtered by its
+ * channels and redaction; if its id predates the buffer it gets one `RESYNC` and refetches.
+ * Sequence ids are one monotonically increasing integer per process.
+ *
+ * **Backpressure.** `res.write()` returning `false` marks the client `lagging`; while
+ * lagging, presence frames are dropped (the next one supersedes them anyway). `drain`
+ * clears the flag. A client is evicted when its write buffer exceeds 512 KiB or it has
+ * lagged for 10 s — checked on the heartbeat sweep — so one stalled tab cannot pin
+ * memory for the life of the process.
+ *
+ * **Half-open sockets.** A laptop lid closing never fires `close`. Every write path checks
+ * `destroyed`/`writableEnded` first and drops the client, and the 15 s heartbeat comment
+ * frame (unref'd, skipped under `NODE_ENV=test`) is the loop that catches the rest.
  *
  * Delivery is best-effort by design: a write that throws evicts the client rather than
  * failing the operation that triggered it. A volunteer's registration must not roll back
- * because a dashboard tab went away. The dashboard reconciles on reconnect.
+ * because a dashboard tab went away.
  *
- * Fan-out is O(clients) per event on the event loop, which is what the ceiling is really
- * sized against. `scripts/benchmarks/sse-fanout.ts` drives 1,000 concurrent streams and
- * reports delivery and latency; run it rather than trusting a number written here, since a
- * figure in a comment cannot be re-checked and will rot.
- *
- * Beyond one process this needs an external bus — each instance only knows its own map, so
- * a second replica silently halves who receives any given event.
+ * Fan-out is O(clients) per event on the event loop; `scripts/benchmarks/sse-fanout.ts`
+ * measures it. Beyond one process this needs an external bus — each instance only knows
+ * its own map.
  */
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import { AccountContext, isLeadOrAbove } from '../types/account';
+import { ErrorCode } from '../errors/errorCodes';
+import { streamLimits, SlotHandle } from '../streamLimits';
+
+export type Channel = 'ops' | 'sos' | 'game' | 'presence' | 'presence:exact' | 'announce' | 'me';
+
+export const CHANNELS: ReadonlySet<Channel> = new Set<Channel>([
+  'ops',
+  'sos',
+  'game',
+  'presence',
+  'presence:exact',
+  'announce',
+  'me',
+]);
+
+export const DEFAULT_CHANNELS: readonly Channel[] = ['ops', 'sos', 'game', 'announce'];
+
+/** Channels whose events are held for replay. Presence is ephemeral; `me` is targeted. */
+const REPLAY_CHANNELS: ReadonlySet<Channel> = new Set<Channel>(['ops', 'sos', 'game', 'announce']);
+const REPLAY_MAX_EVENTS = 200;
+const REPLAY_MAX_AGE_MS = 60_000;
+
+const LAG_EVICT_BYTES = 512 * 1024;
+const LAG_EVICT_MS = 10_000;
+const HEARTBEAT_MS = 15_000;
 
 export interface ISSEMessage {
   type: string;
@@ -44,115 +86,474 @@ export interface ISSEMessage {
   timestamp?: number;
 }
 
-interface IClient {
-  id: string;
-  res: Response;
-  userId?: string;
+/**
+ * Exact type names first (an `SOS_ESCALATED` alarm belongs on `announce`, not `sos`), then
+ * prefixes in declaration order. Anything unknown lands on `ops` so a new event type is
+ * visible on the default subscription rather than vanishing.
+ */
+const EXACT_CHANNEL_OF_TYPE: Readonly<Record<string, Channel>> = {
+  ANNOUNCEMENT: 'announce',
+  SOS_ESCALATED: 'announce',
+  PLUGIN_DISABLED: 'announce',
+  CLAIM_BRUTE_FORCE: 'announce',
+};
+
+export const CHANNEL_OF_TYPE: ReadonlyArray<readonly [prefix: string, channel: Channel]> = [
+  ['SHIFT_', 'ops'],
+  ['REGISTRATION_', 'ops'],
+  ['SLOT_', 'ops'],
+  ['WAITLIST_', 'ops'],
+  ['SWAP_', 'ops'],
+  ['CYCLIC_', 'ops'],
+  ['VOLUNTEER_CHECKED_', 'ops'],
+  ['ADONIX_', 'ops'],
+  ['SOS_', 'sos'],
+  ['GYM_', 'game'],
+  ['HACKSTOP_', 'game'],
+  ['POWERUP_', 'game'],
+  ['QUEST_', 'game'],
+  ['STICKER_', 'game'],
+  ['RAID_', 'game'],
+  ['OBJECTIVE_', 'game'],
+  ['AVATAR_', 'game'],
+  ['PRESENCE_', 'presence'],
+];
+
+export function channelOfType(type: string): Channel {
+  const exact = EXACT_CHANNEL_OF_TYPE[type];
+  if (exact) return exact;
+  for (const [prefix, channel] of CHANNEL_OF_TYPE) {
+    if (type.startsWith(prefix)) return channel;
+  }
+  return 'ops';
+}
+
+function isChannel(value: string): value is Channel {
+  return CHANNELS.has(value as Channel);
 }
 
 /**
- * Server-Sent Events Broadcast Hub.
- * Provides low-latency, real-time push synchronization for live shift rosters,
- * waitlist promotions, and chaos events to the browser War-Room console.
+ * What a non-lead subscriber sees of an `sos` event. Built from the fields common to the
+ * ticket document (`_id`) and the dispatch/resolve payloads (`ticketId`). Everything
+ * else — coordinates, table text, hacker name, assignee — is a lead's business.
  */
+export function redactSos(data: unknown): {
+  ticketId: unknown;
+  status: unknown;
+  venueKey: unknown;
+  category: unknown;
+  urgency: unknown;
+} {
+  const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+  return {
+    ticketId: d._id ?? d.ticketId,
+    status: d.status,
+    venueKey: d.venueKey,
+    category: d.category,
+    urgency: d.urgency,
+  };
+}
+
+type AuthMode = 'legacy' | 'required';
+
+/**
+ * TODO(identity): `env.AUTH_MODE` arrives with the identity middleware; read `process.env`
+ * defensively until then so an unset value keeps today's open behaviour.
+ */
+function authMode(): AuthMode {
+  return process.env.AUTH_MODE === 'required' ? 'required' : 'legacy';
+}
+
+interface IClient {
+  id: string;
+  res: Response;
+  account?: AccountContext;
+  channels: Set<Channel>;
+  version: 1 | 2;
+  /** Sees full `sos` payloads. Leads always; anonymous legacy viewers keep today's open stream. */
+  fullSos: boolean;
+  slot: SlotHandle;
+  lagging: boolean;
+  lagSince: number;
+}
+
+interface BufferedEvent {
+  seq: number;
+  ts: number;
+  type: string;
+  channel: Channel;
+  data: unknown;
+}
+
+/** One published event, with wire frames built lazily per (version, redaction) variant. */
+class Frames {
+  private cache = new Map<string, string>();
+
+  constructor(
+    private readonly seq: number,
+    private readonly ts: number,
+    private readonly type: string,
+    private readonly channel: Channel,
+    private readonly data: unknown
+  ) {}
+
+  public for(version: 1 | 2, redacted: boolean): string {
+    const key = `${version}:${redacted ? 'r' : 'f'}`;
+    let frame = this.cache.get(key);
+    if (frame === undefined) {
+      const payload = redacted ? redactSos(this.data) : this.data;
+      frame = formatFrame(version, this.seq, this.ts, this.type, this.channel, payload);
+      this.cache.set(key, frame);
+    }
+    return frame;
+  }
+}
+
+function formatFrame(version: 1 | 2, seq: number, ts: number, type: string, channel: Channel, data: unknown): string {
+  if (version === 1) {
+    return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  }
+  const envelope = JSON.stringify({ v: 2, ts, ch: channel, data });
+  return `id: ${seq}\nevent: ${type}\ndata: ${envelope}\n\n`;
+}
+
 class SSEBroadcastHub {
   private clients = new Map<string, IClient>();
+  private byAccount = new Map<string, Set<IClient>>();
   private heartbeatInterval: NodeJS.Timeout | null = null;
-  /** Upper bound on concurrent stream clients (unbounded maps are a memory-DoS vector). */
-  private static readonly MAX_CLIENTS = 1000;
+  private seq = 0;
+  private buffers = new Map<Channel, BufferedEvent[]>();
+  /** Highest seq ever dropped from each channel's buffer; a client behind this must resync. */
+  private droppedUpTo = new Map<Channel, number>();
 
   constructor() {
-    // 15-second heartbeat to maintain open persistent connections
+    for (const ch of REPLAY_CHANNELS) {
+      this.buffers.set(ch, []);
+      this.droppedUpTo.set(ch, 0);
+    }
     if (process.env.NODE_ENV !== 'test') {
-      this.heartbeatInterval = setInterval(() => this.broadcastHeartbeat(), 15000);
+      this.heartbeatInterval = setInterval(() => this.sweep(), HEARTBEAT_MS);
       if (this.heartbeatInterval.unref) {
         this.heartbeatInterval.unref();
       }
     }
   }
 
-  public registerClient(id: string, res: Response, userId?: string): void {
-    if (this.clients.size >= SSEBroadcastHub.MAX_CLIENTS) {
+  // -------------------------------------------------------------------------
+  // Connection lifecycle
+  // -------------------------------------------------------------------------
+
+  public registerClient(req: Request, res: Response): void {
+    const account = req.account;
+    const mode = authMode();
+
+    // --- channel selection ---------------------------------------------------
+    const rawChannels = typeof req.query.channels === 'string' ? req.query.channels : undefined;
+    const requested: Channel[] =
+      rawChannels === undefined
+        ? [...DEFAULT_CHANNELS]
+        : rawChannels
+            .split(',')
+            .map((c) => c.trim())
+            .filter(isChannel);
+
+    if (rawChannels !== undefined && requested.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: ErrorCode.BAD_REQUEST,
+        message: `No valid channels in "${rawChannels}". Known channels: ${[...CHANNELS].join(', ')}.`,
+        statusCode: 400,
+      });
+      return;
+    }
+
+    const authorised = requested.filter((ch) => this.mayJoin(ch, account, mode));
+    if (authorised.length === 0) {
+      res.status(403).json({
+        success: false,
+        error: ErrorCode.FORBIDDEN,
+        message: 'None of the requested channels are available to this caller.',
+        statusCode: 403,
+      });
+      return;
+    }
+
+    // --- slot -----------------------------------------------------------------
+    const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+    const acquired = streamLimits.tryAcquire({ transport: 'sse', accountId: account?.id, ip });
+    if (!acquired.ok) {
       res.status(503).json({
         success: false,
         error: 'TOO_MANY_STREAM_CLIENTS',
         message: 'Live event stream is at capacity. Retry shortly.',
+        reason: acquired.reason,
       });
       return;
     }
+    if (acquired.evict) {
+      this.evictBySlot(acquired.evict, 'REPLACED_BY_NEWER_CONNECTION');
+    }
+
+    // --- open the stream ------------------------------------------------------
+    const version: 1 | 2 = req.query.v === '2' ? 2 : 1;
+    const id = `client_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const client: IClient = {
+      id,
+      res,
+      account,
+      channels: new Set(authorised),
+      version,
+      fullSos: isLeadOrAbove(account) || (mode === 'legacy' && account === undefined),
+      slot: acquired.slot,
+      lagging: false,
+      lagSince: 0,
+    };
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    this.clients.set(id, { id, res, userId });
+    this.clients.set(id, client);
+    if (account) {
+      const set = this.byAccount.get(account.id);
+      if (set) set.add(client);
+      else this.byAccount.set(account.id, new Set([client]));
+    }
+    res.on('close', () => this.removeClient(client));
 
-    res.on('close', () => {
-      this.clients.delete(id);
+    this.writeControl(client, 'CONNECTED', {
+      clientId: id,
+      channels: authorised,
+      message: 'Connected to WaveShift Nexus SSE Stream.',
     });
 
-    // Send initial welcome event
-    this.sendToClient(id, {
-      type: 'CONNECTED',
-      data: { clientId: id, message: 'Connected to WaveShift Nexus SSE Stream.' },
-    });
+    // --- replay ----------------------------------------------------------------
+    const lastEventId = this.parseLastEventId(req);
+    if (lastEventId !== null) this.replay(client, lastEventId);
   }
 
-  public broadcast(message: ISSEMessage): void {
-    const payload = {
-      ...message,
-      timestamp: message.timestamp || Date.now(),
-    };
+  private mayJoin(channel: Channel, account: AccountContext | undefined, mode: AuthMode): boolean {
+    if (mode === 'legacy') return true;
+    if (channel === 'announce') return true;
+    if (!account) return false;
+    if (channel === 'presence:exact') return isLeadOrAbove(account);
+    return true;
+  }
 
-    const formatted = `event: ${payload.type}\ndata: ${JSON.stringify(payload.data)}\n\n`;
+  private parseLastEventId(req: Request): number | null {
+    const header = req.headers['last-event-id'];
+    const raw =
+      (typeof header === 'string' ? header : undefined) ??
+      (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined);
+    if (raw === undefined) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  }
 
-    for (const [, client] of this.clients.entries()) {
-      try {
-        // Drop dead half-open sockets instead of buffering unboundedly.
-        if (client.res.destroyed || client.res.writableEnded) {
-          this.clients.delete(client.id);
-          continue;
-        }
-        client.res.write(formatted);
-      } catch {
-        this.clients.delete(client.id);
+  private removeClient(client: IClient): void {
+    if (!this.clients.delete(client.id)) return;
+    streamLimits.release(client.slot);
+    if (client.account) {
+      const set = this.byAccount.get(client.account.id);
+      if (set) {
+        set.delete(client);
+        if (set.size === 0) this.byAccount.delete(client.account.id);
       }
     }
   }
 
-  public sendToClient(clientId: string, message: ISSEMessage): void {
-    const client = this.clients.get(clientId);
-    if (!client) return;
-
-    const formatted = `event: ${message.type}\ndata: ${JSON.stringify(message.data)}\n\n`;
+  /** End a client's stream with a final `EVICTED` frame so the browser knows not to auto-reconnect blindly. */
+  private evict(client: IClient, reason: string): void {
+    this.removeClient(client);
     try {
-      if (client.res.destroyed || client.res.writableEnded) {
-        this.clients.delete(clientId);
+      if (!client.res.destroyed && !client.res.writableEnded) {
+        client.res.write(formatFrame(client.version, this.seq, Date.now(), 'EVICTED', 'me', { reason }));
+        client.res.end();
+      }
+    } catch {
+      // Already gone; nothing to do.
+    }
+  }
+
+  private evictBySlot(slot: SlotHandle, reason: string): void {
+    for (const client of this.clients.values()) {
+      if (client.slot.id === slot.id) {
+        this.evict(client, reason);
         return;
       }
-      client.res.write(formatted);
-    } catch {
-      this.clients.delete(clientId);
     }
   }
 
-  private broadcastHeartbeat(): void {
-    for (const [, client] of this.clients.entries()) {
-      try {
-        // Same liveness check as `broadcast`. A half-open socket never fires `close`,
-        // and this loop runs every 15 s for the life of the process — so without the
-        // check it is the path most likely to accumulate buffered writes to a peer
-        // that is never coming back.
-        if (client.res.destroyed || client.res.writableEnded) {
-          this.clients.delete(client.id);
-          continue;
-        }
-        client.res.write(':heartbeat\n\n');
-      } catch {
-        this.clients.delete(client.id);
+  // -------------------------------------------------------------------------
+  // Publishing
+  // -------------------------------------------------------------------------
+
+  public broadcast(message: ISSEMessage): void {
+    const channel =
+      message.channel !== undefined && isChannel(message.channel) ? message.channel : channelOfType(message.type);
+    this.publish(channel, message);
+  }
+
+  public broadcastChannel(channel: Channel, message: ISSEMessage): void {
+    this.publish(channel, message);
+  }
+
+  /** Targeted delivery over `me` to every stream the account holds. Never buffered, never redacted. */
+  public sendToAccount(accountId: string, message: ISSEMessage): void {
+    const targets = this.byAccount.get(accountId);
+    if (!targets || targets.size === 0) return;
+    const seq = ++this.seq;
+    const frames = new Frames(seq, message.timestamp ?? Date.now(), message.type, 'me', message.data);
+    for (const client of [...targets]) {
+      if (!client.channels.has('me')) continue;
+      this.write(client, frames.for(client.version, false));
+    }
+  }
+
+  private publish(channel: Channel, message: ISSEMessage): void {
+    const seq = ++this.seq;
+    const ts = message.timestamp ?? Date.now();
+
+    if (REPLAY_CHANNELS.has(channel)) {
+      this.remember({ seq, ts, type: message.type, channel, data: message.data });
+    }
+
+    const frames = new Frames(seq, ts, message.type, channel, message.data);
+    const isPresence = channel === 'presence' || channel === 'presence:exact';
+    const redactable = channel === 'sos';
+
+    for (const client of [...this.clients.values()]) {
+      if (!client.channels.has(channel)) continue;
+      // A lagging client gets no presence frames: the next tick supersedes them, and
+      // buffering positions for a peer that is not reading is how a socket hits 512 KiB.
+      if (isPresence && client.lagging) continue;
+      this.write(client, frames.for(client.version, redactable && !client.fullSos));
+    }
+  }
+
+  private writeControl(client: IClient, type: string, data: unknown): void {
+    this.write(client, formatFrame(client.version, this.seq, Date.now(), type, 'me', data));
+  }
+
+  /**
+   * The single write path. Half-open detection, backpressure tracking and the hard buffer
+   * ceiling all live here so no caller can forget one of them.
+   */
+  private write(client: IClient, frame: string): void {
+    const { res } = client;
+    try {
+      if (res.destroyed || res.writableEnded) {
+        this.removeClient(client);
+        return;
+      }
+      if (res.writableLength > LAG_EVICT_BYTES) {
+        this.evict(client, 'BACKPRESSURE');
+        return;
+      }
+      const flushed = res.write(frame);
+      if (!flushed && !client.lagging) {
+        client.lagging = true;
+        client.lagSince = Date.now();
+        res.once('drain', () => {
+          client.lagging = false;
+          client.lagSince = 0;
+        });
+      }
+    } catch {
+      this.removeClient(client);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Replay buffer
+  // -------------------------------------------------------------------------
+
+  private remember(event: BufferedEvent): void {
+    const buffer = this.buffers.get(event.channel);
+    if (!buffer) return;
+    buffer.push(event);
+    this.prune(event.channel, event.ts);
+  }
+
+  private prune(channel: Channel, now: number): void {
+    const buffer = this.buffers.get(channel);
+    if (!buffer) return;
+    const cutoff = now - REPLAY_MAX_AGE_MS;
+    let drop = 0;
+    while (drop < buffer.length && (buffer.length - drop > REPLAY_MAX_EVENTS || buffer[drop].ts < cutoff)) {
+      drop += 1;
+    }
+    if (drop > 0) {
+      const last = buffer[drop - 1];
+      this.droppedUpTo.set(channel, Math.max(this.droppedUpTo.get(channel) ?? 0, last.seq));
+      buffer.splice(0, drop);
+    }
+  }
+
+  private replay(client: IClient, lastEventId: number): void {
+    const now = Date.now();
+    const channels = [...client.channels].filter((ch) => REPLAY_CHANNELS.has(ch));
+    for (const ch of channels) this.prune(ch, now);
+
+    // An id from a previous process (ahead of our counter) or behind any subscribed
+    // channel's drop mark means events are unrecoverable: say so once, and let the client
+    // refetch state instead of pretending the gap does not exist.
+    const oldestNeeded = Math.max(0, ...channels.map((ch) => this.droppedUpTo.get(ch) ?? 0));
+    if (lastEventId > this.seq || lastEventId < oldestNeeded) {
+      this.writeControl(client, 'RESYNC', { reason: 'BUFFER_EXPIRED' });
+      return;
+    }
+
+    const missed: BufferedEvent[] = [];
+    for (const ch of channels) {
+      for (const ev of this.buffers.get(ch) ?? []) {
+        if (ev.seq > lastEventId) missed.push(ev);
       }
     }
+    missed.sort((a, b) => a.seq - b.seq);
+    for (const ev of missed) {
+      const redacted = ev.channel === 'sos' && !client.fullSos;
+      const payload = redacted ? redactSos(ev.data) : ev.data;
+      this.write(client, formatFrame(client.version, ev.seq, ev.ts, ev.type, ev.channel, payload));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Maintenance
+  // -------------------------------------------------------------------------
+
+  /**
+   * The heartbeat body: a comment frame keeps proxies from reaping idle connections, and
+   * this is where stalled clients are evicted. Public so tests can drive it without a timer.
+   */
+  public sweep(now: number = Date.now()): void {
+    for (const client of [...this.clients.values()]) {
+      const { res } = client;
+      if (res.destroyed || res.writableEnded) {
+        this.removeClient(client);
+        continue;
+      }
+      if (res.writableLength > LAG_EVICT_BYTES || (client.lagging && now - client.lagSince > LAG_EVICT_MS)) {
+        this.evict(client, 'BACKPRESSURE');
+        continue;
+      }
+      try {
+        res.write(':heartbeat\n\n');
+      } catch {
+        this.removeClient(client);
+      }
+    }
+  }
+
+  public stats(): { clients: number; byChannel: Record<Channel, number>; slots: ReturnType<typeof streamLimits.stats> } {
+    const byChannel = {} as Record<Channel, number>;
+    for (const ch of CHANNELS) byChannel[ch] = 0;
+    for (const client of this.clients.values()) {
+      for (const ch of client.channels) byChannel[ch] += 1;
+    }
+    return { clients: this.clients.size, byChannel, slots: streamLimits.stats() };
   }
 
   public getConnectedCount(): number {
@@ -164,7 +565,9 @@ class SSEBroadcastHub {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
+    for (const client of this.clients.values()) streamLimits.release(client.slot);
     this.clients.clear();
+    this.byAccount.clear();
   }
 }
 

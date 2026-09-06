@@ -10,6 +10,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { SOSService } from '../services/sos.service';
 import { SOSTicketStatus } from '../models/sosTicket.model';
+import { resolveActorId } from '../middleware/identity';
 
 export class SOSController {
   public static async createTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -32,7 +33,7 @@ export class SOSController {
 
   public static async resolveTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const ticket = await SOSService.resolveTicket(req.params.id as string, req.body.volunteerId);
+      const ticket = await SOSService.resolveTicket(req.params.id as string, resolveActorId(req) as string);
       res.status(200).json({ success: true, data: ticket });
     } catch (error) {
       next(error);

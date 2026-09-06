@@ -17,6 +17,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { RegistrationService } from '../services/registration.service';
+import { resolveActorId } from '../middleware/identity';
 
 export class RegistrationController {
   public static async reserveShift(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -24,7 +25,7 @@ export class RegistrationController {
       const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
       const result = await RegistrationService.reserveShift({
         shiftId: req.body.shiftId,
-        volunteerId: req.body.volunteerId,
+        volunteerId: resolveActorId(req) as string,
         idempotencyKey,
       });
 
@@ -47,8 +48,9 @@ export class RegistrationController {
 
   public static async cancelRegistration(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // ponytail: owner proof required — anonymous cross-user cancels are rejected as 403 in the service.
-      const callerVolunteerId = (req.body?.volunteerId as string | undefined) ?? (req.query.volunteerId as string | undefined);
+      // Owner proof: the session's account (legacy mode: the body/query id). The service
+      // still compares it with `sameId` and rejects cross-user cancels as 403.
+      const callerVolunteerId = resolveActorId(req);
       const result = await RegistrationService.cancelRegistration(req.params.id as string, callerVolunteerId);
       res.status(200).json({
         success: true,

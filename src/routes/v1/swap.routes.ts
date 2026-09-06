@@ -8,11 +8,12 @@
 import { Router } from 'express';
 import { SwapController } from '../../controllers/swap.controller';
 import { validate } from '../../middleware/validate';
+import { requireVolunteerKind } from '../../middleware/identity';
 import { createSwapRequestSchema, acceptSwapSchema } from '../../schemas/swap.schema';
 
 export const swapRouter = Router();
 
-swapRouter.post('/', validate(createSwapRequestSchema), SwapController.createSwapRequest);
-swapRouter.post('/:id/accept', validate(acceptSwapSchema), SwapController.acceptSwap);
-swapRouter.post('/cycles/resolve', SwapController.discoverCycles);
+swapRouter.post('/', requireVolunteerKind, validate(createSwapRequestSchema), SwapController.createSwapRequest);
+swapRouter.post('/:id/accept', requireVolunteerKind, validate(acceptSwapSchema), SwapController.acceptSwap);
+swapRouter.post('/cycles/resolve', requireVolunteerKind, SwapController.discoverCycles);
 swapRouter.get('/', SwapController.listSwaps);
