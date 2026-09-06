@@ -149,7 +149,14 @@ export class SOSService {
 
     return {
       ticket: dispatched,
-      dispatchedVolunteer: (bestCandidate.toObject ? bestCandidate.toObject() : bestCandidate) as Record<string, unknown>,
+      // Only what the dispatcher needs to see; never the full account document (email, phone,
+      // identities, sessionVersion).
+      dispatchedVolunteer: {
+        _id: bestCandidate._id,
+        name: bestCandidate.name,
+        role: bestCandidate.role,
+        faction: (bestCandidate as { faction?: unknown }).faction,
+      } as Record<string, unknown>,
       distanceMeters: shortestDistance,
     };
   }
@@ -223,7 +230,7 @@ export class SOSService {
   public static async listTickets(status?: SOSTicketStatus): Promise<ISOSTicket[]> {
     const query = status ? { status } : {};
     return SOSTicket.find(query)
-      .populate('assignedVolunteerId', 'name email role')
+      .populate('assignedVolunteerId', 'name role')
       .sort({ createdAt: -1 });
   }
 }

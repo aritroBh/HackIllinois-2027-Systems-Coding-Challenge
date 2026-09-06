@@ -138,7 +138,8 @@ const ANONYMOUS_ALLOW = new Set<string>([
 ]);
 
 export function isAnonymousAllowed(method: string, path: string): boolean {
-  if (method === 'OPTIONS' || method === 'HEAD') return true;
+  // Only CORS preflight is exempt. HEAD is served by GET handlers, so it must be gated like GET.
+  if (method === 'OPTIONS') return true;
   const clean = path.replace(/\/+$/, '') || '/';
   return ANONYMOUS_ALLOW.has(`${method} ${clean}`);
 }

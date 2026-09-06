@@ -131,6 +131,9 @@ export function parseCookies(header: string | undefined): Record<string, string>
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
     if (!key) continue;
+    // First occurrence wins: browsers order cookies most-specific-path first, so a broader
+    // duplicate planted by cookie tossing must not shadow the real one.
+    if (out[key] !== undefined) continue;
     try {
       out[key] = decodeURIComponent(value);
     } catch {

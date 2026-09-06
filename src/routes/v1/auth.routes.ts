@@ -61,6 +61,12 @@ function organizerOrSecret(req: Request, res: Response, next: NextFunction): voi
     next(ApiError.forbidden('Invalid organizer credentials.'));
     return;
   }
+  // No session and no secret: refuse outright. `requireRole` would pass an anonymous caller in
+  // legacy mode, and minting a claim code is minting a real session for another account.
+  if (!req.account) {
+    next(ApiError.unauthorized('Organizer session or X-Organizer-Secret required.'));
+    return;
+  }
   requireRole('ORGANIZER')(req, res, next);
 }
 

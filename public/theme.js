@@ -77,7 +77,9 @@
 
     for (const [key, [token, fallback]] of Object.entries(FONT_TOKENS)) {
       const family = fonts[key];
-      if (typeof family === 'string' && family.trim()) set(token, `'${family.replace(/['\\]/g, '').trim()}', ${fallback}`);
+      // Allow-list, not escape: a font family is letters, digits, spaces and hyphens. Anything
+      // else (parentheses, semicolons, url) is a style injection attempt and is dropped.
+      if (typeof family === 'string' && /^[\w][\w -]{0,60}$/.test(family.trim())) set(token, `'${family.trim()}', ${fallback}`);
     }
 
     // The browser chrome colour follows the ground; an attribute, not a style.

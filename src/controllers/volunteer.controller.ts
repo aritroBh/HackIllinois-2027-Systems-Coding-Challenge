@@ -15,6 +15,16 @@ import { Volunteer } from '../models/volunteer.model';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
+/**
+ * Contact details and session metadata are visible to lead+ only. Everyone else (including
+ * the open legacy demo) gets the game-facing profile: name, role, kind, faction, karma, badges.
+ */
+function projectionFor(req: Request): string {
+  const role = req.account?.role;
+  const lead = role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN';
+  return lead ? '-identities -sessionVersion -__v' : '-email -phone -identities -sessionVersion -__v';
+}
+
 export class VolunteerController {
   public static async createVolunteer(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -29,7 +39,7 @@ export class VolunteerController {
 
   public static async listVolunteers(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const volunteers = await Volunteer.find().sort({ createdAt: -1 });
+      const volunteers = await Volunteer.find().select(projectionFor(_req)).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: volunteers });
     } catch (error) {
       next(error);
@@ -38,7 +48,7 @@ export class VolunteerController {
 
   public static async getVolunteerById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const volunteer = await Volunteer.findById(req.params.id);
+      const volunteer = await Volunteer.findById(req.params.id).select(projectionFor(req));
       if (!volunteer) {
         throw ApiError.notFound('Volunteer not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
       }

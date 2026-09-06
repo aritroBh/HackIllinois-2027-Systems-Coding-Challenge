@@ -88,7 +88,7 @@ describe('rate-key table', () => {
   });
 
   describe('authExchangeLimiter', () => {
-    it('limits per IP and skips trusted egress CIDRs', async () => {
+    it('limits per IP and grants trusted egress CIDRs a 10x allowance, never an exemption', async () => {
       const app = makeApp(limiters.authExchangeLimiter);
       const untrusted = { 'X-Forwarded-For': '203.0.113.9' };
       await request(app).post('/auth/claim').set(untrusted).expect(200);

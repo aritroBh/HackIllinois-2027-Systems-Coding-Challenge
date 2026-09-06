@@ -6,7 +6,9 @@
  * meaningfully. (The service carries a Siebel-Atrium fallback for direct internal calls;
  * this schema is what stops it being reachable over HTTP.)
  *
- * `karmaBounty` has a floor of 50 so incidents are worth answering. It has no ceiling,
+ * `karmaBounty` has a floor of 50 so incidents are worth answering and a ceiling of 500 so a
+ * ticket creator cannot mint arbitrary karma; the pack-driven per-urgency caps and per-day
+ * budget arrive with M6. Historical note:
  * which means a caller can mint an arbitrarily large reward — cap it before this is
  * exposed to attendees.
  */
@@ -26,7 +28,7 @@ export const createSOSTicketSchema = z.object({
     description: z.string().min(3, 'Description must be at least 3 characters'),
     urgency: z.nativeEnum(SOSTicketUrgency).default(SOSTicketUrgency.MEDIUM),
     requiredSkill: z.string().optional(),
-    karmaBounty: z.number().min(50).optional(),
+    karmaBounty: z.number().int().min(50).max(500).optional(), // ceiling is a stopgap; M6 makes it pack-driven per urgency
   }),
 });
 

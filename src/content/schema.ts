@@ -142,6 +142,46 @@ export const lootSchema = z.object({
   items: z.array(z.object({ type: z.string().min(1), weight: z.number().positive() })).min(1),
 });
 
+/** Sticker book. Extra keys are allowed (the UI grows), but ids, names and the pixel grid are shaped. */
+export const memorabiliaSchema = z.object({
+  _about: z.string().optional(),
+  palette_note: z.string().optional(),
+  items: z
+    .array(
+      z
+        .object({
+          id: z.string().regex(/^[a-z0-9-]+$/),
+          name: z.string().min(1).max(80),
+          kind: z.string().min(1).max(40),
+          rarity: z.string().regex(/^[A-Z_]+$/),
+          drop: z.string().max(200).default(''),
+          flavour: z.string().max(400).optional(),
+          palette: z.array(hex).max(16).optional(),
+          pixel: z.array(z.string().regex(/^[a-p-]{16}$/)).length(16).optional(),
+        })
+        .passthrough()
+    )
+    .min(1),
+});
+
+/** Monument dossiers keyed by monument id; `_`-prefixed keys are documentation. */
+export const monumentsInfoSchema = z.record(
+  z.string(),
+  z.union([
+    z.string(),
+    z
+      .object({
+        title: z.string().min(1).max(120),
+        year: z.number().int().optional(),
+        architect: z.string().max(160).optional(),
+        style: z.string().max(160).optional(),
+        approximate: z.boolean().optional(),
+        facts: z.array(z.string().max(400)).max(12).default([]),
+      })
+      .passthrough(),
+  ])
+);
+
 export type EventConfig = z.infer<typeof eventSchema>;
 export type Venue = z.infer<typeof venueSchema>;
 export type Monument = z.infer<typeof monumentSchema>;

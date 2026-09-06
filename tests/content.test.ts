@@ -117,4 +117,27 @@ describe('content pack', () => {
       (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
     }
   });
+
+  it('the second pack (content/example-campus) loads, so a fork with no UIUC content boots', () => {
+    const second = loadPack(path.resolve(__dirname, '../content/example-campus'));
+    expect(second.event.id).not.toBe('hackillinois-2027');
+    expect(second.factionIds.has('NEUTRAL')).toBe(true);
+    expect(second.campusMonumentIds).toBeNull();
+  });
+
+  it('optional pack files are validated when present: a malformed sticker grid fails at the right path', () => {
+    const dir = copyPack((d) =>
+      rewrite(d, 'memorabilia.json', (doc) => {
+        (doc.items as Array<{ pixel: string[] }>)[0].pixel = ['<script>'];
+      })
+    );
+    let err: unknown;
+    try {
+      loadPack(dir);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ContentPackError);
+    expect((err as ContentPackError).issues).toEqual(expect.arrayContaining([expect.objectContaining({ file: 'memorabilia.json' })]));
+  });
 });

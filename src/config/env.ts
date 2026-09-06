@@ -69,6 +69,9 @@ const envSchema = z.object({
   // Comma-separated IPv4 CIDRs of the venue's NAT egress; per-IP anti-abuse ceilings do
   // not apply to them (capacity is controlled per account).
   TRUSTED_EGRESS_CIDRS: z.string().default(''),
+  /** Content pack directory name under CONTENT_DIR — a bare name, never a path. */
+  CONTENT_PACK: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'CONTENT_PACK must be a bare lowercase directory name').default('hackillinois-2027'),
+  CONTENT_DIR: z.string().min(1).optional(),
 
   // --- capacity -------------------------------------------------------------
   // The per-IP rate limit must be tunable at deploy time. It was previously a

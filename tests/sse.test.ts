@@ -186,7 +186,7 @@ describe('SSE hub v2', () => {
       ['HACKSTOP_SPUN', 'game'],
       ['PRESENCE_TICK', 'presence'],
       ['SOS_ESCALATED', 'announce'],
-      ['CLAIM_BRUTE_FORCE', 'announce'],
+      ['CLAIM_BRUTE_FORCE', 'ops'],
       ['ANNOUNCEMENT', 'announce'],
       ['SOMETHING_NEW', 'ops'],
     ])('%s → %s', (type, channel) => {

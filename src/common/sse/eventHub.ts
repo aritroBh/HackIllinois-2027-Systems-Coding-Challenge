@@ -96,7 +96,7 @@ const EXACT_CHANNEL_OF_TYPE: Readonly<Record<string, Channel>> = {
   ANNOUNCEMENT: 'announce',
   SOS_ESCALATED: 'announce',
   PLUGIN_DISABLED: 'announce',
-  CLAIM_BRUTE_FORCE: 'announce',
+  CLAIM_BRUTE_FORCE: 'ops', // staff alarm; `announce` is readable anonymously
 };
 
 export const CHANNEL_OF_TYPE: ReadonlyArray<readonly [prefix: string, channel: Channel]> = [
@@ -538,7 +538,14 @@ class SSEBroadcastHub {
         continue;
       }
       try {
-        res.write(':heartbeat\n\n');
+        // Same backpressure bookkeeping as write(): a heartbeat that does not flush is the
+        // first sign of a half-open socket, and without marking `lagging` here a dead tab
+        // would never hit the 10 s eviction.
+        const flushed = res.write(':heartbeat\n\n');
+        if (!flushed && !client.lagging) {
+          client.lagging = true;
+          client.lagSince = now;
+        }
       } catch {
         this.removeClient(client);
       }

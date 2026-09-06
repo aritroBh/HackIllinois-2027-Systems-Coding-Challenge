@@ -23,6 +23,8 @@ import {
   eventSchema,
   factionsSchema,
   lootSchema,
+  memorabiliaSchema,
+  monumentsInfoSchema,
   monumentsSchema,
   territoriesSchema,
   venuesSchema,
@@ -70,7 +72,15 @@ export function loadPack(dir: string): ContentPack {
   const territories = readJson(dir, 'territories.json', territoriesSchema, issues);
   const beacons = readJson(dir, 'beacons.json', beaconsSchema, issues);
   const loot = readJson(dir, 'loot.json', lootSchema, issues);
+  // Optional files the client renders from: validated when present so pack-driven DOM input
+  // is shaped before it is served.
+  if (fs.existsSync(path.join(dir, 'memorabilia.json'))) readJson(dir, 'memorabilia.json', memorabiliaSchema, issues);
+  const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
+  if (info) {
+    const ids = new Set(monuments.monuments.map((m) => m.id));
+    for (const key of Object.keys(info)) if (!key.startsWith('_') && !ids.has(key)) issues.push({ file: 'monuments-info.json', path: key, message: 'dossier for an undeclared monument' });
+  }
 
   let campusMonumentIds: string[] | null = null;
   const campusFile = path.join(dir, 'campus.json');
@@ -104,11 +114,17 @@ export function loadPack(dir: string): ContentPack {
   return { ...partial, factionIds: new Set(partial.factions.map((f) => f.id)), files };
 }
 
-export const CONTENT_DIR = process.env.CONTENT_DIR ?? path.resolve(__dirname, '../../content');
-export const CONTENT_PACK = process.env.CONTENT_PACK ?? 'hackillinois-2027';
+export const CONTENT_DIR = path.resolve(env.CONTENT_DIR ?? path.resolve(__dirname, '../../content'));
+export const CONTENT_PACK = env.CONTENT_PACK;
 
 function loadActivePack(): ContentPack {
-  const dir = path.join(CONTENT_DIR, CONTENT_PACK);
+  const dir = path.resolve(CONTENT_DIR, CONTENT_PACK);
+  // Belt and braces on top of the env regex: the pack directory must sit inside CONTENT_DIR,
+  // because `pack.dir` is served statically at /dashboard/content.
+  if (!dir.startsWith(CONTENT_DIR + path.sep)) {
+    console.error(`❌ Refusing to boot: CONTENT_PACK "${CONTENT_PACK}" resolves outside ${CONTENT_DIR}.`);
+    process.exit(1);
+  }
   try {
     return loadPack(dir);
   } catch (err) {

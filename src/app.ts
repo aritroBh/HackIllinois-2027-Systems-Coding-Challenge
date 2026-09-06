@@ -74,13 +74,18 @@ app.use(
         // in the shell goes through the delegated `data-action` map — and a framework
         // default is not a contract across major versions.
         scriptSrcAttr: ["'none'"],
-        styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
+        // No remote stylesheets: fonts are vendored under /dashboard/fonts and Swagger UI ships
+        // its own CSS. `'unsafe-inline'` stays for Swagger's inline styles and the dashboard's
+        // CSSOM-driven element styles (see the note above).
+        styleSrc: ["'self'", "'unsafe-inline'"],
         // `blob:` is required: the avatar builder loads a user-picked file through
         // `URL.createObjectURL` (public/avatar.js), which yields a blob: URL. Without
         // the scheme listed, that fallback path is blocked with no visible error.
         imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
         connectSrc: ["'self'"],
-        fontSrc: ["'self'", 'https:', 'data:'],
+        fontSrc: ["'self'", 'data:'],
+        workerSrc: ["'self'"],
+        manifestSrc: ["'self'"],
         objectSrc: ["'none'"],
         frameAncestors: ["'self'"],
       },

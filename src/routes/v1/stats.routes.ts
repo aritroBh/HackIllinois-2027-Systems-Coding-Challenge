@@ -13,11 +13,13 @@
  */
 import { RequestHandler, Router } from 'express';
 import { StatsController } from '../../controllers/stats.controller';
+import { requireVolunteerKind } from '../../middleware/identity';
 
 export const streamEventsHandler: RequestHandler = (req, res) => StatsController.streamEvents(req, res);
 
 export const statsRouter = Router();
 
 statsRouter.get('/leaderboard', StatsController.getLeaderboard);
-statsRouter.get('/operations', StatsController.getOperationsStats);
+// Fill rates and no-show telemetry are staff data; hackers keep the leaderboard and the stream.
+statsRouter.get('/operations', requireVolunteerKind, StatsController.getOperationsStats);
 statsRouter.get('/events', streamEventsHandler);

@@ -57,6 +57,7 @@ describe('Session tokens', () => {
     const vol = await makeVolunteer();
     const res = await request(app).post('/api/v1/auth/dev-login').send({ accountId: vol.id });
     expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
     expect(JSON.stringify(res.body)).not.toContain('v1.');
     const setCookie = res.headers['set-cookie'] as unknown as string[];
     const session = setCookie.find((c) => c.startsWith(`${names.session}=`)) as string;
@@ -128,7 +129,10 @@ describe('Providers and dev login', () => {
 describe('Claim codes', () => {
   it('issues a 10-char code, claims it once, refuses reuse and garbage', async () => {
     const vol = await makeVolunteer();
-    const issued = await request(app).post('/api/v1/auth/claim-codes').send({ accountId: vol.id, ttlHours: 1 });
+    const issued = await request(app)
+      .post('/api/v1/auth/claim-codes')
+      .set('X-Organizer-Secret', env.ORGANIZER_SECRET)
+      .send({ accountId: vol.id, ttlHours: 1 });
     expect(issued.status).toBe(201);
     const code: string = issued.body.data.code;
     expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{10}$/);
@@ -154,7 +158,11 @@ describe('Claim codes', () => {
     await makeVolunteer({ email: 'a1@illinois.edu' });
     await makeVolunteer({ email: 'a2@illinois.edu' });
     await makeHacker();
-    const res = await request(app).post('/api/v1/auth/claim-codes/bulk').set('Accept', 'text/csv').send({ kind: 'VOLUNTEER' });
+    const res = await request(app)
+      .post('/api/v1/auth/claim-codes/bulk')
+      .set('X-Organizer-Secret', env.ORGANIZER_SECRET)
+      .set('Accept', 'text/csv')
+      .send({ kind: 'VOLUNTEER' });
     expect(res.status).toBe(201);
     expect(res.headers['content-type']).toContain('text/csv');
     const lines = res.text.trim().split('\n');
@@ -206,7 +214,7 @@ describe('Magic links', () => {
 });
 
 describe('Revocation', () => {
-  it('a lead can revoke; the old cookie stops working once the cache is cleared', async () => {
+  it('a lead can revoke a volunteer; the old cookie stops working immediately (cache evicted)', async () => {
     const vol = await makeVolunteer();
     const lead = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
     const { agent: volAgent } = await signIn(vol.id);
@@ -216,8 +224,42 @@ describe('Revocation', () => {
     const revoke = await leadAgent.post(`/api/v1/auth/revoke/${vol.id}`).set('X-CSRF-Token', csrf).send({});
     expect(revoke.status).toBe(200);
     expect(revoke.body.data.sessionVersion).toBe(1);
-    __clearAccountCache();
+    // No __clearAccountCache() here on purpose: revoke must evict the entry itself.
     expect((await volAgent.get('/api/v1/me')).status).toBe(401);
+  });
+
+  it('revocation respects the role hierarchy: lead cannot revoke lead/organizer, organizer can, anyone can revoke themselves', async () => {
+    const lead = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
+    const lead2 = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
+    const org = await makeVolunteer({ role: VolunteerRole.ORGANIZER });
+    const { agent: leadAgent, csrf: leadCsrf } = await signIn(lead.id);
+    const { agent: orgAgent, csrf: orgCsrf } = await signIn(org.id);
+    expect((await leadAgent.post(`/api/v1/auth/revoke/${org.id}`).set('X-CSRF-Token', leadCsrf).send({})).status).toBe(403);
+    expect((await leadAgent.post(`/api/v1/auth/revoke/${lead2.id}`).set('X-CSRF-Token', leadCsrf).send({})).status).toBe(403);
+    expect((await orgAgent.post(`/api/v1/auth/revoke/${lead2.id}`).set('X-CSRF-Token', orgCsrf).send({})).status).toBe(200);
+    // Self-revocation is a logout-everywhere and is always allowed.
+    expect((await leadAgent.post(`/api/v1/auth/revoke/${lead.id}`).set('X-CSRF-Token', leadCsrf).send({})).status).toBe(200);
+    expect((await leadAgent.get('/api/v1/me')).status).toBe(401);
+  });
+
+  it('anonymous legacy callers cannot mint claim codes without the organiser secret', async () => {
+    const vol = await makeVolunteer();
+    const none = await request(app).post('/api/v1/auth/claim-codes').send({ accountId: vol.id });
+    expect(none.status).toBe(401);
+    const bulk = await request(app).post('/api/v1/auth/claim-codes/bulk').send({ kind: 'VOLUNTEER' });
+    expect(bulk.status).toBe(401);
+  });
+
+  it('bulk CSV neutralises spreadsheet formula prefixes and never sends the code unquoted', async () => {
+    await makeVolunteer({ name: '=HYPERLINK("http://evil")' });
+    const res = await request(app)
+      .post('/api/v1/auth/claim-codes/bulk')
+      .set('X-Organizer-Secret', env.ORGANIZER_SECRET)
+      .set('Accept', 'text/csv')
+      .send({ kind: 'VOLUNTEER' });
+    expect(res.status).toBe(201);
+    expect(res.text).toContain(`"'=HYPERLINK(""http://evil"")"`);
+    expect(res.text).not.toMatch(/^"=|,"=/m);
   });
 
   it('a plain volunteer cannot revoke', async () => {
@@ -346,5 +388,89 @@ describe('AUTH_MODE=required', () => {
 
   it('the model refuses an incoherent kind/role pair', async () => {
     await expect(Volunteer.create({ name: 'Bad', kind: AccountKind.HACKER, role: VolunteerRole.SHIFT_LEAD })).rejects.toThrow(/Incoherent account/);
+  });
+});
+
+describe('AUTH_MODE=required — review round 2 pins', () => {
+  const original = env.AUTH_MODE;
+  beforeAll(() => {
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'required';
+  });
+  afterAll(() => {
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+  });
+
+  it('HEAD is gated exactly like GET; only OPTIONS is exempt', async () => {
+    expect((await request(app).head('/api/v1/shifts')).status).toBe(401);
+    expect((await request(app).head('/api/v1/volunteers')).status).toBe(401);
+    expect((await request(app).options('/api/v1/shifts')).status).toBeLessThan(400);
+  });
+
+  it('hackers cannot read the SOS ticket list, ops telemetry, or resolve swap cycles; volunteers cannot resolve cycles either', async () => {
+    const hacker = await makeHacker();
+    const vol = await makeVolunteer();
+    const lead = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
+    const { agent: h, csrf: hCsrf } = await signIn(hacker.id);
+    const { agent: v, csrf: vCsrf } = await signIn(vol.id);
+    const { agent: l, csrf: lCsrf } = await signIn(lead.id);
+    expect((await h.get('/api/v1/sos/tickets')).status).toBe(403);
+    expect((await h.get('/api/v1/stats/operations')).status).toBe(403);
+    expect((await h.get('/api/v1/stats/leaderboard')).status).toBe(200);
+    expect((await h.post('/api/v1/swaps/cycles/resolve').set('X-CSRF-Token', hCsrf).send({})).status).toBe(403);
+    expect((await v.get('/api/v1/sos/tickets')).status).toBe(200);
+    expect((await v.get('/api/v1/stats/operations')).status).toBe(200);
+    expect((await v.post('/api/v1/swaps/cycles/resolve').set('X-CSRF-Token', vCsrf).send({})).status).toBe(403);
+    expect((await l.post('/api/v1/swaps/cycles/resolve').set('X-CSRF-Token', lCsrf).send({})).status).toBe(200);
+  });
+
+  it('volunteer directory hides email/phone/identities/sessionVersion from non-leads and identities/sessionVersion from everyone', async () => {
+    const target = await makeVolunteer({ name: 'Private Pat' });
+    await Volunteer.updateOne({ _id: target._id }, { $set: { phone: '+1 217 555 0100' } });
+    const vol = await makeVolunteer();
+    const lead = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
+    const { agent: v } = await signIn(vol.id);
+    const { agent: l } = await signIn(lead.id);
+    const asVol = await v.get(`/api/v1/volunteers/${target.id}`);
+    expect(asVol.status).toBe(200);
+    expect(asVol.body.data.name).toBe('Private Pat');
+    expect(asVol.body.data.email).toBeUndefined();
+    expect(asVol.body.data.phone).toBeUndefined();
+    expect(asVol.body.data.identities).toBeUndefined();
+    expect(asVol.body.data.sessionVersion).toBeUndefined();
+    const asLead = await l.get(`/api/v1/volunteers/${target.id}`);
+    expect(asLead.body.data.email).toBe(target.email);
+    expect(asLead.body.data.phone).toBe('+1 217 555 0100');
+    expect(asLead.body.data.identities).toBeUndefined();
+    expect(asLead.body.data.sessionVersion).toBeUndefined();
+    const list = await v.get('/api/v1/volunteers');
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(list.body)).not.toContain('@illinois.edu');
+  });
+
+  it('SSE channel authorisation holds through the real cookie wiring (attachIdentity + hub), not only the test shim', async () => {
+    const hacker = await makeHacker();
+    const vol = await makeVolunteer();
+    const { agent: h } = await signIn(hacker.id);
+    const { agent: v } = await signIn(vol.id);
+    expect((await request(app).get('/api/v1/stats/events?v=2&channels=sos')).status).toBe(403);
+    expect((await h.get('/api/v1/stats/events?v=2&channels=presence:exact')).status).toBe(403);
+    expect((await v.get('/api/v1/stats/events?v=2&channels=presence:exact')).status).toBe(403);
+  });
+
+  it('a signed-in Adonix exchange without explicit link intent is 409 ACCOUNT_LINK_CONFIRM (account-tying guard)', async () => {
+    const vol = await makeVolunteer();
+    const { agent, csrf } = await signIn(vol.id);
+    const res = await agent.post('/api/v1/auth/adonix').set('X-CSRF-Token', csrf).send({ token: 'header.payload.signature-long-enough' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('ACCOUNT_LINK_CONFIRM');
+    expect((await Volunteer.findById(vol.id))!.identities).toHaveLength(0);
+  });
+
+  it('a session-authenticated Adonix link attempt without the CSRF nonce is refused before any exchange', async () => {
+    const vol = await makeVolunteer();
+    const { agent } = await signIn(vol.id);
+    const res = await agent.post('/api/v1/auth/adonix').send({ token: 'x.y.z' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('CSRF_INVALID');
   });
 });

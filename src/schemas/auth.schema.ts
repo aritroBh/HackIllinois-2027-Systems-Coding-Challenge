@@ -37,7 +37,7 @@ export const magicRedeemSchema = z.object({
 });
 
 export const adonixSchema = z.object({
-  body: z.object({ token: z.string().min(16).max(4096) }),
+  body: z.object({ token: z.string().min(16).max(4096), link: z.boolean().optional() }),
 });
 
 export const devLoginSchema = z.object({

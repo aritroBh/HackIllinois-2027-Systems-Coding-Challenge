@@ -103,3 +103,11 @@ lead/organiser powers; the model enforces `kind === HACKER ⇔ role === HACKER`.
 Existing databases: `npx tsx scripts/migrate.ts` (needs `MONGODB_URI`). It drops the old
 non-sparse unique index on `volunteers.email`, backfills the new fields and syncs indexes.
 Idempotent; safe to run on every deploy.
+
+### Linking Adonix to an existing account
+
+A signed-in person who arrives with `#adonix=<token>` is **linking**, not signing in. The page holds the token in memory and asks them to confirm; only the confirm button sends `POST /auth/adonix {token, link: true}`. Without `link: true` the server answers `409 ACCOUNT_LINK_CONFIRM` and links nothing. This closes the login-CSRF account-tying attack (send a victim to a URL carrying the attacker's token) even if a future client forgets the dialog.
+
+### Revocation hierarchy
+
+`POST /auth/revoke/:id` is lead+, but a caller may only revoke accounts **below** their own role (or themselves). ORGANIZER revokes leads and volunteers; only ADMIN revokes organizers or admins. Revocation and role changes evict the 60 s account cache immediately.

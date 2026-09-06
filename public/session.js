@@ -203,6 +203,19 @@
     return user;
   };
 
+  /** Explicitly link the held Adonix token to the signed-in account (the confirm button). */
+  session.confirmLink = async function confirmLink() {
+    const token = session.pendingLink?.token;
+    session.pendingLink = null;
+    if (!token) throw new ApiError('Nothing to link.', { code: 'NO_PENDING_LINK' });
+    await api(EXCHANGE.adonix.path, { method: 'POST', body: { token, link: true } });
+    const user = await session.refresh();
+    N.emit('session:exchanged', { kind: 'adonix', user });
+    return user;
+  };
+  session.dismissLink = function dismissLink() { session.pendingLink = null; };
+  session.pendingLink = null;
+
   /** POST /auth/magic-link {email} → 202. */
   session.requestMagicLink = (email) => api(`${API}/auth/magic-link`, { method: 'POST', body: { email: String(email || '').trim() } });
 
@@ -289,7 +302,16 @@
     try { user = await session.refresh(); } catch (err) { console.warn('[session] /me failed:', err.message); }
     await contentLoading;
 
-    if (frag) {
+    if (frag && frag.kind === 'adonix' && user) {
+      // Account-tying guard: a signed-in person arriving with an Adonix token is a LINK, and
+      // a link needs their say-so. Otherwise anyone could send a victim to
+      // /dashboard/#adonix=<attacker token> and this page would tie the attacker's SSO identity
+      // to the victim's account. The token is held in memory until they confirm or dismiss;
+      // the server refuses to link without `link: true` regardless.
+      session.pendingLink = { token: frag.value };
+      clearFragment();
+      N.emit('session:link-pending', { user });
+    } else if (frag) {
       // A fresh credential wins over whatever session the browser already had
       // — scanning a badge on a shared laptop must sign *that* hacker in.
       try {

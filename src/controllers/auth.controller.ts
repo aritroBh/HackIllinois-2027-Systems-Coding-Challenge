@@ -14,6 +14,9 @@ import { ErrorCode } from '../common/errors/errorCodes';
 import { env } from '../config/env';
 import { evictAccountCache } from '../middleware/identity';
 
+/** Role hierarchy for revocation checks. HACKER and VOLUNTEER are peers at the bottom. */
+const ROLE_RANK: Record<string, number> = { HACKER: 0, VOLUNTEER: 0, SHIFT_LEAD: 1, ORGANIZER: 2, ADMIN: 3 };
+
 export class AuthController {
   public static providers(_req: Request, res: Response): void {
     res.status(200).json({ success: true, data: AuthService.providers() });
@@ -23,6 +26,7 @@ export class AuthController {
     try {
       const account = await AuthService.claim(req.body.code);
       const { csrf } = AuthService.setSessionCookies(res, account);
+      res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), csrf } });
     } catch (error) {
       next(error);
@@ -47,6 +51,7 @@ export class AuthController {
     try {
       const account = await AuthService.redeemMagic(req.body.token);
       const { csrf } = AuthService.setSessionCookies(res, account);
+      res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), csrf } });
     } catch (error) {
       next(error);
@@ -57,7 +62,17 @@ export class AuthController {
     try {
       // A signed-in caller is LINKING Adonix to their existing account; anonymous callers
       // sign in (or get 409 ACCOUNT_LINK_REQUIRED if the email is already taken).
-      const account = await AuthService.adonixLogin(req.body.token, req.account?.source === 'session' ? req.account.id : undefined);
+      //
+      // Linking requires explicit intent (`link: true`, sent only by the confirmation button):
+      // otherwise an attacker could send a signed-in victim to /dashboard/#adonix=<attacker
+      // token> and the page's own fragment exchange would tie the attacker's SSO identity to
+      // the victim's account. The fragment path never sends `link`, so it gets a 409 and the
+      // UI asks the person first.
+      const linkTo = req.account?.source === 'session' ? req.account.id : undefined;
+      if (linkTo && req.body.link !== true) {
+        throw new ApiError(409, ErrorCode.ACCOUNT_LINK_CONFIRM, 'You are already signed in. Confirm that you want to connect this HackIllinois login to your account.');
+      }
+      const account = await AuthService.adonixLogin(req.body.token, linkTo);
       const { csrf } = AuthService.setSessionCookies(res, account);
       res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), csrf } });
@@ -70,6 +85,7 @@ export class AuthController {
     try {
       const account = await AuthService.devLogin(req.body.accountId);
       const { csrf } = AuthService.setSessionCookies(res, account);
+      res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), csrf } });
     } catch (error) {
       next(error);
@@ -89,8 +105,19 @@ export class AuthController {
 
   public static async revoke(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const sessionVersion = await AuthService.revoke(req.params.id as string);
-      res.status(200).json({ success: true, data: { accountId: req.params.id, sessionVersion } });
+      const targetId = req.params.id as string;
+      const target = await Volunteer.findById(targetId).select('role');
+      if (!target) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
+      // A lead may revoke their own sessions or those of accounts below them; only ORGANIZER+
+      // may revoke a lead, and only ADMIN may revoke an organizer or admin. Otherwise any
+      // shift lead could lock the organisers out of the event.
+      const caller = req.account!;
+      if (caller.id !== targetId && ROLE_RANK[target.role] >= ROLE_RANK[caller.role] && caller.role !== 'ADMIN') {
+        throw new ApiError(403, ErrorCode.INSUFFICIENT_PERMISSIONS, 'You cannot revoke an account at or above your own role.');
+      }
+      const sessionVersion = await AuthService.revoke(targetId);
+      evictAccountCache(targetId);
+      res.status(200).json({ success: true, data: { accountId: targetId, sessionVersion } });
     } catch (error) {
       next(error);
     }
@@ -120,7 +147,13 @@ export class AuthController {
       });
       const wantsCsv = (req.headers.accept ?? '').includes('text/csv');
       if (wantsCsv) {
-        const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        // Quote every cell and neutralise spreadsheet formula prefixes (= + - @ and the tab/CR
+        // variants), so a crafted account name cannot execute when the CSV is opened.
+        const esc = (v: unknown) => {
+          const raw = String(v ?? '');
+          const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+          return `"${safe.replace(/"/g, '""')}"`;
+        };
         const csv = ['accountId,name,email,code,expiresAt']
           .concat(rows.map((r) => [r.accountId, r.name, r.email, r.code, r.expiresAt.toISOString()].map(esc).join(',')))
           .join('\n');
@@ -142,6 +175,7 @@ export class AuthController {
       if (account.kind !== AccountKind.VOLUNTEER) throw ApiError.badRequest('Hacker accounts cannot be given a staff role.');
       account.role = req.body.role as VolunteerRole;
       await account.save();
+      evictAccountCache(account.id);
       res.status(200).json({ success: true, data: AuthService.toPublicAccount(account) });
     } catch (error) {
       next(error);

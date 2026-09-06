@@ -25,6 +25,8 @@ export enum ErrorCode {
   PROVIDER_DISABLED = 'PROVIDER_DISABLED',
   /** An SSO identity matched an existing account by email only; link it from a signed-in session. */
   ACCOUNT_LINK_REQUIRED = 'ACCOUNT_LINK_REQUIRED',
+  /** A signed-in caller presented an Adonix token without `link: true`; linking needs explicit intent. */
+  ACCOUNT_LINK_CONFIRM = 'ACCOUNT_LINK_CONFIRM',
 
   // Not Found (404)
   SHIFT_NOT_FOUND = 'SHIFT_NOT_FOUND',

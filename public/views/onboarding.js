@@ -31,6 +31,7 @@
     providers: { mode: 'legacy', providers: [], available: false },
     required: false,
     busy: false,
+    linkPending: false,
     pendingFragment: /^#(claim|magic|adonix)=/.test(location.hash) ? location.hash.slice(1).split('=')[0] : null,
   };
 
@@ -144,15 +145,34 @@
       </div>`;
   }
 
+  function stepLink(user) {
+    return `
+      <div class="ob-head">
+        <span class="ob-duck" aria-hidden="true">${sprite('duck', 4)}</span>
+        <div>
+          <div class="eyebrow">Connect HackIllinois</div>
+          <h2 id="ob-title">Link this login?</h2>
+          <p>You are signed in as <b>${esc(user.displayName || user.name || 'Trainer')}</b>. A HackIllinois login just arrived. Connect it to this account so it signs you in next time?</p>
+          <p class="ob-hint">If you did not just click "Sign in with HackIllinois", choose Not now.</p>
+        </div>
+      </div>
+      <div class="ob-status" id="ob-status" role="status" aria-live="polite"></div>
+      <div class="ob-foot">
+        <button class="pb pb-live" type="button" data-action="onboard-link-confirm">Yes, connect it</button>
+        <button class="link" type="button" data-action="onboard-link-dismiss">Not now</button>
+      </div>`;
+  }
+
   function render() {
     const el = ensureHost();
     const user = N.session.user;
+    const linking = !!(state.linkPending && user && N.session.pendingLink);
     const step = state.step === 2 && user ? 2 : 1;
     state.step = step;
     el.innerHTML = `
       <div class="px ob-panel">
-        <span class="sticker ob-step">STEP ${step} / 2</span>
-        ${step === 2 ? stepTwo(user) : stepOne()}
+        <span class="sticker ob-step">${linking ? 'LINK' : `STEP ${step} / 2`}</span>
+        ${linking ? stepLink(user) : step === 2 ? stepTwo(user) : stepOne()}
       </div>`;
     // href set as a property, never interpolated: the value is server-provided.
     const a = el.querySelector('#ob-adonix');
@@ -200,6 +220,11 @@
 
   const friendly = (err) => {
     switch (err?.code) {
+      case 'ACCOUNT_LINK_CONFIRM':
+        return 'Confirm the link from the dialog before connecting this login.';
+      case 'ACCOUNT_LINK_REQUIRED':
+        return 'That email already has an account. Sign in with your badge code first, then connect HackIllinois.';
+      case 'CREDENTIAL_INVALID':
       case 'CLAIM_CODE_INVALID':
       case 'CLAIM_CODE_USED':
       case 'CLAIM_CODE_EXPIRED':
@@ -282,6 +307,29 @@
       setBusy(false);
       status(friendly(err), 'err');
     }
+  });
+
+  N.registerAction('onboard-link-confirm', async () => {
+    if (state.busy) return;
+    setBusy(true);
+    status('Connecting…');
+    try {
+      await N.session.confirmLink();
+      state.linkPending = false;
+      open(2);
+    } catch (err) {
+      setBusy(false);
+      status(friendly(err), 'err');
+    }
+  });
+  N.registerAction('onboard-link-dismiss', () => {
+    N.session.dismissLink();
+    state.linkPending = false;
+    close();
+  });
+  N.onEvent('session:link-pending', () => {
+    state.linkPending = true;
+    open(2, { required: false });
   });
 
   N.registerAction('onboard-go', () => { close(); window.game?.toast?.(`Welcome, ${N.session.user?.displayName || 'trainer'}. The campus is yours.`); });
