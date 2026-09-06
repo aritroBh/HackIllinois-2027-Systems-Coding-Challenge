@@ -18,7 +18,8 @@
 # file's refetch instructions, and one looked for the tile table under `meta` rather than at the
 # top level. Both are recorded in the comments beside them, because a checklist that reports a
 # failure the code does not have trains its reader to ignore it.
-cd "/Users/aritro/Downloads/HackIllinois 2027 Systems Coding Challenge"
+# Relative to this script, not to an absolute path baked in on one machine.
+cd "$(dirname "$0")/.."
 pass=0; fail=0
 check() { # name, command
   if eval "$2" >/dev/null 2>&1; then printf '  ok    %s\n' "$1"; pass=$((pass+1));

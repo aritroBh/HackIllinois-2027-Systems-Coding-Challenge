@@ -46,6 +46,12 @@ jobs:
     - name: Frontend verification (syntax, tokens, material lockstep, winding audit)
       run: scripts/verify.sh quick
 
+    - name: Live-event bridge (every emitted type forwarded, every subscription real)
+      run: npm run events:check
+
+    - name: Plan exit gates (every milestone's mechanism still present)
+      run: npm run gates:check
+
     - name: Run Test Suite (Concurrency, Invariants, Swaps, Attendance, Identity, Content, Campus, Presence, Ops, Economy)
       run: npm test
 
