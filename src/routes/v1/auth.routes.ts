@@ -88,8 +88,12 @@ function organizerOrSecret(req: Request, _res: Response, next: NextFunction): vo
   );
 }
 
-authRouter.post('/claim-codes', organizerOrSecret, validate(issueClaimCodeSchema), AuthController.issueClaimCode);
-authRouter.post('/claim-codes/bulk', organizerOrSecret, validate(issueClaimCodesBulkSchema), AuthController.issueClaimCodesBulk);
+// `authExchangeLimiter` (30/min/IP) on both, like every other route that takes a credential.
+// These two accept `X-Organizer-Secret`, so an attacker guessing it was bounded only by the
+// 600/min anonymous bucket — twenty times the budget the other credential routes allow, for
+// the secret that mints claim codes.
+authRouter.post('/claim-codes', authExchangeLimiter, organizerOrSecret, validate(issueClaimCodeSchema), AuthController.issueClaimCode);
+authRouter.post('/claim-codes/bulk', authExchangeLimiter, organizerOrSecret, validate(issueClaimCodesBulkSchema), AuthController.issueClaimCodesBulk);
 // `requireSession`, not `requireAccount`: both of these hand out or take away the ability to
 // sign in as somebody, and in `legacy` mode `requireAccount` is satisfied by a `volunteerId`
 // the caller simply asserted. Naming a lead's public id was enough to revoke an organiser, and

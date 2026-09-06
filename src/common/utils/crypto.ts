@@ -56,6 +56,11 @@ export interface IVerificationResult {
   volunteerId?: string;
   shiftId?: string;
   driftSlices?: number;
+  /**
+   * The authenticated nonce, returned so a caller that verified without consuming can
+   * consume it later — see `verifyToken`'s `consume` option and `consumeNonce`.
+   */
+  nonce?: string;
 }
 
 /**
@@ -101,11 +106,24 @@ export class DynamicQrTokenEngine {
   /**
    * Verifies dynamic token with sliding window clock drift tolerance (default +-1 slice = +-30s).
    */
+  /**
+   * @param consume Whether a successful verification also spends the nonce. Defaults to
+   *   true, which is what a caller wanting one call wants. Pass `false` when the check-in
+   *   can still be refused after this returns — the geofence, the registration status and
+   *   the venue lookup all sit downstream — and then call `consumeNonce` at the point the
+   *   check-in actually commits. Burning the nonce during verification meant an honest
+   *   volunteer who scanned a few metres too far away got a geofence refusal *and* a spent
+   *   token, so their next scan at the desk reported a replay attack and they had to mint
+   *   a fresh one. Single use is still single use: the window between verifying and
+   *   consuming is one synchronous stretch here, and `CheckIn.nonce` carries a unique
+   *   index that is the authoritative guard across restarts and replicas.
+   */
   public static verifyToken(
     token: string,
     driftToleranceSlices = 1,
     currentTimestampMs: number = Date.now(),
-    secret: string = env.QR_HMAC_SECRET
+    secret: string | undefined = undefined,
+    consume = true
   ): IVerificationResult {
     // Throttled sweep: the full-map scan runs at most every 30s (or when oversized),
     // not on every verification.
@@ -147,7 +165,7 @@ export class DynamicQrTokenEngine {
     // (Previously the replay check ran on the unverified payload, so a forged
     // token reusing a consumed nonce reported REPLAY_ATTACK instead of
     // INVALID_SIGNATURE — a verification oracle.)
-    const expectedHmac = crypto.createHmac('sha256', secret);
+    const expectedHmac = crypto.createHmac('sha256', secret ?? env.QR_HMAC_SECRET);
     expectedHmac.update(payloadString);
     const expectedSignature = expectedHmac.digest('hex');
 
@@ -170,14 +188,8 @@ export class DynamicQrTokenEngine {
     }
 
     // 4. Mark Nonce as Consumed (TTL = 3 time steps to outlast any drift window).
-    // Hard cap: if the map is somehow still oversized after the sweep, evict the
-    // oldest entries (Map preserves insertion order) rather than growing forever.
-    const expiry = currentTimestampMs + (driftToleranceSlices * 2 + 1) * this.TIME_STEP_SECONDS * 1000;
-    this.consumedNonces.set(nonce, expiry);
-    while (this.consumedNonces.size > DynamicQrTokenEngine.MAX_NONCES) {
-      const oldest = this.consumedNonces.keys().next();
-      if (oldest.done) break;
-      this.consumedNonces.delete(oldest.value);
+    if (consume) {
+      this.markConsumed(nonce, currentTimestampMs, driftToleranceSlices);
     }
 
     return {
@@ -185,7 +197,35 @@ export class DynamicQrTokenEngine {
       volunteerId,
       shiftId,
       driftSlices: drift,
+      nonce,
     };
+  }
+
+  /**
+   * Spend an already-authenticated nonce. Returns false if somebody else spent it first.
+   *
+   * The check and the set are one synchronous stretch, so two concurrent scans of the same
+   * token produce one true and one false in this process; across processes the unique index
+   * on `CheckIn.nonce` is what decides.
+   */
+  public static consumeNonce(nonce: string, currentTimestampMs: number = Date.now(), driftToleranceSlices = 1): boolean {
+    if (this.consumedNonces.has(nonce)) return false;
+    this.markConsumed(nonce, currentTimestampMs, driftToleranceSlices);
+    return true;
+  }
+
+  /**
+   * Hard cap: if the map is somehow still oversized after the sweep, evict the oldest
+   * entries (Map preserves insertion order) rather than growing forever.
+   */
+  private static markConsumed(nonce: string, currentTimestampMs: number, driftToleranceSlices: number): void {
+    const expiry = currentTimestampMs + (driftToleranceSlices * 2 + 1) * this.TIME_STEP_SECONDS * 1000;
+    this.consumedNonces.set(nonce, expiry);
+    while (this.consumedNonces.size > DynamicQrTokenEngine.MAX_NONCES) {
+      const oldest = this.consumedNonces.keys().next();
+      if (oldest.done) break;
+      this.consumedNonces.delete(oldest.value);
+    }
   }
 
   /**

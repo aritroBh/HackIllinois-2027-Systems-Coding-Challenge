@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { SwapController } from '../../controllers/swap.controller';
 import { validate } from '../../middleware/validate';
 import { requireVolunteerKind, requireRole } from '../../middleware/identity';
-import { createSwapRequestSchema, acceptSwapSchema } from '../../schemas/swap.schema';
+import { createSwapRequestSchema, acceptSwapSchema, listSwapsQuerySchema } from '../../schemas/swap.schema';
 
 export const swapRouter = Router();
 
@@ -20,4 +20,4 @@ swapRouter.post('/:id/accept', requireVolunteerKind, validate(acceptSwapSchema),
 swapRouter.post('/cycles/resolve', requireRole('SHIFT_LEAD'), SwapController.discoverCycles);
 // requireVolunteerKind: swap proposals name volunteers and their shifts — staff data, not
 // for hackers to enumerate. Anonymous is 401'd in required mode; open in legacy mode.
-swapRouter.get('/', requireVolunteerKind, SwapController.listSwaps);
+swapRouter.get('/', requireVolunteerKind, validate(listSwapsQuerySchema), SwapController.listSwaps);

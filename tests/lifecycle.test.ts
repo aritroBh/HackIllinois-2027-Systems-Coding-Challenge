@@ -152,3 +152,45 @@ describe('the registration lifecycle only moves forward', () => {
     expect((await Shift.findById(shift._id))!.filledSlots).toBe(1);
   });
 });
+
+describe('a refused scan does not spend the token', () => {
+  /**
+   * `verifyToken` used to mark the nonce consumed as part of verifying it, and four
+   * separate refusals sit downstream of that: a cancelled registration, missing
+   * coordinates, an unresolvable venue, and the geofence. So a volunteer who scanned a few
+   * metres too far from the desk got a geofence refusal *and* a spent token, and their next
+   * honest scan — at the desk, seconds later, well inside the token's window — came back
+   * `REPLAY_ATTACK_DETECTED`. They had to mint a new one to check in.
+   *
+   * The nonce is now spent at the point the check-in is actually going to happen.
+   */
+  it('a geofence refusal leaves the token usable at the desk', async () => {
+    const shift = await makeShift(2);
+    const erin = await makeVolunteer('Erin');
+    await RegistrationService.reserveShift({
+      shiftId: String(shift._id),
+      volunteerId: String(erin._id),
+      idempotencyKey: uniqueKey('erin'),
+    });
+
+    const { token } = await CheckInService.generateToken(String(erin._id), String(shift._id));
+
+    // Two hundred metres away: outside the 75 m geofence.
+    await expect(
+      CheckInService.verifyAndCheckIn(token, 'TEST_DESK', { latitude: 40.1155, longitude: -88.2249 })
+    ).rejects.toThrow(/Geofence/);
+
+    // The same token, at the desk. This is the scan that used to report a replay attack.
+    const desk = { latitude: 40.113725, longitude: -88.224905 };
+    const { checkIn } = await CheckInService.verifyAndCheckIn(token, 'TEST_DESK', desk);
+    expect(checkIn).toBeTruthy();
+    expect((await Registration.findById(
+      (await Registration.findOne({ shiftId: shift._id, volunteerId: erin._id }))!._id
+    ))!.status).toBe(RegistrationStatus.CHECKED_IN);
+
+    // And single use still means single use: the successful scan did spend it.
+    await expect(
+      CheckInService.verifyAndCheckIn(token, 'TEST_DESK', desk)
+    ).rejects.toThrow(/replay/i);
+  });
+});

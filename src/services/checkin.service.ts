@@ -105,7 +105,13 @@ export class CheckInService {
     verification: IVerificationResult;
     geofenceStatus?: { distanceMeters: number; maxAllowedMeters: number; passed: boolean };
   }> {
-    const verification = DynamicQrTokenEngine.verifyToken(token);
+    // Verified but not yet spent. Everything between here and the check-in write can still
+    // refuse the scan — the registration status, the missing coordinates, an unresolvable
+    // venue, the geofence — and a refusal that also burns the token turns a volunteer
+    // standing slightly too far away into a volunteer who now has to mint a new one and
+    // whose next honest scan reports a replay attack. The nonce is spent below, once the
+    // check-in is actually going to happen.
+    const verification = DynamicQrTokenEngine.verifyToken(token, 1, Date.now(), undefined, false);
 
     if (!verification.valid) {
       if (verification.reason === 'EXPIRED') {
@@ -166,6 +172,16 @@ export class CheckInService {
           `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: 75m). Move closer to the check-in terminal.`
         );
       }
+    }
+
+    // Every refusal is behind us, so spend the token now. Losing this race means another
+    // scan of the same token got here first — the same answer the cache gave before, just
+    // moved to the point where it is true.
+    if (verification.nonce && !DynamicQrTokenEngine.consumeNonce(verification.nonce)) {
+      throw ApiError.conflict(
+        'Token replay attack detected: This QR token has already been scanned.',
+        ErrorCode.REPLAY_ATTACK_DETECTED
+      );
     }
 
     // Replay reaching this far means the nonce cache missed (a restart, another replica).

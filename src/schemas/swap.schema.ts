@@ -12,6 +12,7 @@
  */
 import { z } from 'zod';
 import { objectId } from './common';
+import { SwapStatus } from '../models/swap.model';
 
 export const createSwapRequestSchema = z.object({
   body: z.object({
@@ -29,5 +30,21 @@ export const acceptSwapSchema = z.object({
   }),
   body: z.object({
     targetVolunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the acceptor
+  }),
+});
+
+/**
+ * The list filter.
+ *
+ * `GET /swaps` was the one list route with no `validate()`, so Express's extended query
+ * parser turned `?status[$regex]=.*` into `{ status: { $regex: '.*' } }` and handed it
+ * straight to `ShiftSwap.find`. Nothing is disclosed that the unfiltered list does not
+ * already show, so this is a server-side regex CPU vector rather than a read bypass — but
+ * every comparable route (`GET /sos/tickets`, `GET /registrations`) is validated, and a
+ * guard that is present everywhere except one place is the one that gets forgotten again.
+ */
+export const listSwapsQuerySchema = z.object({
+  query: z.object({
+    status: z.nativeEnum(SwapStatus).optional(),
   }),
 });
