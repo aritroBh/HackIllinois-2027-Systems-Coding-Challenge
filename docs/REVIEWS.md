@@ -331,3 +331,78 @@ that is actually running, which is what it always meant.
 is tested directly, and is connected to nothing. Its tests assert the wiring — that the bus
 listener is attached, that the scheduler job runs, that teardown detaches — rather than the
 behaviour behind it, because the behaviour was never what was broken.
+
+---
+
+## Round six — the client and the toolchain, 2026-09-06
+
+Five rounds had read the server. This one pointed **muse**, **opencode** and **agy** at
+`public/`, `scripts/`, `design/pipeline/` and the pack — the code that had been reviewed
+least and that the previous rounds' conclusions all depended on. Read-only on one scratch
+copy, tree hash verified identical afterwards.
+
+All three found the same thing first, independently.
+
+### The geofence could not fail
+
+`spinHackStop` and `battleGym` both sent `playerCoords() ?? <the target's own coordinates>`.
+A client that had never placed its trainer therefore told the server it was standing exactly
+on the beacon or the gym it was acting against; the server measured the distance from a point
+to itself, got zero, and the 75 m check passed. `game.js` completed the circle by force-
+*enabling* every Spin button in precisely the case where there was no position to measure —
+its comment called that "the demo path, nothing to measure", which is true and is not a reason
+to allow the action.
+
+The effect is not a weak proof of presence but the absence of one: a fresh profile could spin
+every beacon and contest every gym on campus from one chair, and the check written to stop it
+could not fire. Both fallbacks are gone; the button now says what would enable it; and the
+comment on `playerCoords` states plainly what a browser-supplied position is worth, which is
+less than a GPS fix and considerably more than the target's own coordinates.
+
+### A shared laptop kept the last person
+
+`localStorage` and the service-worker cache both survive the reload that `logout` relied on,
+and this is a hackathon: the laptops are shared. Left behind were a distress call's seat
+number and the name attached to it (`nexus.sos.ticket`), a face drawn from somebody's
+photograph (`nexus.avatar.v1`), a sticker book (`nexus.stickers.v1`), and the trainer card in
+the worker's cache — which `sw.js` had a handler to purge on sign-out, listening for a message
+that nothing in the repository had ever sent.
+
+Logout now clears all four and waits for the worker to acknowledge, because posting a message
+and calling `location.replace` in the same turn is a race the cache usually wins — which is
+indistinguishable from never sending it, and is why the handler went years unnoticed. Two
+further guards, because people do not log out at four in the morning: `setUser` clears the
+same keys when the browser changes hands, and the remembered SOS ticket carries its owner's id
+and is refused when it is not the reader's.
+
+### Gates that could not fail
+
+The most uncomfortable part of the round, because these are the things that were supposed to
+be catching the rest.
+
+| Gate | What it actually did |
+|---|---|
+| `verify.sh` "frontend syntax" | A hand-written list, nine files behind the per-tab split — including `views/sos.js`, which owns the SOS lifecycle, and `sw.js`, which owns offline. A glob now: 36 files, up from 22. |
+| `verify.sh` × 2 | Two checks still ended in `2>/dev/null`, directly beneath a comment explaining that discarding stderr is exactly how a real breakage once survived this script. |
+| `checkEvents.mjs` | Could not parse ``onEvent(`SOS_TICKET_${suffix}`)``, so the file owning seven lifecycle events was invisible to the audit whose header claims no name is invented on either side. |
+| `sw.js` SHELL | Nine scripts out of date, so the offline shell served a page whose Me, Quests, SOS and Lead tabs failed at `ERR_INTERNET_DISCONNECTED` — worse than no offline shell, because it looks like it worked. `scripts/checkShell.mjs` keeps the two in lockstep now. |
+| `loader.ts` | `quests.json` was never read at boot, although `quests.schema.ts` says the shapes that cannot advance "are rejected at load instead". Booth and raid venue keys were never checked against `venues.json`, although both schemas say they are. |
+
+### Also closed
+
+- Deploy always targeted `gymsCache[0]`: an item inspected against one stronghold was spent
+  on another, usually an enemy-held one, with no way to choose and nothing saying which. It
+  goes to the nearest gym now and the log names it.
+- Three comments that overclaimed. `CLAIM_BRUTE_FORCE` moved to the `ops` channel and
+  `IDENTITY.md` still said `announce`. `app.js` called acting as `volunteersCache[0]` "not an
+  identity claim" when legacy mode believes precisely that. `me.js` said there is "no way to
+  mint a token for somebody else", which is true of that tab and not of the client.
+
+### Reported sound
+
+Between them the three reviewers read every file under `public/`, every script in `scripts/`,
+the pipeline and the pack, and reported sound: the plugin loader's SRI conversion, the
+onboarding escaping, `nexus.js`'s registry and focus trap, `a11y.js`, `lite.js`, the tile
+streamer's LOD and hysteresis, the bake worker's unit conversions, `checkCampus`,
+`checkProps`, `cspAudit`, the pipeline's determinism, and every cross-reference in the shipped
+pack.
