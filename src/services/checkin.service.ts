@@ -64,6 +64,15 @@ import { KarmaService, KarmaSource } from './karma.service';
 import { domainEvents } from '../common/events/domainEvents';
 
 
+/**
+ * How far either side of a shift a check-in is still accepted.
+ *
+ * Wide on purpose — see the reasoning at the check in `verifyAndCheckIn`. Thirty minutes
+ * matches the rest buffer between shifts, so a volunteer can never be inside two shifts'
+ * check-in windows at once.
+ */
+const CHECK_IN_GRACE_MS = 30 * 60 * 1000;
+
 export class CheckInService {
   /**
    * Generates a dynamic 30-second HMAC QR token for a volunteer's shift.
@@ -99,7 +108,16 @@ export class CheckInService {
   public static async verifyAndCheckIn(
     token: string,
     scannerId = 'DESK_SCANNER_MAIN',
-    userCoordinates?: { latitude: number; longitude: number }
+    userCoordinates?: { latitude: number; longitude: number },
+    /**
+     * The account that presented the scan, when there is a session behind it.
+     *
+     * `scannerId` is a free string the client chooses, and it was the whole of the audit
+     * trail: a scan could claim to come from `DESK_SCANNER_MAIN` whoever sent it. Recording
+     * the session separately means the label stays useful for telling one desk from another
+     * while the answer to "who did this" comes from the cookie.
+     */
+    verifiedByAccountId?: string
   ): Promise<{
     checkIn: ICheckIn;
     verification: IVerificationResult;
@@ -140,6 +158,33 @@ export class CheckInService {
     const shift = await Shift.findById(shiftId);
     if (!shift) {
       throw ApiError.notFound('Shift not found.');
+    }
+
+    // *When*, not only who and which shift.
+    //
+    // The token binds a volunteer to a shift and to a thirty-second slice of clock, and the
+    // geofence binds the scan to a place — but nothing tied any of it to the shift actually
+    // happening. A volunteer confirmed for tomorrow could mint a token today, stand at the
+    // venue, check in, and check out an hour later for the full surge award, having worked
+    // nothing. Karma for a shift that has not happened is the same defect as karma for a
+    // shift somebody else worked; it was simply easier to reach.
+    //
+    // The grace either side is deliberately wide. Volunteers turn up early, desks run late,
+    // and a shift that overruns is the normal case at three in the morning — refusing
+    // somebody who is standing in front of you because the clock says 16:31 would make this
+    // rule the reason attendance goes unrecorded.
+    const nowMs = Date.now();
+    if (nowMs < shift.startTime.getTime() - CHECK_IN_GRACE_MS) {
+      throw ApiError.badRequest(
+        `This shift has not started yet: "${shift.title}" begins ${shift.startTime.toISOString()}. Check-in opens ${CHECK_IN_GRACE_MS / 60000} minutes before.`,
+        { code: ErrorCode.SCHEDULE_CONFLICT }
+      );
+    }
+    if (nowMs > shift.endTime.getTime() + CHECK_IN_GRACE_MS) {
+      throw ApiError.badRequest(
+        `This shift is over: "${shift.title}" ended ${shift.endTime.toISOString()}. Ask a lead to record attendance by hand.`,
+        { code: ErrorCode.SCHEDULE_CONFLICT }
+      );
     }
 
     // Fail-closed: GPS coordinates are mandatory. Omitting them previously skipped
@@ -217,6 +262,7 @@ export class CheckInService {
         checkInTime: new Date(),
         nonce,
         verifiedBy: scannerId,
+        verifiedByAccountId: verifiedByAccountId ? new Types.ObjectId(verifiedByAccountId) : null,
       });
     } catch (error) {
       const duplicate =

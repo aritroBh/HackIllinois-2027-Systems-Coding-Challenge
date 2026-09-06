@@ -24,6 +24,13 @@ export interface ICheckIn extends Document {
   karmaAwarded: number;
   nonce: string;
   verifiedBy: string;
+  /**
+   * The account that presented the scan, when a session was behind it.
+   *
+   * `verifiedBy` is a label the client sends and can therefore say anything; this is read
+   * from the cookie. Nullable because `legacy` mode admits an unauthenticated desk.
+   */
+  verifiedByAccountId: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -56,6 +63,7 @@ const CheckInSchema = new Schema<ICheckIn>(
      */
     nonce: { type: String, required: true, unique: true },
     verifiedBy: { type: String, default: 'DESK_SCANNER' },
+    verifiedByAccountId: { type: Schema.Types.ObjectId, ref: 'Volunteer', default: null },
   },
   { timestamps: true }
 );

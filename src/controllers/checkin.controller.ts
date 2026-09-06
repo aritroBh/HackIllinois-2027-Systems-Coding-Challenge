@@ -30,7 +30,8 @@ export class CheckInController {
       const result = await CheckInService.verifyAndCheckIn(
         req.body.token,
         req.body.scannerId,
-        req.body.coordinates
+        req.body.coordinates,
+        req.account?.id
       );
       res.status(200).json({ success: true, data: result });
     } catch (error) {

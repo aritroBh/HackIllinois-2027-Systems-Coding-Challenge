@@ -194,3 +194,75 @@ describe('a refused scan does not spend the token', () => {
     ).rejects.toThrow(/replay/i);
   });
 });
+
+describe('a shift has to be happening', () => {
+  /**
+   * The token binds a volunteer to a shift and to a thirty-second slice of clock, and the
+   * geofence binds the scan to a place — but nothing tied any of it to the shift actually
+   * taking place. A volunteer confirmed for tomorrow could mint a token today, stand at the
+   * venue, check in, and check out an hour later for the full surge award, having worked
+   * nothing. `CHECKOUT` was one of the three uncapped karma sources at the time, so the
+   * payout had no daily ceiling either.
+   */
+  async function shiftAt(offsetMs: number, durationMs = 2 * 3600_000) {
+    const start = new Date(Date.now() + offsetMs);
+    return Shift.create({
+      title: 'Window Shift',
+      description: 'A shift for time-window assertions',
+      category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: start,
+      endTime: new Date(start.getTime() + durationMs),
+      capacity: 4,
+      requiredSkills: [],
+    });
+  }
+
+  const desk = { latitude: 40.113725, longitude: -88.224905 };
+
+  async function tokenFor(shiftId: string, volunteerId: string) {
+    await RegistrationService.reserveShift({
+      shiftId,
+      volunteerId,
+      idempotencyKey: uniqueKey('window'),
+    });
+    return (await CheckInService.generateToken(volunteerId, shiftId)).token;
+  }
+
+  it('refuses a check-in for a shift that has not started', async () => {
+    const shift = await shiftAt(24 * 3600_000); // tomorrow
+    const frank = await makeVolunteer('Frank');
+    const token = await tokenFor(String(shift._id), String(frank._id));
+    await expect(
+      CheckInService.verifyAndCheckIn(token, 'TEST_DESK', desk)
+    ).rejects.toThrow(/has not started yet/);
+  });
+
+  it('refuses a check-in for a shift that is long over', async () => {
+    const shift = await shiftAt(-24 * 3600_000);
+    const gina = await makeVolunteer('Gina');
+    const token = await tokenFor(String(shift._id), String(gina._id));
+    await expect(
+      CheckInService.verifyAndCheckIn(token, 'TEST_DESK', desk)
+    ).rejects.toThrow(/is over/);
+  });
+
+  it('accepts a volunteer who turns up early, and one whose shift has just overrun', async () => {
+    // Twenty minutes before it starts: inside the grace, because people turn up early and
+    // refusing them would make this rule the reason attendance goes unrecorded.
+    const soon = await shiftAt(20 * 60_000);
+    const hana = await makeVolunteer('Hana');
+    const earlyToken = await tokenFor(String(soon._id), String(hana._id));
+    await expect(
+      CheckInService.verifyAndCheckIn(earlyToken, 'TEST_DESK', desk)
+    ).resolves.toBeTruthy();
+
+    // Ended twenty minutes ago: still inside the grace, because shifts overrun.
+    const justEnded = await shiftAt(-2 * 3600_000 - 20 * 60_000);
+    const ivan = await makeVolunteer('Ivan');
+    const lateToken = await tokenFor(String(justEnded._id), String(ivan._id));
+    await expect(
+      CheckInService.verifyAndCheckIn(lateToken, 'TEST_DESK', desk)
+    ).resolves.toBeTruthy();
+  });
+});

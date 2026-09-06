@@ -241,15 +241,39 @@ export async function seedDatabase(): Promise<void> {
       version: 2,
       isActive: true,
     },
+    {
+      // Anchored to *now*, not to the event day, and the only shift here that is.
+      //
+      // Every other shift hangs off `baseTime` (today at noon), so whether any of them is
+      // currently running depends on what time you started the demo. Check-in refuses a
+      // shift that is not happening — a token for tomorrow's shift used to be redeemable
+      // today, which is karma for work nobody did — so the demo account needs one shift it
+      // can genuinely check in to, whenever the demo is run. This is it.
+      title: 'Siebel Atrium Info Desk',
+      description: 'Point lost hackers at the right room, hand out badges, keep the coffee going.',
+      category: ShiftCategory.INFO_DESK,
+      location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() - 60 * 60 * 1000),
+      endTime: new Date(Date.now() + 3 * 60 * 60 * 1000),
+      capacity: 4,
+      requiredSkills: [],
+      baseKarma: 110,
+      manualSurgeMultiplier: 1.0,
+      version: 0,
+      isActive: true,
+    },
   ]);
 
   const [pizzaShift, hwShift, shuttleShift] = shifts;
 
   // 3. Create Seed Registrations (Demonstrating Confirmed & Waitlist States)
-  // The demo account holds a confirmed spot on the open shift so the Trainer QR
-  // (attendance token) flow works for the signed-in user without any setup.
+  //
+  // The demo account holds a confirmed spot on the shift that is running *now* (index 5),
+  // so the Trainer QR flow works for the signed-in user without any setup. It used to hold
+  // the 3:30 a.m. cleanup, which is fifteen hours away from the seeded day — fine while
+  // check-in ignored the clock, and a dead end once it stopped.
   await Registration.create({
-    shiftId: shifts[3]._id,
+    shiftId: shifts[5]._id,
     volunteerId: ops._id,
     status: RegistrationStatus.CONFIRMED,
     idempotencyKey: 'seed_reg_ops',
@@ -430,7 +454,7 @@ export async function seedDatabase(): Promise<void> {
 
   console.log('✅ [SEED COMPLETED] Seeded:');
   console.log(`   - 5 Volunteers (Alice, Bob, Charlie, Dana, Evan)`);
-  console.log(`   - 5 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag)`);
+  console.log(`   - 6 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag, Info Desk running now)`);
   console.log(`   - 1 Contested Shift with 1 Waitlisted Candidate`);
   console.log(`   - 1 3-Way Circular Trade Demand Ring (Alice -> Bob -> Charlie -> Alice)`);
   console.log(`   - ${TERRITORIES.length} Campus Territory Gyms (Alma Mater, Foellinger, Altgeld, Memorial Stadium, ...)`);
