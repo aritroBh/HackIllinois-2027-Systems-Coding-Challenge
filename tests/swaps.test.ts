@@ -5,7 +5,7 @@ import { Volunteer } from '../src/models/volunteer.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
 import { ShiftSwap, SwapStatus } from '../src/models/swap.model';
 
-describe('Shift Swap & Tarjan Multi-Party Cyclic Trade Engine', () => {
+describe('Shift Swap & Multi-Party Cyclic Trade Engine', () => {
   it('executes a bilateral 1-to-1 swap atomically', async () => {
     const volA = await Volunteer.create({ name: 'Alice', email: 'alice_swap@illinois.edu' });
     const volB = await Volunteer.create({ name: 'Bob', email: 'bob_swap@illinois.edu' });
@@ -137,5 +137,83 @@ describe('Shift Swap & Tarjan Multi-Party Cyclic Trade Engine', () => {
     expect(regS1?.volunteerId.toString()).toBe(volC._id.toString());
     expect(regS2?.volunteerId.toString()).toBe(volA._id.toString());
     expect(regS3?.volunteerId.toString()).toBe(volB._id.toString());
+  });
+});
+
+describe('a volunteer may have more than one shift on the table', () => {
+  /**
+   * The trade graph used to be keyed by volunteer, but the thing being traded is an
+   * *offer* — a volunteer together with the shift they are putting up. A volunteer holding
+   * two shifts with a pending proposal against each is two separate things to trade, with
+   * different counterparties.
+   *
+   * Collapsing them onto one node lost exactly the fact the executor needed. Building the
+   * adjacency list wrote `adj.set(volunteerId, …)` once per proposal, so the first
+   * proposal's edges were silently overwritten by the second's; execution then resolved
+   * that volunteer's shift with `pendingSwaps.find(...)`, which returns the **first**
+   * match. The edge that formed the ring and the shift that got rotated came from different
+   * proposals, so somebody could be moved off a shift they had only ever offered in
+   * exchange for something else — and the proposal that actually got what it asked for
+   * stayed PENDING and could be resolved again.
+   */
+  async function shiftAt(title: string, hourOffset: number) {
+    const start = new Date(Date.UTC(2027, 1, 27, 8 + hourOffset, 0, 0));
+    return Shift.create({
+      title, description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
+      startTime: start, endTime: new Date(start.getTime() + 2 * 3600_000), capacity: 1,
+    });
+  }
+
+  it('rotates the shift the ring was actually formed on, not whichever proposal came first', async () => {
+    const vera = await Volunteer.create({ name: 'Vera', email: 'vera_two@illinois.edu' });
+    const wes = await Volunteer.create({ name: 'Wes', email: 'wes_two@illinois.edu' });
+
+    // Vera holds two shifts far enough apart that holding both is legal.
+    const veraMorning = await shiftAt('Vera Morning', 0);   // 08:00
+    const veraEvening = await shiftAt('Vera Evening', 9);   // 17:00
+    const wesMidday = await shiftAt('Wes Midday', 4);       // 12:00
+
+    for (const [shift, vol, key] of [
+      [veraMorning, vera, 'two_1'], [veraEvening, vera, 'two_2'], [wesMidday, wes, 'two_3'],
+    ] as const) {
+      await Registration.create({
+        shiftId: shift._id, volunteerId: vol._id,
+        status: RegistrationStatus.CONFIRMED, idempotencyKey: key,
+      });
+    }
+
+    // Vera's FIRST proposal offers her morning shift for something nobody holds, so it can
+    // form no ring. Her SECOND offers her evening shift for Wes's midday, and Wes wants her
+    // evening back — that pair is the only real ring here.
+    const orphan = await shiftAt('Nobody Holds This', 20);
+    await ShiftSwap.create([
+      { proposerVolunteerId: vera._id, proposerShiftId: veraMorning._id, targetShiftId: orphan._id, desiredShiftIds: [orphan._id], status: SwapStatus.PENDING },
+      { proposerVolunteerId: vera._id, proposerShiftId: veraEvening._id, targetShiftId: wesMidday._id, desiredShiftIds: [wesMidday._id], status: SwapStatus.PENDING },
+      { proposerVolunteerId: wes._id, proposerShiftId: wesMidday._id, targetShiftId: veraEvening._id, desiredShiftIds: [veraEvening._id], status: SwapStatus.PENDING },
+    ]);
+
+    const res = await request(app).post('/api/v1/swaps/cycles/resolve').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data.executedCount).toBe(1);
+
+    // The ring was Vera's *evening* shift for Wes's midday. Her morning shift must not have
+    // moved — that is the one the old code rotated.
+    const morning = await Registration.findOne({ shiftId: veraMorning._id, status: RegistrationStatus.CONFIRMED });
+    expect(String(morning!.volunteerId)).toBe(String(vera._id));
+
+    const evening = await Registration.findOne({ shiftId: veraEvening._id, status: RegistrationStatus.CONFIRMED });
+    expect(String(evening!.volunteerId)).toBe(String(wes._id));
+
+    const midday = await Registration.findOne({ shiftId: wesMidday._id, status: RegistrationStatus.CONFIRMED });
+    expect(String(midday!.volunteerId)).toBe(String(vera._id));
+
+    // And the proposal that was satisfied is the one marked EXECUTED, not the other one.
+    const executed = await ShiftSwap.find({ status: SwapStatus.EXECUTED });
+    expect(executed).toHaveLength(2);
+    expect(executed.map((e) => String(e.proposerShiftId)).sort()).toEqual(
+      [String(veraEvening._id), String(wesMidday._id)].sort()
+    );
+    const stillPending = await ShiftSwap.findOne({ status: SwapStatus.PENDING });
+    expect(String(stillPending!.proposerShiftId)).toBe(String(veraMorning._id));
   });
 });

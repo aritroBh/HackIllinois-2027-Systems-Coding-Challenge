@@ -39,7 +39,7 @@ import { Shift } from '../models/shift.model';
 import { Volunteer } from '../models/volunteer.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { RegistrationService } from './registration.service';
-import { CyclicTradeFinder, IAssignmentInput } from '../common/utils/cycleFinder';
+import { CyclicTradeFinder, IAssignmentInput, volunteerOf, shiftOf } from '../common/utils/cycleFinder';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
@@ -260,16 +260,26 @@ export class SwapService {
     let executedCount = 0;
     const consumedVolunteers = new Set<string>();
 
-    for (const cycle of cycles) {
-      const n = cycle.length;
-      // ponytail: overlapping cycles from one snapshot must not double-execute the same rotation.
+    for (const offerCycle of cycles) {
+      const n = offerCycle.length;
+      // Each node carries both halves of the offer, so the volunteer and the shift on the
+      // table come from the same proposal by construction. They used to be resolved
+      // separately — the edge from the graph, the shift from `pendingSwaps.find(...)`, which
+      // returns the *first* proposal a volunteer made — so a volunteer with two pending
+      // proposals could be rotated out of a shift they had offered against something else.
+      const cycle = offerCycle.map(volunteerOf);
+
+      // ponytail: overlapping cycles from one snapshot must not double-execute the same
+      // rotation, and a person may not appear in two rings from one snapshot.
       if (cycle.some((v) => consumedVolunteers.has(v))) continue;
+      // Nor twice within one ring: the leg validation excludes "the shift they surrender",
+      // singular, and a volunteer appearing twice has two.
+      if (new Set(cycle).size !== n) continue;
+
       try {
-        // Collect registrations for participants
         const shiftMap = new Map<string, Types.ObjectId>();
-        for (const volId of cycle) {
-          const swapItem = pendingSwaps.find((s) => sameId(s.proposerVolunteerId, volId));
-          if (swapItem) shiftMap.set(volId, swapItem.proposerShiftId);
+        for (const offer of offerCycle) {
+          shiftMap.set(volunteerOf(offer), new Types.ObjectId(shiftOf(offer)));
         }
         if (shiftMap.size !== n) continue; // incomplete mapping — skip rather than half-rotate
 
