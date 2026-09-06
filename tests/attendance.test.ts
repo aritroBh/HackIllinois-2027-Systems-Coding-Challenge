@@ -107,6 +107,71 @@ describe('check-out pays exactly once', () => {
   });
 });
 
+describe('one registration is one attendance record', () => {
+  it('a second scan of a fresh token returns the existing record and pays nothing more', async () => {
+    // The nonce makes every token unique, so a second scan is not caught by the replay store —
+    // it is a genuinely new token for somebody already checked in. What stops it being a second
+    // attendance, and therefore a second payout, is the guard on the registration's status.
+    const { vol, shift } = await scene({ baseKarma: 600 });
+    const first = await checkIn(vol.id, String(shift._id));
+
+    const { token } = await CheckInService.generateToken(vol.id, String(shift._id));
+    const again = await CheckInService.verifyAndCheckIn(token, 'TEST_SCANNER', {
+      latitude: 40.11380, longitude: -88.22470,
+    });
+
+    expect(String(again.checkIn._id)).toBe(String(first._id));
+    expect(await CheckIn.countDocuments({ registrationId: first.registrationId })).toBe(1);
+    expect(await karmaOf(vol.id)).toBe(0); // nothing is paid until check-out
+  });
+
+  it('after check-out, no further attendance can be opened on that registration', async () => {
+    const { vol, shift } = await scene({ baseKarma: 600 });
+    const ci = await checkIn(vol.id, String(shift._id));
+    const paid = await CheckInService.checkOut(String(ci._id), vol.id);
+    const balance = await karmaOf(vol.id);
+    expect(balance).toBe(paid.karmaAwarded);
+
+    // Whatever the token endpoint does with a checked-out registration, the outcome that
+    // matters is that no second attendance row appears and no second payment is made.
+    let secondScan: string | null = null;
+    try {
+      const { token } = await CheckInService.generateToken(vol.id, String(shift._id));
+      const res = await CheckInService.verifyAndCheckIn(token, 'TEST_SCANNER', {
+        latitude: 40.11380, longitude: -88.22470,
+      });
+      secondScan = String(res.checkIn._id);
+    } catch {
+      secondScan = null; // refused outright, which is also fine
+    }
+
+    expect(await CheckIn.countDocuments({ registrationId: ci.registrationId })).toBe(1);
+    if (secondScan) expect(secondScan).toBe(String(ci._id));
+    expect(await karmaOf(vol.id)).toBe(balance);
+  });
+
+  it('ten simultaneous scans of ten distinct tokens still produce one attendance', async () => {
+    // Ten phones at the desk, each with its own freshly minted token, all scanned at once.
+    // Distinct nonces, so the replay store does not help; the unique index on the nonce does
+    // not help either, because every nonce differs. Only one attendance may result.
+    const { vol, shift } = await scene({ baseKarma: 600 });
+    const tokens = await Promise.all(
+      Array.from({ length: 10 }, () => CheckInService.generateToken(vol.id, String(shift._id)).then((t) => t.token))
+    );
+    const results = await Promise.all(
+      tokens.map((t) =>
+        CheckInService.verifyAndCheckIn(t, 'TEST_SCANNER', { latitude: 40.11380, longitude: -88.22470 })
+          .then((r) => String(r.checkIn._id))
+          .catch((e) => `err:${e.statusCode ?? e.name}`)
+      )
+    );
+    const ids = new Set(results.filter((r) => !r.startsWith('err:')));
+    expect(ids.size).toBe(1);
+    const reg = await Registration.findOne({ shiftId: shift._id, volunteerId: vol._id });
+    expect(await CheckIn.countDocuments({ registrationId: reg!._id })).toBe(1);
+  });
+});
+
 describe('time is what is paid for, not the act of arriving', () => {
   it('a one-minute presence earns a sixtieth of the shift, not half of it', async () => {
     const { vol, shift } = await scene({ baseKarma: 600 });

@@ -196,10 +196,18 @@ export class CheckInService {
 
     const nonce = token.split('.')[0];
 
-    // Create CheckIn record. `nonce` is unique-indexed, so a cross-process or
-    // post-restart replay that slips past the in-memory cache still fails here
-    // and is reported as the replay attack it is (instead of a confusing
-    // duplicate-key error).
+    // Create the CheckIn record. Two unique indexes can reject this, and they mean different
+    // things, so the catch below has to tell them apart.
+    //
+    // `nonce` is the cross-process replay shield: a token scanned twice, on another replica or
+    // after a restart, slips past the in-memory cache and lands here. That is an attack (or a
+    // very persistent scanner) and is reported as one.
+    //
+    // `registrationId` is the once-per-registration guarantee. Every token carries its own
+    // nonce by design, so ten freshly minted tokens for one person are ten distinct writes
+    // that the nonce index is happy to accept; only this index stops them becoming ten
+    // attendances and, later, ten payouts. Losing that race is not an attack — it is two
+    // scanners at one desk — so the loser is handed the row that won.
     let checkIn;
     try {
       checkIn = await CheckIn.create({
@@ -211,12 +219,19 @@ export class CheckInService {
         verifiedBy: scannerId,
       });
     } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        (error as { code: unknown }).code === 11000
-      ) {
+      const duplicate =
+        typeof error === 'object' && error !== null && 'code' in error &&
+        (error as { code: unknown }).code === 11000;
+      if (duplicate) {
+        // Which index rejected it decides what this means.
+        const message = String((error as { message?: unknown }).message ?? '');
+        if (/registrationId/.test(message)) {
+          // Two scanners at one desk. Somebody else's write won a race that was never a
+          // conflict of intent, so hand back the attendance that exists rather than
+          // accusing an honest volunteer of a replay attack.
+          const settled = await CheckIn.findOne({ registrationId: reg._id });
+          if (settled) return { checkIn: settled, verification, geofenceStatus };
+        }
         throw ApiError.conflict(
           'Token replay attack detected: This QR token has already been scanned.',
           ErrorCode.REPLAY_ATTACK_DETECTED

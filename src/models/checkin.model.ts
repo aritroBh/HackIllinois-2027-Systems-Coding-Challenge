@@ -30,7 +30,20 @@ export interface ICheckIn extends Document {
 
 const CheckInSchema = new Schema<ICheckIn>(
   {
-    registrationId: { type: Schema.Types.ObjectId, ref: 'Registration', required: true, index: true },
+    /**
+     * One attendance per registration, enforced here rather than checked in the service.
+     *
+     * The service read the registration's status and returned the existing row if it was
+     * already checked in, which is correct sequentially and useless under concurrency: ten
+     * scans of ten freshly minted tokens all read CONFIRMED and all created a row. Ten rows
+     * become ten check-outs and ten payouts, from a volunteer whose phone retried or a desk
+     * with several scanners. The nonce index does not help — every token has its own nonce,
+     * by design, so that a photograph goes stale.
+     *
+     * `unique` makes the database the serialisation point. The loser of the race gets a
+     * duplicate key, which the service turns back into the row that won.
+     */
+    registrationId: { type: Schema.Types.ObjectId, ref: 'Registration', required: true, unique: true },
     shiftId: { type: Schema.Types.ObjectId, ref: 'Shift', required: true, index: true },
     volunteerId: { type: Schema.Types.ObjectId, ref: 'Volunteer', required: true, index: true },
     checkInTime: { type: Date, required: true, default: Date.now },
