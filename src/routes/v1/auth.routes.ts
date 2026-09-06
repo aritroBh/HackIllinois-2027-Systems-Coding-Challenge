@@ -13,7 +13,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AuthController } from '../../controllers/auth.controller';
 import { validate } from '../../middleware/validate';
-import { requireAccount, requireRole } from '../../middleware/identity';
+import { requireRole, requireSession } from '../../middleware/identity';
 import { organizerSecretMatches } from '../../middleware/requireAuth';
 import { ApiError } from '../../common/errors/apiError';
 import { authExchangeLimiter } from '../../middleware/rateLimiter';
@@ -48,8 +48,19 @@ authRouter.post('/logout', AuthController.logout);
  * Organiser gate that accepts either an ORGANIZER/ADMIN session or the organiser secret
  * header (the bootstrap path before any session exists).
  */
-function organizerOrSecret(req: Request, res: Response, next: NextFunction): void {
-  if (req.account && (req.account.role === 'ORGANIZER' || req.account.role === 'ADMIN')) {
+function organizerOrSecret(req: Request, _res: Response, next: NextFunction): void {
+  // A *proved* organiser, not a claimed one.
+  //
+  // The refusal at the bottom of this function already says why: minting a claim code is
+  // minting a real session for another account. But in `legacy` mode `attachIdentity`
+  // believes a `volunteerId` in the body or query, so an anonymous caller who named an
+  // organiser's id — public, from `GET /volunteers` or the leaderboard — satisfied this
+  // branch, minted a code against an ADMIN account, and redeemed it. The guard was written
+  // to stop exactly that and tested only against the anonymous case.
+  if (
+    req.account?.source === 'session' &&
+    (req.account.role === 'ORGANIZER' || req.account.role === 'ADMIN')
+  ) {
     next();
     return;
   }
@@ -63,16 +74,25 @@ function organizerOrSecret(req: Request, res: Response, next: NextFunction): voi
     next(ApiError.forbidden('Invalid organizer credentials.'));
     return;
   }
-  // No session and no secret: refuse outright. `requireRole` would pass an anonymous caller in
-  // legacy mode, and minting a claim code is minting a real session for another account.
-  if (!req.account) {
-    next(ApiError.unauthorized('Organizer session or X-Organizer-Secret required.'));
-    return;
-  }
-  requireRole('ORGANIZER')(req, res, next);
+  // Anything that reaches here has no secret and no proved session, so it is refused —
+  // including a legacy-claimed identity, however senior the account it names.
+  //
+  // This used to fall through to `requireRole('ORGANIZER')`, which reads the role off
+  // `req.account` without asking how that account was established. In `legacy` mode that is
+  // a `volunteerId` the caller wrote themselves, so the check it delegated to was the one
+  // thing it could not delegate to.
+  next(
+    req.account
+      ? ApiError.forbidden('Minting claim codes needs a signed-in organiser session, not a claimed identity.')
+      : ApiError.unauthorized('Organizer session or X-Organizer-Secret required.')
+  );
 }
 
 authRouter.post('/claim-codes', organizerOrSecret, validate(issueClaimCodeSchema), AuthController.issueClaimCode);
 authRouter.post('/claim-codes/bulk', organizerOrSecret, validate(issueClaimCodesBulkSchema), AuthController.issueClaimCodesBulk);
-authRouter.post('/revoke/:id', requireAccount, requireRole('SHIFT_LEAD'), validate(revokeSchema), AuthController.revoke);
-authRouter.patch('/accounts/:id/role', requireAccount, requireRole('ORGANIZER'), validate(setRoleSchema), AuthController.setRole);
+// `requireSession`, not `requireAccount`: both of these hand out or take away the ability to
+// sign in as somebody, and in `legacy` mode `requireAccount` is satisfied by a `volunteerId`
+// the caller simply asserted. Naming a lead's public id was enough to revoke an organiser, and
+// naming an organiser's was enough to grant a role.
+authRouter.post('/revoke/:id', requireSession, requireRole('SHIFT_LEAD'), validate(revokeSchema), AuthController.revoke);
+authRouter.patch('/accounts/:id/role', requireSession, requireRole('ORGANIZER'), validate(setRoleSchema), AuthController.setRole);

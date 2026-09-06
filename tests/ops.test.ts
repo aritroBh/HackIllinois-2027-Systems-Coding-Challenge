@@ -511,3 +511,97 @@ describe('me and roster', () => {
     expect(audits[0].subjectCount).toBe(2);
   });
 });
+
+describe('the SOS ticket list is redacted like the channel that carries it', () => {
+  /**
+   * `redactSos` withholds coordinates, table text and the hacker's name from a non-lead on
+   * the `sos` SSE channel, because a distress call says where a named person is and what is
+   * wrong with them. `GET /sos/tickets` returned the raw documents to every volunteer for
+   * every ticket ever raised, so one REST call undid the redaction on the wire. An
+   * end-to-end run against a live server read the coordinates straight out of the response.
+   */
+  it('hides coordinates, table and name from a volunteer who is not a party to it', async () => {
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const bystander = await makeAccount();
+    await makeTicket(String(hacker._id));
+
+    const { agent } = await signIn(String(bystander._id));
+    const res = await agent.get('/api/v1/sos/tickets');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    const row = res.body.data[0];
+    expect(row.coordinates).toBeUndefined();
+    expect(row.tableLocation).toBeUndefined();
+    expect(row.hackerName).toBeUndefined();
+    expect(row.description).toBeUndefined();
+    // Enough survives to render a queue and decide whether to help.
+    expect(row.status).toBe(SOSTicketStatus.OPEN);
+    expect(row.urgency).toBe('HIGH');
+  });
+
+  it('shows a lead everything, and shows the dispatched responder the ticket whole', async () => {
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const lead = await makeAccount({ role: VolunteerRole.SHIFT_LEAD });
+    const responder = await makeAccount();
+    const ticket = await makeTicket(String(hacker._id));
+
+    const asLead = await (await signIn(String(lead._id))).agent.get('/api/v1/sos/tickets');
+    expect(asLead.body.data[0].coordinates).toBeDefined();
+    expect(asLead.body.data[0].tableLocation).toBe('Table 9');
+
+    // The volunteer who has been sent to this ticket needs the address they are walking to.
+    // (The hacker who raised it is not tested here: `GET /sos/tickets` is volunteer-kind
+    // only, so a hacker never reaches this route — their own copy arrives on the targeted
+    // `me` channel instead.)
+    await SOSTicket.updateOne(
+      { _id: ticket._id },
+      { $set: { status: SOSTicketStatus.DISPATCHED, assignedVolunteerId: responder._id, dispatchedAt: new Date() } }
+    );
+    const asResponder = await (await signIn(String(responder._id))).agent.get('/api/v1/sos/tickets');
+    expect(asResponder.body.data[0].coordinates).toBeDefined();
+    expect(asResponder.body.data[0].tableLocation).toBe('Table 9');
+  });
+});
+
+describe('a lead can close a ticket they walked to', () => {
+  /**
+   * `transition()` lets a lead acknowledge a ticket and mark themselves on-scene regardless
+   * of who it was dispatched to, but `resolveTicket` was assignee-only with no lead
+   * exemption. So a lead who answered a call in person could drive it to ON_SCENE and then
+   * not close it — a dead end whose only exit was reassigning the ticket away from
+   * themselves. An end-to-end run hit it exactly: acknowledge 200, on-scene 200, resolve 403.
+   */
+  it('acknowledge, on-scene and resolve all succeed for a lead who is not the assignee', async () => {
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const responder = await makeAccount();
+    const lead = await makeAccount({ role: VolunteerRole.SHIFT_LEAD });
+    const ticket = await makeTicket(String(hacker._id));
+    await SOSTicket.updateOne(
+      { _id: ticket._id },
+      { $set: { status: SOSTicketStatus.DISPATCHED, assignedVolunteerId: responder._id, dispatchedAt: new Date() } }
+    );
+
+    const { agent, csrf } = await signIn(String(lead._id));
+    const id = String(ticket._id);
+    expect((await agent.post(`/api/v1/sos/tickets/${id}/acknowledge`).set('X-CSRF-Token', csrf).send({})).status).toBe(200);
+    expect((await agent.post(`/api/v1/sos/tickets/${id}/on-scene`).set('X-CSRF-Token', csrf).send({})).status).toBe(200);
+    const resolved = await agent.post(`/api/v1/sos/tickets/${id}/resolve`).set('X-CSRF-Token', csrf).send({});
+    expect(resolved.status).toBe(200);
+    expect((await SOSTicket.findById(id))!.status).toBe(SOSTicketStatus.RESOLVED);
+  });
+
+  it('still refuses an ordinary volunteer who was not dispatched', async () => {
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const responder = await makeAccount();
+    const stranger = await makeAccount();
+    const ticket = await makeTicket(String(hacker._id));
+    await SOSTicket.updateOne(
+      { _id: ticket._id },
+      { $set: { status: SOSTicketStatus.DISPATCHED, assignedVolunteerId: responder._id, dispatchedAt: new Date() } }
+    );
+
+    const { agent, csrf } = await signIn(String(stranger._id));
+    const res = await agent.post(`/api/v1/sos/tickets/${ticket._id}/resolve`).set('X-CSRF-Token', csrf).send({});
+    expect(res.status).toBe(403);
+  });
+});

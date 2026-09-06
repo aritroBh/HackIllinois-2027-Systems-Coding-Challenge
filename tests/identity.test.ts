@@ -555,3 +555,67 @@ describe('committed-default secrets outside production', () => {
     expect(res.body.data?.code).toBeUndefined();
   });
 });
+
+describe('a claimed identity is not a proved one (legacy mode)', () => {
+  /**
+   * `legacy` mode is the open-demo contract: a mutation may name a `volunteerId` and it is
+   * believed. That is fine for game actions and must never be enough for the three things
+   * below, because account ids are public — `GET /volunteers` and the leaderboard both hand
+   * them out to anonymous callers, so "name an organiser's id" is not an attack that needs
+   * anything the attacker does not already have.
+   *
+   * `requireSession` exists for precisely this and these routes were not using it.
+   */
+  it('cannot mint a claim code by naming an organiser', async () => {
+    const organizer = await makeVolunteer({ role: VolunteerRole.ORGANIZER });
+    const victim = await makeVolunteer();
+    const res = await request(app)
+      .post('/api/v1/auth/claim-codes')
+      .send({ volunteerId: organizer.id, accountId: victim.id });
+    expect(res.status).toBe(403);
+    expect(res.body.data?.code).toBeUndefined();
+  });
+
+  it('cannot grant a role or revoke a session by naming an organiser', async () => {
+    const organizer = await makeVolunteer({ role: VolunteerRole.ORGANIZER });
+    const victim = await makeVolunteer();
+
+    const grant = await request(app)
+      .patch(`/api/v1/auth/accounts/${victim.id}/role`)
+      .send({ volunteerId: organizer.id, role: 'SHIFT_LEAD' });
+    expect(grant.status).toBe(401);
+    expect((await Volunteer.findById(victim.id))!.role).toBe(VolunteerRole.VOLUNTEER);
+
+    const revoke = await request(app)
+      .post(`/api/v1/auth/revoke/${organizer.id}`)
+      .send({ volunteerId: organizer.id });
+    expect(revoke.status).toBe(401);
+  });
+
+  it('cannot read the roster PII projection by naming a lead', async () => {
+    const lead = await makeVolunteer({ role: VolunteerRole.SHIFT_LEAD });
+    await makeVolunteer();
+
+    const claimed = await request(app).get(`/api/v1/volunteers?volunteerId=${lead.id}`);
+    expect(claimed.status).toBe(200);
+    for (const row of claimed.body.data) {
+      expect(row.email).toBeUndefined();
+      expect(row.phone).toBeUndefined();
+    }
+
+    // The same request from a real lead session still sees contact details — the gate is on
+    // how the identity was established, not on the role.
+    const { agent } = await signIn(lead.id);
+    const proved = await agent.get('/api/v1/volunteers');
+    expect(proved.status).toBe(200);
+    expect(proved.body.data.some((r: { email?: string }) => typeof r.email === 'string')).toBe(true);
+  });
+
+  it('cannot read another account\'s email through /me', async () => {
+    const victim = await makeVolunteer();
+    const res = await request(app).get(`/api/v1/me?volunteerId=${victim.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.source).toBe('legacy');
+    expect(res.body.data.account.email).toBeNull();
+  });
+});

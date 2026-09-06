@@ -118,7 +118,7 @@ export class SOSService {
           session
         );
         if (!reserved.ok) {
-          throw new ApiError(409, ErrorCode.SCHEDULE_CONFLICT, "You have offered as much karma today as the event allows. Raise the ticket without a bounty, or ask a lead.");
+          throw new ApiError(409, ErrorCode.SCHEDULE_CONFLICT, `You have offered as much karma today as the event allows (${budget}). Ask a lead, or wait for tomorrow — your ticket will still be answered.`);
         }
         const [created] = await SOSTicket.create(
           [{ ...dto, coordinates: dto.coordinates, status: SOSTicketStatus.OPEN, karmaBounty: requested, createdById: creator!.id }],
@@ -505,7 +505,11 @@ export class SOSService {
    * is already answering. The status transition is a compare-and-swap, so two resolvers
    * arriving together produce one payment and one conflict rather than two payments.
    */
-  public static async resolveTicket(ticketId: string, volunteerId: string): Promise<ISOSTicket> {
+  public static async resolveTicket(
+    ticketId: string,
+    volunteerId: string,
+    actorRole?: string
+  ): Promise<ISOSTicket> {
     if (!volunteerId) {
       throw ApiError.badRequest('volunteerId (resolving volunteer) is required.');
     }
@@ -544,9 +548,19 @@ export class SOSService {
 
     // Assignee-bound once somebody has been sent: a ticket that is on its way to a named
     // responder pays that responder. An OPEN ticket is claimed by whoever resolves it first.
+    //
+    // A lead is exempt, as they are for acknowledge, on-scene, reassign and cancel. Without
+    // that exemption the lifecycle had a dead end: `transition()` lets a lead acknowledge a
+    // ticket and mark themselves on-scene, and then this refused to let them close it — so a
+    // lead who walked to a call could drive it to ON_SCENE and strand it there, with the only
+    // way out being to reassign it away from themselves. An end-to-end run walked into
+    // exactly that: acknowledge 200, on-scene 200, resolve 403.
+    //
+    // The bounty follows the actor, not the assignment, so a lead who does the work is the
+    // one paid — and the self-payout guard above still refuses the person who raised it.
     const claimed = observed !== SOSTicketStatus.OPEN;
-    if (claimed && !sameId(ticket.assignedVolunteerId, volunteerId)) {
-      throw ApiError.forbidden('Only the dispatched volunteer may resolve this ticket.');
+    if (claimed && !sameId(ticket.assignedVolunteerId, volunteerId) && !isLeadRole(actorRole)) {
+      throw ApiError.forbidden('Only the dispatched volunteer or a lead may resolve this ticket.');
     }
 
     // A real compare-and-set: the filter names the status we READ, not the set of statuses
@@ -627,10 +641,46 @@ export class SOSService {
   /**
    * Lists SOS tickets with optional status filtering.
    */
-  public static async listTickets(status?: SOSTicketStatus): Promise<ISOSTicket[]> {
+  /**
+   * The ticket list, redacted for anybody who is not a lead.
+   *
+   * The `sos` SSE channel is careful about this: `redactSos` withholds coordinates, the
+   * table text and the hacker's name from a non-lead volunteer, because a distress call
+   * says where a specific person is and what is wrong with them. This route returned the
+   * raw documents to every volunteer-kind caller, for every ticket ever raised — so the
+   * redaction on the wire was undone by one REST call, and the two could not both be the
+   * policy. An end-to-end run against a live server confirmed it: an ordinary volunteer
+   * read `{"coordinates":{"latitude":40.1138,...},"hackerName":...,"tableLocation":...}`.
+   *
+   * A lead sees everything, as before; the ticket's own parties get the full copy through
+   * the targeted `me` channel, which is unchanged.
+   */
+  public static async listTickets(
+    status?: SOSTicketStatus,
+    viewer?: { id?: string; role?: string }
+  ): Promise<Array<ISOSTicket | Record<string, unknown>>> {
     const query = status ? { status } : {};
-    return SOSTicket.find(query)
+    const tickets = await SOSTicket.find(query)
       .populate('assignedVolunteerId', 'name role')
       .sort({ createdAt: -1 });
+    if (isLeadRole(viewer?.role)) return tickets;
+    return tickets.map((t) => {
+      // The parties to a ticket keep their own copy whole: the person who raised it, and
+      // whoever has been sent to them. Redacting those would hide the address from the one
+      // volunteer who has to walk to it.
+      const isParty =
+        (!!viewer?.id && sameId(t.createdById, viewer.id)) ||
+        (!!viewer?.id && sameId(t.assignedVolunteerId, viewer.id));
+      if (isParty) return t;
+      return {
+        _id: t._id,
+        status: t.status,
+        venueKey: resolveVenue(t.tableLocation).matched ? resolveVenue(t.tableLocation).key : null,
+        category: t.category,
+        urgency: t.urgency,
+        karmaBounty: t.karmaBounty,
+        createdAt: t.createdAt,
+      };
+    });
   }
 }

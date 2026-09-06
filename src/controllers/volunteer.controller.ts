@@ -17,12 +17,21 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
 /**
- * Contact details and session metadata are visible to lead+ only. Everyone else (including
- * the open legacy demo) gets the game-facing profile: name, role, kind, faction, karma, badges.
+ * Contact details and session metadata are visible to a signed-in lead+ only. Everyone else
+ * (including the open legacy demo) gets the game-facing profile: name, role, kind, faction,
+ * karma, badges.
+ *
+ * `source === 'session'` is the load-bearing half. In `legacy` mode `attachIdentity` believes
+ * a `volunteerId` in the body or query, so a caller who named any lead's id — and the ids are
+ * handed out by the public leaderboard — read every volunteer's email and phone number from
+ * this route without holding a credential of any kind. `createVolunteer` below already makes
+ * exactly this distinction for the desk's `kind` choice; the projection simply never got it.
  */
 function projectionFor(req: Request): string {
   const role = req.account?.role;
-  const lead = role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN';
+  const lead =
+    req.account?.source === 'session' &&
+    (role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN');
   return lead ? '-identities -sessionVersion -__v' : '-email -phone -identities -sessionVersion -__v';
 }
 

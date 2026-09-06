@@ -72,7 +72,7 @@ export class SOSController {
 
   public static async resolveTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const ticket = await SOSService.resolveTicket(req.params.id as string, resolveActorId(req) as string);
+      const ticket = await SOSService.resolveTicket(req.params.id as string, resolveActorId(req) as string, req.account?.role);
       res.status(200).json({ success: true, data: ticket });
     } catch (error) {
       next(error);
@@ -81,7 +81,10 @@ export class SOSController {
 
   public static async listTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const tickets = await SOSService.listTickets(req.query.status as SOSTicketStatus | undefined);
+      const tickets = await SOSService.listTickets(req.query.status as SOSTicketStatus | undefined, {
+        id: req.account?.id,
+        role: req.account?.role,
+      });
       res.status(200).json({ success: true, data: tickets });
     } catch (error) {
       next(error);

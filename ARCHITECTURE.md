@@ -3,6 +3,13 @@
 **Adonix Alignment:** Strict compliance with [HackIllinois Adonix](https://github.com/HackIllinois/adonix) architectural standards  
 **Language & Engine:** TypeScript 5.x / Node.js / MongoDB WiredTiger (Document-Level CAS & ACID Transactions)
 
+> **Scope note.** Sections 3–6 (concurrency, waitlist, scheduling, swaps) describe the
+> current code. Sections 1, 2 and 10–15 were written before content packs, plugins, the
+> identity layer, WebSocket presence and the tiled campus renderer existed, and they do not
+> cover any of them — see `docs/WORKFLOWS.md`, `docs/IDENTITY.md`, `docs/PRESENCE.md`,
+> `docs/PLUGINS.md` and `docs/CONTENT-PACKS.md`, which are maintained against the code.
+> Constants quoted here are checked against the source but the structure is not yet.
+
 ---
 
 ## 📑 Table of Contents
@@ -11,7 +18,7 @@
 3. [Concurrency Control: WiredTiger Atomic CAS vs TOCTOU Race Conditions](#3-concurrency-control-wiredtiger-atomic-cas-vs-toctou-race-conditions)
 4. [Autonomous FIFO Waitlist Cascade State Machine](#4-autonomous-fifo-waitlist-cascade-state-machine)
 5. [Scheduling Invariants: 30-Minute Rest Buffers & Fatigue Limits](#5-scheduling-invariants-30-minute-rest-buffers--fatigue-limits)
-6. [Multi-Party Shift Swaps & Tarjan Directed Cyclic Trade Engine](#6-multi-party-shift-swaps--tarjan-directed-cyclic-trade-engine)
+6. [Multi-Party Shift Swaps & the Directed Cyclic Trade Engine](#6-multi-party-shift-swaps--the-directed-cyclic-trade-engine)
 7. [Dynamic Rotating HMAC-SHA256 QR Attendance Protocol](#7-dynamic-rotating-hmac-sha256-qr-attendance-protocol)
 8. [Geodesic Spatial Geofencing & Haversine Distance Engine](#8-geodesic-spatial-geofencing--haversine-distance-engine)
 9. [Hacker SOS Emergency Distress & Spatial Dispatch Engine](#9-hacker-sos-emergency-distress--spatial-dispatch-engine)
@@ -40,9 +47,9 @@ flowchart TD
 
     subgraph Gateway["HTTP Gateway & Security Layer"]
         B1["CORS & Request Preflight"]
-        B2["Express Rate Limiter (300 req/min)"]
+        B2["Rate limiters (300/min per account)"]
         B3["Contract-First Zod Validation Middleware"]
-        B4["Idempotency Filter (X-Idempotency-Key)"]
+        B4["Idempotency Filter (Idempotency-Key)"]
     end
 
     subgraph Controllers["API Controllers (/api/v1)"]
@@ -60,7 +67,7 @@ flowchart TD
     subgraph CoreServices["Domain Business Logic Engines"]
         D1["ShiftService (Surge Math)"]
         D2["RegistrationService (Atomic CAS)"]
-        D3["SwapService (Tarjan SCC Cycles)"]
+        D3["SwapService (bounded DFS cycles)"]
         D4["CheckInService (Crypto HMAC Engine)"]
         D5["SOSService (Haversine Nearest-Neighbor)"]
         D6["GymService (OCC Version Fencing)"]
@@ -355,17 +362,17 @@ Let $\mathcal{S}_u(D)$ be the set of confirmed shifts for volunteer $u$ on calen
 
 $$\sum_{s \in \mathcal{S}_u(D)} \text{DurationHours}(s) \le 8.0\text{ hours}$$
 
-Attempting to book a shift that pushes the cumulative daily duration past 8.0 hours fails with HTTP 409 `DAILY_FATIGUE_LIMIT_EXCEEDED`.
+Attempting to book a shift that pushes the cumulative daily duration past 8.0 hours fails with HTTP 409 `DAILY_FATIGUE_EXCEEDED`.
 
 ---
 
-## 6. Multi-Party Shift Swaps & Tarjan Directed Cyclic Trade Engine
+## 6. Multi-Party Shift Swaps & the Directed Cyclic Trade Engine
 
 Direct 1-to-1 trades fail in >90% of hackathon logistics situations due to mismatched volunteer preferences. WaveShift constructs a directed preference graph $G = (V, E)$ where edge $(u, v) \in E$ denotes that Volunteer $u$ is willing to surrender their shift in exchange for the shift held by Volunteer $v$.
 
 ```mermaid
 flowchart LR
-    subgraph Cycle["3-Way Circular Trade Ring (Tarjan SCC)"]
+    subgraph Cycle["3-Way Circular Trade Ring"]
         A["Volunteer Alice<br/>(Holds: Shift 1 - Logistics)"] -->|"Wants Shift 2"| B["Volunteer Bob<br/>(Holds: Shift 2 - Hardware)"]
         B -->|"Wants Shift 3"| C["Volunteer Charlie<br/>(Holds: Shift 3 - Food)"]
         C -->|"Wants Shift 1"| A
@@ -382,13 +389,24 @@ flowchart LR
     Cycle --> AtomicExecution
 ```
 
-### Tarjan Cycle Discovery Algorithm:
-1. Construct adjacency list $G$ from pending swap proposals where status is `PENDING`.
-2. Compute Strongly Connected Components (SCCs) via Tarjan's depth-first search tracking `dfn[u]` and `low[u]`.
-3. Discover elementary cycles bounded to lengths $k \in [2, 4]$.
-4. Generate canonical string hash using minimum-vertex rotation to eliminate duplicate cycle permutations:
-   $$\text{Hash}(C) = \min_{i} \Big( \text{rotate}(C, i) \Big)$$
-5. Execute the rotation within a MongoDB ClientSession multi-document ACID transaction.
+### Cycle discovery (`src/common/utils/cycleFinder.ts`)
+
+Bounded elementary-cycle enumeration by depth-first search. Not Tarjan, and not an SCC
+decomposition — this document claimed both for a while, and the code has never contained
+either. The rings being looked for are two to four people long in a graph of at most a few
+hundred pending proposals, so the asymptotic win from condensing components first buys
+nothing and the direct search is the whole algorithm.
+
+1. Build the adjacency list $G$ from `PENDING` proposals: an edge $u \rightarrow v$ exists
+   when $u$ wants the shift $v$ currently holds.
+2. From each node in sorted order, walk depth-first with the start node held fixed, bounded
+   at $k \in [2, 4]$ and guarded by an on-stack set so a node is never re-entered within a
+   walk.
+3. Deduplicate by construction rather than by hashing afterwards: an edge to a node
+   lexicographically smaller than the start node is not traversed, so each cycle is
+   discovered exactly once, from its smallest member. There is no canonical-rotation hash.
+4. Execute the rotation inside one MongoDB `ClientSession` transaction — every leg moves or
+   none does — after validating each leg's certifications and schedule conflicts up front.
 
 ---
 
@@ -481,7 +499,7 @@ flowchart TD
     M --> N["Volunteer Resolves Ticket<br/>POST /sos/tickets/:id/resolve"]
     N --> O["Idempotent Check: Is ticket already resolved?"]
     O -->|Yes| P["409 Conflict (Prevents double-bounty exploit)"]
-    O -->|No| Q["Award Karma Bounty (+300) & Unlock FIRST_RESPONDER Badge"]
+    O -->|No| Q["Award Karma Bounty (default 150, pack-capped) & Unlock FIRST_RESPONDER Badge"]
 ```
 
 ---
@@ -489,9 +507,9 @@ flowchart TD
 ## 10. PokéShift: UIUC Campus Turf Wars & OCC Versioning
 
 To gamify hackathon volunteer operations, UIUC campus hubs represent contested battlegrounds under three competing factions:
-* **Team Kernel (`TEAM_KERNEL`):** Systems & Infrastructure Division (Siebel Center HQ, Electric Cyan `#00F2FE`)
-* **Team Tensor (`TEAM_TENSOR`):** Artificial Intelligence & Machine Learning Division (ECEB Labs, Neon Magenta `#FF007F`)
-* **Team Silicon (`TEAM_SILICON`):** Hardware & Robotics Division (Kenney Gym, Electric Amber `#FFB300`)
+* **Team Kernel (`TEAM_KERNEL`):** Systems & Infrastructure Division (Siebel Center HQ, Electric Cyan `#22d3ee`)
+* **Team Tensor (`TEAM_TENSOR`):** Artificial Intelligence & Machine Learning Division (ECEB Labs, Soft Violet `#a78bfa`)
+* **Team Silicon (`TEAM_SILICON`):** Hardware & Robotics Division (Kenney Gym, Electric Amber `#fbbf24`)
 
 ### Optimistic Concurrency Control (OCC) State Fencing:
 ```mermaid
@@ -549,11 +567,11 @@ flowchart TD
     C -->|Valid Spin| F["Roll Loot Table (Weighted Probability)"]
 
     subgraph LootTable["Loot Table Distribution"]
-        L1["Cold Brew Elixir of Haste (Uncommon: 45%)"]
+        L1["Cold Brew Elixir of Haste (Uncommon: 40%)"]
         L2["Insomnia Cookie Shield (Rare: 25%)"]
-        L3["Overclocked Solder Core (Epic: 18%)"]
-        L4["Rubber Duck of Omniscience (Legendary: 9%)"]
-        L5["The Forbidden 100W Anker Gauntlet (Mythic: 3%)"]
+        L3["Overclocked Solder Core (Epic: 20%)"]
+        L4["Rubber Duck of Omniscience (Legendary: 10%)"]
+        L5["The Forbidden 100W Anker Gauntlet (Mythic: 5%)"]
     end
 
     F --> LootTable
@@ -616,7 +634,7 @@ sequenceDiagram
 | **Gym Damage Inversion** | Negative power input heals enemy gym | Boundary validation: $P \in [10, 500]$ and integer-only sanitization. |
 | **NoSQL Operator Injection** | Attacker injects `$ne` or `$regex` into query | Contract-first Zod schemas enforcing native TypeScript enums. |
 | **BSON CastError Leaks** | Arbitrary strings crash server and leak topology | Strict 24-char hexadecimal regex matching on all ObjectID parameters. |
-| **DDoS API Flooding** | Resource exhaustion on check-in endpoints | Token-bucket sliding window rate limiting (100 req/min per IP). |
+| **DDoS API Flooding** | Resource exhaustion on check-in endpoints | Layered limiters: 300/min per account, 600/min anonymous per IP, a 3,000/min per-IP ceiling, 90/min for mutations and 30/min for credential exchanges. |
 
 ---
 
@@ -630,7 +648,7 @@ an abstract marker.
 ### 14.1 Why hand-written WebGL2
 
 `src/app.ts` serves the dashboard under a Content-Security-Policy whose
-`script-src` is `'self' 'unsafe-inline'`. A CDN build of three.js is blocked
+`script-src` is `'self'` — no `'unsafe-inline'`. A CDN build of three.js is blocked
 outright, and vendoring a full engine to draw ~900 boxes is disproportionate.
 `public/gl/glx.js` is therefore a ~450-line WebGL2 layer — mat4/vec3, program
 and VAO plumbing, half-float render targets, geometry generators, ear-clipping
@@ -640,7 +658,8 @@ triangulation and a static batcher — and `public/gl/campus3d.js` is the scene.
 
 The city is not hand-authored. `design/build-campus.py` bakes two cached
 OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API and committed
-under `design/osm/`) into `public/gl/uiuc-campus.json`:
+under `design/osm/`) into `content/<pack>/campus/` (tiled; the single-file
+`public/gl/uiuc-campus.json` no longer exists):
 
 ```text
   design/osm/buildings.json   2.4 MB   2493 building ways
@@ -657,8 +676,8 @@ under `design/osm/`) into `public/gl/uiuc-campus.json`:
       └─────────────────────────────────────────────┘
                     │
                     ▼
-  public/gl/uiuc-campus.json   247 KB
-    899 building footprints · 983 street polylines · 241 lawns · 14 monuments
+  content/<pack>/campus/       124 tiles + index.json
+    9,188 building footprints · 1,994 roads · 467 lawns · 14 monuments · 124 tiles
 ```
 
 Landmark coordinates in `HACKILLINOIS_VENUES` (`src/common/utils/geo.ts`) were
@@ -676,7 +695,7 @@ model so the distinction stays visible rather than being quietly implied.
 ```text
    ┌── pass 1 ─────────────────────────────────────────────┐
    │  ground plane   procedural grid + range rings + sweep │
-   │  static batch   899 footprints, ONE draw call         │  ← mergeStatic()
+   │  streamed tiles 500 m each, baked in a worker         │  ← public/gl/tiles.js
    │  decal batch    streets + lawns, ONE draw call        │
    │  monuments      14 × footprint + landmark crown       │
    │  actors         volunteers / beacons / distress cones │
@@ -696,7 +715,7 @@ model so the distinction stays visible rather than being quietly implied.
 
 Two details carry most of the visual weight:
 
-- **Static batching.** 899 buildings as 899 draw calls stutters on integrated
+- **Static batching.** 9,188 buildings as 9,188 draw calls stutters on integrated
   GPUs. `mergeStatic()` bakes position, normal, per-vertex colour and emissive
   into one interleaved buffer, so the ambient city costs a single
   `drawElements`. Only the 14 monuments are dynamic, because only they change
@@ -779,7 +798,7 @@ gated to campus-wide zoom so it never muddies a close-up. The dashboard's
 Campus Grid is now the full-width hero with a telemetry strip (fps, buildings,
 monuments, camera distance) and a cinematic mode that hides the chrome
 (Escape exits). Clicking a monument opens a dossier from
-`public/gl/monuments-info.json` — year, architect, style and three facts per
+`content/<pack>/monuments-info.json` — year, architect, style and three facts per
 landmark, sourced from Wikipedia and flagged `approximate` where no article
 exists.
 
@@ -802,7 +821,7 @@ tab buttons that depress, sticker badges, a Boneyard-duck mascot — borrowing
 the SNES direction's battle window and message box for gym encounters.
 
 ```text
-  public/sprites.js     16x16 memorabilia + icons rasterised from public/gl/memorabilia.json
+  public/sprites.js     16x16 memorabilia + icons rasterised from content/<pack>/memorabilia.json
   public/avatar.js      webcam/photo → 32x32 (OKLab quantise, Bayer dither) → 128x48 walk sheet
   public/game.js        trainer profile, sticker book, encounter overlay, walk-to-spin gate,
                         geolocation "Walk with me", retro toggle, duck toasts
@@ -823,10 +842,10 @@ existing 75 m geofence does the check — the client gate is UX, the server is
 the authority. Loot drops reveal as "YOU FOUND" with a memorabilia sprite of
 the same rarity; holding a monument earns its badge on the trainer card.
 
-**Content.** `public/gl/memorabilia.json` — 16 HackIllinois items with 16×16
+**Content.** `content/<pack>/memorabilia.json` — 16 HackIllinois items with 16×16
 palette-indexed pixel grids, rarity, how each is earned, and one gym badge per
 monument (validated at load; a malformed item is skipped with a warning, never
-thrown). `public/gl/monuments-info.json` feeds the collectible monument card.
+thrown). `content/<pack>/monuments-info.json` feeds the collectible monument card.
 
 **Cross-review.** Three rounds of independent read-only review (muse and agy
 on the renderer, opencode on the app; codex and cursor-agent unavailable for
@@ -843,17 +862,33 @@ encounter with no keyboard exit, 7 px labels, and unvalidated content.
 
 ```text
 ========================================================================================
-🚀 WAVESHIFT NEXUS: COMPREHENSIVE VERIFICATION MATRIX (9/9 SUITES, 42/42 TESTS PASSING)
+VERIFICATION MATRIX — 23 suites, 231 tests
 ========================================================================================
-[PASS] tests/masterEndToEnd.test.ts  - 10-System Interconnected Operational Simulation
-[PASS] tests/concurrency.test.ts     - 50-Worker High-Contention Race Condition Latch
-[PASS] tests/registration.test.ts    - Rest Buffers, Fatigue Caps & Skill Certifications
-[PASS] tests/checkin.test.ts         - Dynamic 30s HMAC QR Tokens & Anti-Replay Cache
-[PASS] tests/swaps.test.ts           - Tarjan Directed Graph Multi-Party Cyclic Trades
-[PASS] tests/waitlist.test.ts        - Autonomous FIFO Waitlist Cascade Promotion
-[PASS] tests/geoSos.test.ts          - 75m Geofencing, Nearest SOS Dispatch & Adonix Sync
-[PASS] tests/pokestop.test.ts        - PokéShift Turf War OCC Battles & HackStop Beacons
-[PASS] tests/shifts.test.ts          - Catalog Encodings & Dynamic Circadian Surge Pricing
+Run `npm test` for the authoritative figure; the numbers above are a snapshot, not a claim.
+
+  masterEndToEnd   ten interconnected systems, one operational simulation
+  concurrency      50-worker high-contention race against two seats
+  registration     rest buffers, fatigue caps, skill certifications
+  lifecycle        the registration state machine only moves forward
+  checkin          rotating 30 s HMAC tokens and the anti-replay cache
+  attendance       check-out pays exactly once, pro rata
+  swaps            directed-graph multi-party cyclic trades
+  waitlist         autonomous FIFO cascade promotion
+  seededDemo       the shipped demo scenario itself
+  geoSos           75 m geofencing, nearest-responder dispatch, Adonix sync
+  ops              SOS lifecycle, announcements, roster redaction
+  identity         three adapters, CSRF, revocation, claimed-vs-proved identity
+  rateLimiter      the four limiters, keyed and stacked
+  sse              channels, replay, backpressure, stream slots
+  presence         fuzzing, opt-out symmetry, exact-read auditing
+  scale            the shared interest computation at 5,000 sessions
+  economy          the karma ledger, daily caps, bounty budgets
+  game             quests, stickers, streaks over the domain bus
+  pokestop         turf-war OCC battles and HackStop beacons
+  shifts           catalogue encodings and circadian surge pricing
+  content          pack validation and cross-references
+  campus           the tiled bake, per-tile hashes, monument ids
+  legacyCompat     the open-demo contract still holdsng
 ========================================================================================
 ```
 

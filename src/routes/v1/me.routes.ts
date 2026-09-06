@@ -24,7 +24,16 @@ meRouter.get('/', requireAccount, async (req: Request, res: Response, next: Next
   try {
     const account = await Volunteer.findById(req.account!.id);
     if (!account) throw ApiError.notFound('Account not found.', ErrorCode.VOLUNTEER_NOT_FOUND);
-    res.status(200).json({ success: true, data: { account: AuthService.toPublicAccount(account), source: req.account!.source } });
+    const profile = AuthService.toPublicAccount(account);
+    // The email goes only to a caller who proved they are this account.
+    //
+    // In `legacy` mode an identity can be *claimed* rather than proved — `?volunteerId=<id>`
+    // is believed — and the leaderboard hands out account ids anonymously. So "/me" for a
+    // legacy caller is "somebody else's profile", and returning the email made this route an
+    // address book keyed by a public id. Everything else here is game-facing and already
+    // readable from the leaderboard, so the rest of the shape is unchanged.
+    if (req.account!.source !== 'session') profile.email = null;
+    res.status(200).json({ success: true, data: { account: profile, source: req.account!.source } });
   } catch (error) {
     next(error);
   }
