@@ -90,3 +90,41 @@ a second run with absolute paths hit the same wall). Scratch tree hash unchanged
 
 Live after the fixes: 153 tests, the soak's storm phase passing its sibling-survival and
 return-to-full-detail assertions.
+
+## Final round — the scale work, the map work, deployment and the live bridge
+
+Three reviewers on the same diff, each in a scratch copy of the tree. The copy was compared
+byte-for-byte against a pristine extract of the reviewed commit afterwards: zero differences,
+so every review was genuinely read-only.
+
+Six findings were reached independently by more than one reviewer, which is the useful signal
+here — those are the ones where the code, not the reader, was wrong. Each of the three also
+found something the other two missed.
+
+| Finding | Raised by | Verdict | Fix |
+|---|---|---|---|
+| The person who raised an SOS ticket could resolve it and collect their own bounty | agy | confirmed | the creator is refused outright; test raises, tries to self-resolve, and asserts nothing was paid |
+| Only hackers were charged against the daily bounty budget, and any account may raise a ticket | muse | confirmed | every creator draws on the budget; test drives a volunteer past it and sees 409s, never 500s |
+| A stale escalation put the raw table text on the public `announce` channel labelled as the venue key | all three | confirmed | resolved to a building key or null; two tests, one resolvable location and one not |
+| In cluster-only mode the nearest sixty were withheld as rows *and* excluded from the counts, so a full room reported zero | opencode, agy | confirmed | the cohort carries a second, all-inclusive count list for viewers getting no rows |
+| An off-duty volunteer subtracted itself from a crowd count it was never part of | muse, agy | confirmed | the adjustment applies only when the viewer is actually in the list it is adjusting |
+| Expired players' slots were released before the frame was built, so no `expire` was ever sent | agy | confirmed | released slots queue and the next frame drains them; test asserts the frame arrives |
+| Dispatch stopped one shell after the quota; a corner of ring R is √2·R away while an edge of ring R+3 is R+3 | all three | confirmed | continues until the next shell's nearest possible point is further than the worst held; new test fails against the old rule |
+| Dispatch ignored opt-out entirely | muse | confirmed | the flag is checked; the promise made to somebody who opts out is now kept |
+| The dispatch bound was 6 km against a 7.1 km pack diagonal | muse, opencode | confirmed | raised to 9 km, with the loop leaving long before it whenever anybody is findable |
+| Props were placed with a `rot` key nothing reads, in degrees where radians were wanted | muse, opencode | confirmed | `ry`, converted; every bench had been facing east |
+| Fences were passed world units to a builder that divides by ten again | muse, opencode | confirmed | a 1.2 m railing was rendering at 12 cm |
+| Rooftop plant was handed options the generator does not read | opencode | confirmed | railings were all one 10 m square at a centroid; monuments got vents on their crowns |
+| `fract(sin(...))` is not bit-identical across platforms, so the pack hash churned between ARM and x86 | muse | confirmed | hashes the coordinate bytes; two consecutive rebuilds now agree |
+| The load ladder ordered a full snapshot from every session on the way *down* | muse | confirmed | only a climb resyncs; the shed-load mechanism was creating the largest burst of the event |
+| A demoted lead kept lead vision until reconnect | opencode | confirmed | the flag is refreshed each tick from the cached facts |
+| Comments asserting the opposite of the code: props not generated, props instanced, a 30 ms ladder | all three | confirmed | corrected rather than deleted |
+| A crash between a booth scan's insert and its award strands the bounty | opencode | accepted, not fixed | the once-only guarantee is the important half and is sound; recovering a crashed award needs an outbox, which is a larger change than the window justifies |
+
+Two lockstep checks were added because both of these fail in silence: every server event type
+must be forwarded to the client bus and every forwarded name must be one the server emits
+(`scripts/checkEvents.mjs`), and the renderer's metres-per-unit must match the pack's
+(`scripts/checkProps.mjs`).
+
+Live after the fixes: 208 tests, five consecutive clean runs, `scripts/verify.sh` green, the
+pack rebuild byte-reproducible across runs.
