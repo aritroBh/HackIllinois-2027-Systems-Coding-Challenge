@@ -213,6 +213,16 @@ interface BufferedEvent {
   type: string;
   channel: Channel;
   data: unknown;
+  /**
+   * The audience this event was published to, for the `announce` channel, or null.
+   *
+   * Kept on the buffered copy because replay has to make the same decision the live send
+   * made, and the only place that decision was recorded was the live loop. A staff-only
+   * announcement was filtered correctly on the wire and then handed to anybody who
+   * reconnected with a `Last-Event-ID` — `announce` needs no session at all, so an anonymous
+   * listener could ask for the last minute of the channel and read it.
+   */
+  audience: string | null;
 }
 
 /** One published event, with wire frames built lazily per (version, redaction) variant. */
@@ -565,10 +575,6 @@ class SSEBroadcastHub {
     const seq = ++this.seq;
     const ts = message.timestamp ?? Date.now();
 
-    if (REPLAY_CHANNELS.has(channel)) {
-      this.remember({ seq, ts, type: message.type, channel, data: message.data });
-    }
-
     const frames = new Frames(seq, ts, message.type, channel, message.data);
     const isPresence = channel === 'presence' || channel === 'presence:exact';
     const redactable = channel === 'sos';
@@ -576,6 +582,12 @@ class SSEBroadcastHub {
     // floor is filtered HERE rather than by the client. A staff message that reaches a
     // hacker's stream has already leaked, however carefully the UI hides it.
     const audience = channel === 'announce' ? audienceOf(message.data) : null;
+
+    // Remembered WITH its audience, and after that audience is known. Replay applies the same
+    // filter; a buffer that records only "what was said" and not "who it was said to" cannot.
+    if (REPLAY_CHANNELS.has(channel)) {
+      this.remember({ seq, ts, type: message.type, channel, data: message.data, audience });
+    }
 
     // Only the channel's own subscribers, and iterated directly rather than through a copy.
     // `write` can remove the client it is writing to (a half-open socket, or backpressure past
@@ -674,6 +686,12 @@ class SSEBroadcastHub {
     }
     missed.sort((a, b) => a.seq - b.seq);
     for (const ev of missed) {
+      // The same two filters the live path applies, in the same order. Redaction was here;
+      // the audience check was not, so every targeted announcement in the last minute was
+      // readable by reconnecting with a `Last-Event-ID` — including anonymously, because
+      // `announce` is the channel that needs no session. Replay is a second delivery path and
+      // has to be as narrow as the first.
+      if (ev.audience && !audienceReaches(ev.audience, client.account)) continue;
       const redacted = ev.channel === 'sos' && !client.fullSos;
       const payload = redacted ? redactSos(ev.data) : ev.data;
       this.write(client, formatFrame(client.version, ev.seq, ev.ts, ev.type, ev.channel, payload));

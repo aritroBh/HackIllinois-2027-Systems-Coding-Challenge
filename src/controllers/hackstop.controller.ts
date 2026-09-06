@@ -21,7 +21,8 @@ import { env } from '../config/env';
 export class HackStopController {
   public static async listBeacons(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const beacons = await HackStopService.listBeacons();
+      // The caller's own cooldown is theirs to see; everybody else's is not. See the service.
+      const beacons = await HackStopService.listBeacons(resolveActorId(_req));
       res.status(200).json({ success: true, data: beacons });
     } catch (error) {
       next(error);

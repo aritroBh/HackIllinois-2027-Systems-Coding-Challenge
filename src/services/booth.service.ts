@@ -172,12 +172,22 @@ export class BoothService {
       throw error;
     }
 
-    // Whether anything has been paid yet. The compensating delete below hands the booth back
-    // by removing the row that makes a scan once-ever — which is only safe while nothing has
-    // moved. Once karma is minted, deleting it converts a once-ever 60-karma booth into a
-    // repeatable one: any later failure (a sticker write, a power-up upsert, a network blip
-    // on either) unwound the guard and left the payment, and the next press paid again.
-    let paid = false;
+    // Whether anything has been GRANTED yet — karma, sticker or power-up, not karma alone.
+    //
+    // The compensating delete below hands the booth back by removing the row that makes a
+    // scan once-ever, which is only safe while nothing has moved. It tracked the karma award
+    // and nothing else, and the reward is three things: a booth priced at zero karma (or one
+    // whose karma the daily cap has clamped to nothing) that grants a power-up would leave
+    // this flag false, so a transient failure on the write *after* the grant deleted the
+    // scan row and handed the booth back — with the power-up already in the inventory. The
+    // retry then passes the uniqueness insert and `$inc`s a second one, which is exactly the
+    // once-ever violation this flag exists to prevent, reached through the one reward that
+    // was not being counted.
+    //
+    // The sticker grant is idempotent on its own ledger, so it is not the dangerous one; it
+    // is included anyway, because "has anything moved" is the question and enumerating the
+    // exceptions is how this went wrong the first time.
+    let granted = false;
     try {
       let awardedKarma = 0;
       let karmaCapped = false;
@@ -187,11 +197,12 @@ export class BoothService {
         const award = await KarmaService.awardKarma(accountId, booth.reward.karma, KARMA_SOURCE, { boothId, sponsor: booth.sponsor });
         awardedKarma = award.awarded;
         karmaCapped = award.capped;
-        paid = award.awarded > 0;
+        granted = granted || award.awarded > 0;
       }
 
       if (booth.reward.sticker) {
         await StickerService.award(accountId, booth.reward.sticker, `BOOTH:${boothId}`);
+        granted = true;
       }
 
       const powerUp = (booth.reward.powerUp ?? null) as PowerUpType | null;
@@ -204,6 +215,7 @@ export class BoothService {
           { $inc: { quantity: 1 }, $setOnInsert: { name: meta.name, rarity: meta.rarity, obtainedFrom: `BOOTH:${boothId}` } },
           { upsert: true, new: true }
         );
+        granted = true;
       }
 
       await BoothScan.updateOne({ _id: scan._id }, { $set: { karmaAwarded: awardedKarma } });
@@ -228,15 +240,15 @@ export class BoothService {
         powerUp,
       };
     } catch (error) {
-      // Hand the booth back only if nothing was paid. A failure after the award leaves the
-      // scan row standing: the money moved, so the once-ever guard has to stand with it.
-      // The caller still gets the error and can retry, and the retry gets a clean 409
-      // rather than a second payment.
-      if (!paid) {
+      // Hand the booth back only if nothing was granted. A failure after any part of the
+      // reward has landed leaves the scan row standing: something moved, so the once-ever
+      // guard has to stand with it. The caller still gets the error and can retry, and the
+      // retry gets a clean 409 rather than a second grant.
+      if (!granted) {
         await BoothScan.deleteOne({ _id: scan._id });
       } else {
         console.error(
-          `[booth] ${boothId} paid ${accountId} and then failed; scan row kept so the booth cannot be scanned twice.`,
+          `[booth] ${boothId} granted ${accountId} part of its reward and then failed; scan row kept so the booth cannot be scanned twice.`,
           error
         );
       }

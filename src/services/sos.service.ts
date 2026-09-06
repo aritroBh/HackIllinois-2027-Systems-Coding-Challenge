@@ -203,8 +203,17 @@ export class SOSService {
     const dispatchNow = Date.now();
     const stillOnDuty = (reg: { shiftId?: unknown }): boolean => {
       const shift = reg.shiftId as unknown as IShift | null;
-      if (!shift || !shift.endTime) return true;
-      return new Date(shift.endTime).getTime() + ON_DUTY_GRACE_MS >= dispatchNow;
+      if (!shift || !shift.endTime || !shift.startTime) return true;
+      // Both ends of the window. Checking only the end covered the volunteer who forgot to
+      // check out and left the other half open: the CONFIRMED tier exists for the hours when
+      // nobody has scanned in yet, and a volunteer confirmed for tomorrow afternoon has an
+      // `endTime` comfortably in the future. At half past three in the morning that is who
+      // the ticket went to — somebody who is not at the event — and the ticket was marked
+      // DISPATCHED, which stops anybody else looking at it.
+      return (
+        new Date(shift.endTime).getTime() + ON_DUTY_GRACE_MS >= dispatchNow &&
+        new Date(shift.startTime).getTime() - ON_DUTY_GRACE_MS <= dispatchNow
+      );
     };
 
     let activeRegs = (
@@ -644,8 +653,9 @@ export class SOSService {
     // way out being to reassign it away from themselves. An end-to-end run walked into
     // exactly that: acknowledge 200, on-scene 200, resolve 403.
     //
-    // The bounty follows the actor, not the assignment, so a lead who does the work is the
-    // one paid — and the self-payout guard above still refuses the person who raised it.
+    // Being *allowed* to close it is not the same as being paid for it: the bounty follows the
+    // assignment, and a lead closing a call on the dispatched volunteer's behalf pays that
+    // volunteer. See `earnerId` further down, which is where that is decided.
     const claimed = observed !== SOSTicketStatus.OPEN;
     if (claimed && !sameId(ticket.assignedVolunteerId, volunteerId) && !isLeadRole(actorRole)) {
       throw ApiError.forbidden('Only the dispatched volunteer or a lead may resolve this ticket.');

@@ -13,6 +13,7 @@
  * corrupt it.
  */
 import { SOSService } from './services/sos.service';
+import { RaidService } from './services/raid.service';
 import { sweepSseSessions } from './presence/sseTransport';
 import { env } from './config/env';
 
@@ -44,6 +45,20 @@ const jobs: ScheduledJob[] = [
     // reaped on a timer.
     run: () => {
       sweepSseSessions();
+    },
+  },
+  {
+    name: 'raid-windows',
+    everyMs: 30_000,
+    runs: 0,
+    // The docblock above has promised since M6 that raid timers live here, and they did not:
+    // `RaidService.tick()` had no caller outside its own tests, so a raid window opened and
+    // closed in the content pack without a single frame on the wire. Nobody saw a raid start.
+    //
+    // Idempotent per process by construction — `tick` remembers what it has announced — so
+    // running it every thirty seconds costs a map lookup per raid and announces each edge once.
+    run: () => {
+      RaidService.tick();
     },
   },
 ];

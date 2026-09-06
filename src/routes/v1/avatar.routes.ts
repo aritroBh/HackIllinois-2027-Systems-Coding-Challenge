@@ -113,11 +113,16 @@ avatarRouter.post('/:hash/review', requireSession, requireRole('SHIFT_LEAD'), va
   }
 });
 
-avatarRouter.post('/:hash/flag', requireAccount, validate(flagSchema), async (req: Request, res: Response, next: NextFunction) => {
+// `requireSession`, not `requireAccount`. A flag is a moderation action — a lead's flag
+// unpublishes on its own, and three ordinary ones do — so a *claimed* identity must not
+// reach it. In legacy mode `?volunteerId=<any lead's id>` was enough to censor any
+// attendee's avatar in one unauthenticated request, and rotating the claimed id also walked
+// past the per-reporter hourly cap, which is keyed on the reporter.
+avatarRouter.post('/:hash/flag', requireSession, requireAccount, validate(flagSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const doc = await AvatarService.flag(
       String(req.params.hash),
-      { id: req.account!.id, role: req.account!.role },
+      { id: req.account!.id, role: req.account!.role, source: req.account!.source },
       String(req.body.reason),
       String(req.body.ownerId)
     );

@@ -83,6 +83,17 @@ export class PresenceService {
   private onDuty = new Map<string, boolean>();
   private rosterAt = 0;
   private facts = new Map<string, AccountFacts>();
+  /**
+   * Accounts whose cached facts were explicitly thrown away and not yet re-read.
+   *
+   * `invalidate()` used to only delete, and the tick only acts when it *has* facts — so
+   * invalidating an account removed the very evidence that would have demoted its live
+   * session. A lead demoted mid-event kept lead vision on an open socket for as long as they
+   * held it, which is the exact case `invalidate` was added for and the one it could not
+   * reach. Membership here means "assume nothing until the re-read lands", and a session in
+   * that state loses the privilege rather than keeping it.
+   */
+  private pendingRevalidate = new Set<string>();
   public readonly startedAt = Date.now();
   public stats = {
     ticks: 0, lastTickMs: 0, p95TickMs: 0, rowsLastTick: 0, sessions: 0, clusterMode: false,
@@ -293,6 +304,13 @@ export class PresenceService {
   /** Drop a cached fact (opt-in toggled, avatar changed, faction changed). */
   invalidate(accountId: string): void {
     this.facts.delete(accountId);
+    this.pendingRevalidate.add(accountId);
+    // Kick the re-read rather than waiting for the account to sample again. A lead watching
+    // the map from a laptop sends no positions at all, so "the next sample" may never come,
+    // and without this the fail-closed state above would be permanent for exactly the people
+    // most likely to be in it. A failure here is not fatal: the session stays demoted until a
+    // later read succeeds, which is the safe direction.
+    void this.factsFor(accountId).catch(() => undefined);
   }
 
   private async refreshRoster(nowMs: number): Promise<void> {
@@ -382,7 +400,16 @@ export class PresenceService {
         // for anybody who has sampled recently, so this costs a map lookup; an account we have
         // not seen keeps the flag its session cookie arrived with, which is the same answer.
         const known = this.facts.get(s.accountId);
-        if (known) s.setLead(LEAD_ROLES.has(known.role as AccountRole));
+        if (known) {
+          s.setLead(LEAD_ROLES.has(known.role as AccountRole));
+          this.pendingRevalidate.delete(s.accountId);
+        } else if (this.pendingRevalidate.has(s.accountId)) {
+          // Somebody changed this account's role and the re-read has not landed. Drop the
+          // privilege now; the refresh started by `invalidate` restores it within a tick or
+          // two if the change was a promotion rather than a demotion. Losing a privilege has
+          // to be immediate even though gaining one can wait.
+          s.setLead(false);
+        }
         try {
           let cohort: Cohort | null = null;
           const me = this.store.get(s.accountId);

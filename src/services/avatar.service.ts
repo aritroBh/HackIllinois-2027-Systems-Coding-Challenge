@@ -182,7 +182,7 @@ export class AvatarService {
    * A report. Three distinct reporters, or one lead, unpublish immediately — waiting for a
    * review queue to drain is the wrong default when the content is on other people's maps.
    */
-  public static async flag(hash: string, reporter: { id: string; role: string }, reason: string, ownerId: string): Promise<IAvatar> {
+  public static async flag(hash: string, reporter: { id: string; role: string; source?: string }, reason: string, ownerId: string): Promise<IAvatar> {
     // Required for the same reason as `review`: a report is against one person's upload.
     const doc = await Avatar.findOne({ hash, ownerId });
     if (!doc) throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);
@@ -205,7 +205,10 @@ export class AvatarService {
       doc.flags.push({ reporterId: new Types.ObjectId(reporter.id), reason, at: new Date() });
     }
     const distinct = new Set(doc.flags.map((f) => String(f.reporterId))).size;
-    const isLead = /SHIFT_LEAD|ORGANIZER|ADMIN/.test(reporter.role);
+    // A proved lead, checked here as well as at the route. One lead flag unpublishes on its
+    // own, so this is the branch that has to be right even if a future refactor remounts the
+    // handler without its middleware — the same reason the roster handler re-checks.
+    const isLead = reporter.source === 'session' && /SHIFT_LEAD|ORGANIZER|ADMIN/.test(reporter.role);
     if (isLead || distinct >= FLAGS_TO_UNPUBLISH) {
       doc.status = AvatarStatus.REJECTED;
       await doc.save();

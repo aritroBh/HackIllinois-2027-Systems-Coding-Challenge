@@ -14,8 +14,10 @@
  *    hand-adjusted a shift, a sync silently reverts it, and volunteers are registered
  *    against times that just changed under them.
  *
- * The route is also unauthenticated today, so those two together are the reason it should
- * sit behind organiser auth before it runs against real data.
+ * `POST /adonix/sync` now sits behind `requireRole('ORGANIZER')`, so the two sharp edges
+ * above are an organiser's to trigger rather than anybody's. They are still sharp edges: an
+ * organiser who syncs after a hand-adjustment silently reverts it. Neither is fixed here,
+ * because both need an upstream stable id.
  */
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { eventHub } from '../common/sse/eventHub';

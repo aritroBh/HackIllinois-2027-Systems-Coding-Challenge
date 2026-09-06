@@ -22,7 +22,7 @@
  * Stale cooldown entries are pruned so the map does not grow without bound across an
  * event.
  */
-import { HackStop, IHackStop } from '../models/hackstop.model';
+import { HackStop } from '../models/hackstop.model';
 import { PowerUpInventory, PowerUpType, POWER_UP_CATALOG, IPowerUpInventory } from '../models/powerup.model';
 import { Gym } from '../models/gym.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
@@ -48,10 +48,43 @@ export interface ISpinResult {
 
 export class HackStopService {
   /**
-   * Retrieves all active HackStop supply beacons.
+   * The active supply beacons, without the cooldown ledger.
+   *
+   * `lastSpunUsers` maps a volunteer id to the moment they last spun this beacon. It is
+   * bookkeeping for one conditional update, and it was going out on an unauthenticated list
+   * route on every document — so anybody who could reach `GET /pokeshift/hackstops` could
+   * harvest the maps every few minutes and build a who-was-at-which-beacon-when timeline for
+   * the whole event, joined against ids and names that are public by design. The presence
+   * layer fuzzes positions to twenty metres, publishes them a tick late and audits every exact
+   * read; this handed out a movement history from a JSON list, for free, with no audit row.
+   *
+   * Callers get their own cooldown instead, which is the only part of the map that concerns
+   * them and the only part the client ever used. A caller with no identity gets none, rather
+   * than an error: the beacon list is useful to a signed-out visitor and the field is simply
+   * absent for them.
    */
-  public static async listBeacons(): Promise<IHackStop[]> {
-    return HackStop.find({ isActive: true }).sort({ name: 1 });
+  public static async listBeacons(viewerId?: string): Promise<Array<Record<string, unknown>>> {
+    const beacons = await HackStop.find({ isActive: true }).select('-lastSpunUsers').sort({ name: 1 }).lean();
+    if (!viewerId) return beacons as Array<Record<string, unknown>>;
+
+    // One extra read, projected to the single map entry that belongs to this caller. Asking
+    // Mongo for `lastSpunUsers.<id>` rather than the whole map keeps the document that comes
+    // back the size of the answer instead of the size of the event.
+    const key = `lastSpunUsers.${viewerId}`;
+    const mine = await HackStop.find({ isActive: true }).select(`beaconId cooldownSeconds ${key}`).lean();
+    const spunAt = new Map<string, Date>();
+    for (const row of mine) {
+      const at = (row.lastSpunUsers as unknown as Record<string, Date> | undefined)?.[viewerId];
+      if (at) spunAt.set(String(row.beaconId), new Date(at));
+    }
+    return beacons.map((b) => {
+      const at = spunAt.get(String(b.beaconId));
+      return {
+        ...b,
+        yourLastSpinAt: at ?? null,
+        yourNextSpinAt: at ? new Date(at.getTime() + (b.cooldownSeconds ?? 300) * 1000) : null,
+      };
+    });
   }
 
   /**

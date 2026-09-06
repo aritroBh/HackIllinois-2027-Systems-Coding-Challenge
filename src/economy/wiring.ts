@@ -18,8 +18,10 @@
  */
 import { domainEvents } from '../common/events/domainEvents';
 import { QuestService } from '../services/quest.service';
+import { RaidService } from '../services/raid.service';
 
 let wired = false;
+let unsubscribeRaids: (() => void) | null = null;
 
 /**
  * Subscribe the economy to the domain bus. Idempotent, because both entry points call it
@@ -49,9 +51,28 @@ export function wireEconomy(): void {
   domainEvents.on('gym.captured', advance('gym.captured'));
   domainEvents.on('hackstop.spun', advance('hackstop.spun'));
   domainEvents.on('booth.scanned', advance('booth.scanned'));
+
+  // Raid enrolment is the same shape — a listener on the bus — and belongs here for the same
+  // reason: `RaidService` owns what a join means, and nothing that emits an event should know
+  // that raids exist.
+  //
+  // It was written and never called. `subscribe()` had no caller anywhere outside its own
+  // tests, so during a live raid window nobody was ever enrolled: `RaidJoin` stayed empty and
+  // every board reported a join count of zero. The unit tests exercised `board()` and
+  // `openAt()` directly and passed throughout, which is exactly the failure mode of testing a
+  // function instead of the wiring that reaches it. `tests/game.test.ts` now asserts that
+  // wiring this file produces an enrolment from a bus event.
+  unsubscribeRaids = RaidService.subscribe();
 }
 
 /** Test hook: forget that we wired, so a suite can rebuild the graph. */
 export function __resetEconomyWiring(): void {
   wired = false;
+  // Detached rather than orphaned: `subscribe()` returns its own unsubscribe, and a suite
+  // that rebuilds the graph without calling it accumulates a second set of raid listeners
+  // that record every join twice.
+  if (unsubscribeRaids) {
+    unsubscribeRaids();
+    unsubscribeRaids = null;
+  }
 }

@@ -14,6 +14,8 @@ import { env } from '../src/config/env';
 import { Volunteer, VolunteerRole, AccountKind } from '../src/models/volunteer.model';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
+import { HackStop } from '../src/models/hackstop.model';
+import { Avatar, AvatarStatus } from '../src/models/avatar.model';
 import { signIn } from './helpers/session';
 import { uniqueKey } from './helpers/uniqueKey';
 
@@ -87,5 +89,66 @@ describe('the attendee directory needs a proved lead, not a claimed one', () => 
     const proved = await agent.get('/api/v1/volunteers?kind=ALL');
     expect(proved.status).toBe(200);
     expect(JSON.stringify(proved.body.data)).toContain('Hidden Hacker');
+  });
+});
+
+describe('a beacon list is not a movement log', () => {
+  it('hides everybody else\'s cooldown and reports only the caller\'s own', async () => {
+    // `lastSpunUsers` maps a volunteer id to the moment they last spun this beacon. It is
+    // bookkeeping for one conditional update, and it went out on an unauthenticated list
+    // route on every document — so polling `GET /pokeshift/hackstops` every few minutes built
+    // a who-was-at-which-beacon-when timeline for the whole event, joined against ids that
+    // are public by design. The presence layer fuzzes positions to twenty metres and audits
+    // every exact read; this was a movement history in a JSON list, with no audit row.
+    const me = await account({ name: 'Spinner Sam' });
+    const other = await account({ name: 'Spinner Sid' });
+    const spunAt = new Date(Date.now() - 60_000);
+    await HackStop.create({
+      beaconId: 'bx-1', name: 'Bench Beacon', locationName: 'Siebel Center Atrium',
+      latitude: 40.11380, longitude: -88.22470, cooldownSeconds: 300,
+      lastSpunUsers: new Map([[String(me._id), spunAt], [String(other._id), spunAt]]),
+      totalSpins: 2,
+    });
+
+    const { agent } = await signIn(me.id);
+    const res = await agent.get('/api/v1/pokeshift/hackstops');
+    expect(res.status).toBe(200);
+    const beacon = (res.body.data as Array<Record<string, unknown>>).find((b) => b.beaconId === 'bx-1')!;
+
+    // Nobody's ledger, not even a redacted one.
+    expect(beacon.lastSpunUsers).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain(String(other._id));
+
+    // The caller's own cooldown survives, because that is what the button needs.
+    expect(new Date(beacon.yourLastSpinAt as string).getTime()).toBe(spunAt.getTime());
+    expect(new Date(beacon.yourNextSpinAt as string).getTime()).toBe(spunAt.getTime() + 300_000);
+  });
+});
+
+describe('flagging an avatar is a moderation action', () => {
+  it('refuses a claimed lead identity, so one request cannot censor an attendee', async () => {
+    // A lead's flag unpublishes on its own and three ordinary ones do, so the endpoint is a
+    // takedown button. It was gated on having *an* identity rather than a proved one, and in
+    // legacy mode an identity is a query parameter — so `?volunteerId=<any lead id>` censored
+    // any attendee's avatar in one unauthenticated request, and rotating the claimed id also
+    // walked past the per-reporter hourly cap.
+    const lead = await account({ name: 'Lena Lead 2', role: VolunteerRole.SHIFT_LEAD });
+    const owner = await account({ name: 'Owner Ola' });
+    await Avatar.create({
+      hash: 'a'.repeat(64), bytes: Buffer.from([1, 2, 3]), width: 32, height: 32,
+      ownerId: owner._id, status: AvatarStatus.APPROVED, flags: [],
+    });
+
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app)
+        .post(`/api/v1/avatars/${'a'.repeat(64)}/flag?volunteerId=${lead.id}`)
+        .send({ reason: 'inappropriate', ownerId: String(owner._id) });
+      expect(claimed.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+    expect((await Avatar.findOne({ hash: 'a'.repeat(64) }))!.status).toBe(AvatarStatus.APPROVED);
   });
 });

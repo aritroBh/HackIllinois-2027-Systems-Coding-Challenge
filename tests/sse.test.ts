@@ -408,6 +408,32 @@ describe('SSE hub v2', () => {
       expect((await second.next(isEvent)).event).toBe('SHIFT_DELETED');
     });
 
+    it('applies the audience filter to replay, not only to the live send', async () => {
+      // The live path filters a targeted announcement by audience; the buffer recorded what
+      // was said and not who it was said to, and replay wrote everything it found. `announce`
+      // is the one channel that needs no session at all, so reconnecting with a
+      // `Last-Event-ID` — anonymously — read back the last minute of staff-only traffic.
+      const probe = await stream('/events?v=2&channels=announce', { 'x-test-role': 'HACKER' });
+      eventHub.broadcast({ type: 'ANNOUNCEMENT', data: { id: 'a0', audience: 'ALL', message: 'doors open' } });
+      const seen = await probe.next(isEvent);
+      probe.close();
+      await waitFor(() => eventHub.getConnectedCount() === 0);
+
+      eventHub.broadcast({ type: 'ANNOUNCEMENT', data: { id: 'a1', audience: 'STAFF', message: 'keypad 5492' } });
+      eventHub.broadcast({ type: 'ANNOUNCEMENT', data: { id: 'a2', audience: 'ALL', message: 'pizza' } });
+
+      const back = await stream('/events?v=2&channels=announce', {
+        'x-test-role': 'HACKER',
+        'Last-Event-ID': seen.id!,
+      });
+      // The staff frame is skipped entirely: the next thing this subscriber sees is the
+      // public one that followed it.
+      const next = await back.next(isEvent);
+      expect(next.event).toBe('ANNOUNCEMENT');
+      expect(JSON.parse(next.data!).data.id).toBe('a2');
+      expect(JSON.parse(next.data!).data.message).toBe('pizza');
+    });
+
     it('accepts ?lastEventId= as an alternative to the header', async () => {
       const probe = await stream('/events?v=2');
       eventHub.broadcast({ type: 'SHIFT_CREATED', data: { n: 1 } });

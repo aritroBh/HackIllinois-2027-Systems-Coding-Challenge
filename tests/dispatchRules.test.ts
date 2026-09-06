@@ -75,6 +75,38 @@ describe('the on-duty pool has a clock in it', () => {
   });
 });
 
+describe('the on-duty pool has both ends of the window', () => {
+  it('will not fall back to a volunteer whose shift has not started yet', async () => {
+    // The CONFIRMED tier exists for the hours when nobody has scanned in. Checking only that
+    // a shift had not *ended* left the other half of the window open: a volunteer confirmed
+    // for tomorrow afternoon has an `endTime` comfortably in the future, so at half past
+    // three in the morning the ticket went to somebody who is not at the event — and was
+    // marked DISPATCHED, which stops anybody else looking at it.
+    const tomorrow = await volunteerAccount('Tomorrow Tam');
+    const later = await shiftFrom(20 * 3600_000, 24 * 3600_000, 'Tomorrow afternoon');
+    await Registration.create({
+      shiftId: later._id, volunteerId: tomorrow._id,
+      status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('future'),
+    });
+
+    const t = await ticket();
+    await expect(SOSService.dispatchNearestVolunteer(String(t._id))).rejects.toThrow(
+      /No on-duty volunteers available/i
+    );
+
+    // A volunteer whose shift starts within the grace is on duty — turning up early is the
+    // normal case, and the rule must not refuse somebody standing in the room.
+    const soon = await volunteerAccount('Soon Sol');
+    const starting = await shiftFrom(10 * 60_000, 4 * 3600_000, 'Starting shortly');
+    await Registration.create({
+      shiftId: starting._id, volunteerId: soon._id,
+      status: RegistrationStatus.CONFIRMED, idempotencyKey: uniqueKey('soon'),
+    });
+    const sent = await SOSService.dispatchNearestVolunteer(String(t._id));
+    expect(String(sent.dispatchedVolunteer._id)).toBe(String(soon._id));
+  });
+});
+
 describe('a reassigned ticket can be escalated again', () => {
   it('clears the escalation stamp, so the second silence is shouted about too', async () => {
     // The sweep looks for `{ status: DISPATCHED, escalatedAt: null }`. Reassignment cleared

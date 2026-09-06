@@ -6,9 +6,11 @@
  * a static event set when the upstream API is unreachable, which keeps the demo working
  * offline.
  *
- * The route is unauthenticated and rewrites `startTime`/`endTime` on existing shifts, so
- * an upstream schedule change can move a shift volunteers are already committed to
- * without re-validating their rest buffers. Gate it behind organiser auth before use.
+ * The route is organiser-only (`requireRole('ORGANIZER')` in `adonix.routes.ts`, effective
+ * in `required` mode and open only under the documented legacy-demo contract). It still
+ * rewrites `startTime`/`endTime` on existing shifts, so an upstream schedule change can move
+ * a shift volunteers are already committed to without re-validating their rest buffers —
+ * which is why it is an organiser action rather than an automatic one.
  */
 import { Request, Response, NextFunction } from 'express';
 import { AdonixSyncService } from '../services/adonixSync.service';

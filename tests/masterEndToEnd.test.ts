@@ -254,6 +254,31 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     // =========================================================================
     // SYSTEM 8: HACKER SOS EMERGENCY SPATIAL DISPATCH & IDEMPOTENT RESOLUTION
     // =========================================================================
+    // Somebody has to actually be on duty for a dispatch to mean anything.
+    //
+    // Ada's shift is over (she checked out in System 4) and everyone else's registration is
+    // for a shift hours away, so at this point in the simulation the floor is empty — and
+    // dispatch now says so, because a candidate pool with no clock in it used to answer this
+    // by sending the ticket to somebody whose shift was tomorrow. Alan holds HARDWARE, so he
+    // is the responder this ticket needs; putting him on a shift that is running is what the
+    // fixture always meant and never said.
+    const nightDesk = await Shift.create({
+      title: 'Overnight Hardware Bench',
+      description: 'On call for board failures',
+      category: ShiftCategory.MENTOR_SUPPORT,
+      location: 'SIEBEL_ATRIUM',
+      startTime: new Date(timestamp - 900000),  // started 15 minutes ago
+      endTime: new Date(timestamp + 5400000),   // runs another 90 minutes
+      capacity: 2,
+      filledSlots: 1,
+    });
+    await Registration.create({
+      shiftId: nightDesk._id,
+      volunteerId: volAlan._id,
+      status: RegistrationStatus.CHECKED_IN,
+      idempotencyKey: `sos_oncall_alan_${timestamp}`,
+    });
+
     // Hacker reports FPGA power failure at Siebel Basement Lab
     const ticket = await SOSService.createTicket({
       hackerName: 'Grace Hopper',
