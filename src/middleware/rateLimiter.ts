@@ -20,8 +20,9 @@
  *  (d) **IP ceiling**, 3,000/min over anonymous traffic only (`ipCeilingLimiter`) — the
  *      sum of (b)+(c) from one address. An anti-abuse stop, not a capacity control.
  *
- * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) skip the credential and
- * ceiling limiters: the venue is the one place a shared address is legitimately hot.
+ * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on
+ * the per-IP limiters, never an exemption: the venue is the one place a shared address is
+ * legitimately hot, but it is also where an attacker on the Wi-Fi sits.
  *
  * `TRUST_PROXY_HOPS` decides what "per IP" means. Left at 0 behind a proxy, every client
  * collapses into one bucket and the whole event shares a single allowance; `app.ts` sets

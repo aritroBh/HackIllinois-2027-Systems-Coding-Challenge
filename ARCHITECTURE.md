@@ -405,7 +405,7 @@ sequenceDiagram
     participant Cache as In-Memory Nonce Cache
 
     Vol->>Srv: POST /attendance/token { volunteerId, shiftId }
-    Note over Srv: 1. Calculate timeSlice = floor(timestamp / 30s)<br/>2. Generate 6-byte cryptographic random nonce<br/>3. Compute HMAC-SHA256(payload, secret)
+    Note over Srv: 1. Calculate timeSlice = floor(timestamp / 30s)<br/>2. Generate 96-bit (12-byte) cryptographic random nonce<br/>3. Compute HMAC-SHA256(payload, secret)
     Srv-->>Vol: Dynamic Token: payloadBase64.signatureHex (TTL: 30s)
     Vol->>Vol: Render Dynamic Animated SVG QR Code
 

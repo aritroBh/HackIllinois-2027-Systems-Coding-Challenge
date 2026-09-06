@@ -6,10 +6,9 @@
  * that the cycle finder can weave into a multi-party rotation. `desiredShiftIds` carries
  * the outgoing edges of that graph.
  *
- * `acceptSwapSchema` takes the accepting volunteer's id in the body. The service checks
- * that this person actually holds the target shift, but the id is caller-asserted — so
- * this authorises by claim, not by authenticated identity. Binding it to a session is
- * the outstanding hardening step.
+ * The acting volunteer (proposer or acceptor) is the session account, resolved by
+ * `resolveActorId`; the body ids below are legacy-mode fallbacks only and are ignored when
+ * a session is present, so nobody can act as someone else by naming them.
  */
 import { z } from 'zod';
 import { objectId } from './common';

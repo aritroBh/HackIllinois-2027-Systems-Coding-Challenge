@@ -8,6 +8,7 @@ import path from 'path';
 import request from 'supertest';
 import { app } from '../src/app';
 import { pack, loadPack, ContentPackError, toLocal, fromLocal, inBbox } from '../src/content/loader';
+import { env } from '../src/config/env';
 
 function copyPack(mutate: (dir: string) => void): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-'));
@@ -101,5 +102,19 @@ describe('content pack', () => {
     const file = await request(app).get('/dashboard/content/venues.json');
     expect(file.status).toBe(200);
     expect(file.body.SIEBEL_ATRIUM.latitude).toBeCloseTo(40.1138, 3);
+  });
+
+  it('GET /api/v1/content stays anonymous in required mode and sits behind the limiter stack', async () => {
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'required';
+    try {
+      const res = await request(app).get('/api/v1/content');
+      expect(res.status).toBe(200);
+      expect(res.headers['ratelimit-limit'] ?? res.headers['x-ratelimit-limit']).toBeDefined();
+      const gated = await request(app).get('/api/v1/shifts');
+      expect(gated.status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
   });
 });

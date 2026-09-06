@@ -41,7 +41,7 @@ import { streamEventsHandler } from './routes/v1/stats.routes';
 import { eventHub } from './common/sse/eventHub';
 import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
-import { pack, publicContent } from './content/loader';
+import { pack } from './content/loader';
 
 export const app: Application = express();
 
@@ -134,13 +134,6 @@ const legacyMutationAuth: typeof requireOrganizerAuth = (req, res, next) => {
   }
   requireOrganizerAuth(req, res, next);
 };
-
-// Public content descriptor: branding, venues, factions, monuments and the URLs of the pack
-// files. Anonymous by design (it is what the login screen renders from) and cacheable.
-app.get('/api/v1/content', (_req: Request, res: Response) => {
-  res.setHeader('Cache-Control', 'public, max-age=60');
-  res.status(200).json({ success: true, data: publicContent() });
-});
 
 // The live event stream is mounted BEFORE the API limiter: an open SSE connection is not
 // an API call and must never consume (or be refused by) the request budget. Identity still
