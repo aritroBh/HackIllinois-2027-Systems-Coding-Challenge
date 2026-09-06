@@ -6,6 +6,8 @@
  * easiest place in the system to be quietly wrong: every one of them passes for the ordinary
  * case, and each failure below is a shape somebody will produce by accident on the night.
  */
+import request from 'supertest';
+import { app } from '../src/app';
 import { Volunteer } from '../src/models/volunteer.model';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
@@ -108,5 +110,79 @@ describe('the daily fatigue limit counts every day a shift touches', () => {
     const overnight = await shiftAt('2027-02-28T04:00:00Z', 6, 'Short overnight');
     const res = await RegistrationService.reserveShift({ shiftId: String(overnight._id), volunteerId: String(vol._id), idempotencyKey: uniqueKey('ok') });
     expect(res.registration.status).toBe(RegistrationStatus.CONFIRMED);
+  });
+});
+
+describe('confirm-or-fail is reachable', () => {
+  it('answers SHIFT_FULL instead of a queue place when the caller asked not to be queued', async () => {
+    // `allowWaitlist` and the `SHIFT_FULL` branch have both been in the service from the
+    // start, and no HTTP caller could reach either: the Zod schema did not accept the field
+    // and the controller never forwarded it, so every request took the `true` default. A
+    // volunteer who wants the shift or nothing was given a queue place they did not ask for,
+    // and a documented 409 was unreachable code.
+    const holder = await volunteer('Holder Hal');
+    const asker = await volunteer('Asker Ada');
+    const shift = await Shift.create({
+      title: 'One seat', description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() + 3600_000), endTime: new Date(Date.now() + 7200_000),
+      capacity: 1, baseKarma: 10,
+    });
+    await RegistrationService.reserveShift({
+      shiftId: String(shift._id), volunteerId: String(holder._id), idempotencyKey: uniqueKey('hold'),
+    });
+
+    const refused = await request(app)
+      .post('/api/v1/registrations')
+      .set('idempotency-key', uniqueKey('noq'))
+      .send({ shiftId: String(shift._id), volunteerId: String(asker._id), allowWaitlist: false });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('SHIFT_FULL');
+    expect(await Registration.countDocuments({ shiftId: shift._id, volunteerId: asker._id })).toBe(0);
+
+    // The default is unchanged: a caller who says nothing is still queued.
+    const queued = await request(app)
+      .post('/api/v1/registrations')
+      .set('idempotency-key', uniqueKey('q'))
+      .send({ shiftId: String(shift._id), volunteerId: String(asker._id) });
+    expect(queued.status).toBe(201);
+    expect(queued.body.data.status).toBe(RegistrationStatus.WAITLISTED);
+  });
+});
+
+describe('the waitlist cascade tells a conflict apart from a failure', () => {
+  it('does not skip the head of the queue because the database blinked', async () => {
+    // The candidate probe caught everything and read every failure as "this person is busy".
+    // A replica-set stepdown, a dropped socket or a query timeout silently passed over the
+    // head of the queue — no log, no retry — and handed the seat to whoever was behind them.
+    // The person skipped never learns, and neither does anybody else, because the cascade
+    // then reports a perfectly ordinary promotion.
+    const leaver = await volunteer('Leaver Lou');
+    const first = await volunteer('First Fern');
+    const shift = await Shift.create({
+      title: 'Cascade desk', description: 'x', category: ShiftCategory.LOGISTICS, location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() + 3600_000), endTime: new Date(Date.now() + 7200_000),
+      capacity: 1, baseKarma: 10,
+    });
+    const held = await RegistrationService.reserveShift({
+      shiftId: String(shift._id), volunteerId: String(leaver._id), idempotencyKey: uniqueKey('lv'),
+    });
+    await RegistrationService.reserveShift({
+      shiftId: String(shift._id), volunteerId: String(first._id), idempotencyKey: uniqueKey('ft'),
+    });
+
+    const blip = jest
+      .spyOn(RegistrationService, 'assertNoScheduleConflicts')
+      .mockRejectedValue(new Error('connection 3 to 127.0.0.1:27017 closed'));
+
+    await expect(
+      RegistrationService.cancelRegistration(String(held.registration._id), String(leaver._id)),
+    ).rejects.toThrow(/connection 3/);
+    blip.mockRestore();
+
+    // The queue is intact — nobody was quietly passed over — and the seat went back to the
+    // shift rather than to the wrong volunteer.
+    const stillQueued = await Registration.findOne({ shiftId: shift._id, volunteerId: first._id });
+    expect(stillQueued!.status).toBe(RegistrationStatus.WAITLISTED);
+    expect((await Shift.findById(shift._id))!.filledSlots).toBe(0);
   });
 });

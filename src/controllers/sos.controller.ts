@@ -63,7 +63,7 @@ export class SOSController {
 
   public static async dispatchNearest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await SOSService.dispatchNearestVolunteer(req.params.id as string, { role: req.account?.role });
+      const result = await SOSService.dispatchNearestVolunteer(req.params.id as string, { id: req.account?.id, role: req.account?.role });
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);

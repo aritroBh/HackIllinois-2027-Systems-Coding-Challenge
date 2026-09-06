@@ -30,6 +30,9 @@ export class RegistrationController {
       const result = await RegistrationService.reserveShift({
         shiftId: req.body.shiftId,
         volunteerId: (onBehalf?.subjectId ?? resolveActorId(req)) as string,
+        // Absent means "queue me if the shift is full", which is what every client has
+        // always got. Only an explicit `false` asks for confirm-or-fail.
+        allowWaitlist: req.body.allowWaitlist,
         idempotencyKey,
       });
 

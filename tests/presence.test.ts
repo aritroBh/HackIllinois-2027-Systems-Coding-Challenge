@@ -359,7 +359,32 @@ describe('SOS dispatch prefers a live position', () => {
     const res = await v.post(`/api/v1/sos/tickets/${created.body.data._id}/dispatch`).set('X-CSRF-Token', csrf).send({});
     expect(res.status).toBe(200);
     expect(res.body.data.candidates).toEqual([]);
-    expect(res.body.data.distanceMeters % 10).toBe(0);
+
+    // Two properties, and the second is the one that matters.
+    //
+    // The bucket is coarser than the 20 m fuzz grid, so a range read off it cannot resolve a
+    // position more finely than the map already does. And the number is derived from the
+    // *published* position rather than rounded off the exact one: rounding an exact distance
+    // to 25 m still leaves an oracle — three tickets at three chosen points, three rounded
+    // ranges, and the true position falls out to within the bucket, with the fuzz bypassed
+    // and no exact-read audit row anywhere, because no exact position was ever returned.
+    const shown = res.body.data.distanceMeters as number;
+    expect(shown % 25).toBe(0);
+
+    // What the exact answer would have been. `at(37, 0)` is 37 m east of the ticket, so a
+    // number rounded from the exact distance could only be 25 or 50; the published position
+    // has been snapped to a 20 m grid and jittered, so it is free to be neither — and over
+    // the run of fuzz offsets it usually is.
+    const exactBucket = Math.round(37 / 25) * 25;
+    const live = presenceStore.nearestVolunteers(0, 0, 60_000, Date.now(), 5);
+    const me = live.find((p) => p.e.id === String(responder._id));
+    expect(me).toBeDefined();
+    expect(Math.round(me!.publishedDistanceM / 25) * 25).toBe(shown);
+    // The exact distance is what the store measured to `e.x/e.z`; it is not what was shown
+    // unless the fuzz happened to land in the same bucket, which is a coincidence and not
+    // the contract.
+    expect(Math.round(me!.distanceM)).toBe(37);
+    expect(exactBucket).toBe(25);
   });
 });
 

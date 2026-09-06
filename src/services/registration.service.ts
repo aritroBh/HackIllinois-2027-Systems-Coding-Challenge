@@ -155,12 +155,27 @@ export class RegistrationService {
     const idempotencyKey =
       params.idempotencyKey ||
       `idem_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+    /**
+     * This attempt's claim on the key, minted fresh every call.
+     *
+     * The key itself is the client's; this names the *server-side attempt* currently
+     * allowed to settle it. Every write that finishes a record is conditional on it, so a
+     * predecessor that stalled long enough to be stolen from can no longer overwrite the
+     * record it lost.
+     */
+    const attemptToken = crypto.randomUUID();
     // Hash over normalised ids: the same logical reservation must produce the same
     // fingerprint regardless of how the caller cased its ObjectIds, or a retry would
     // look like a different request and bypass the idempotency record entirely.
     const requestHash = crypto
       .createHash("sha256")
-      .update(`RESERVE:${shiftId.toLowerCase()}:${volunteerId.toLowerCase()}`)
+      // `allowWaitlist` is part of the fingerprint because it changes the outcome: the same
+      // key sent once with a queue place accepted and once without is two different
+      // requests, and replaying the first as the answer to the second would hand back a
+      // waitlist place to a caller who asked to be refused. The docblock above already
+      // promised that same-key-different-parameters is a conflict; with only the two ids in
+      // the hash, it was not.
+      .update(`RESERVE:${shiftId.toLowerCase()}:${volunteerId.toLowerCase()}:${allowWaitlist ? 'q' : 'noq'}`)
       .digest("hex");
 
     // 1. Atomic idempotency claim in a SINGLE round-trip. The previous
@@ -175,6 +190,7 @@ export class RegistrationService {
           userId: volunteerId,
           endpoint: "/api/v1/registrations",
           requestHash,
+          ownerToken: attemptToken,
           status: IdempotencyStatus.PENDING,
         },
       },
@@ -208,7 +224,7 @@ export class RegistrationService {
             status: IdempotencyStatus.PENDING,
             updatedAt: claimedDoc.updatedAt,
           },
-          { $set: { userId: volunteerId, requestHash } },
+          { $set: { userId: volunteerId, requestHash, ownerToken: attemptToken } },
           { new: true },
         );
         if (!stolen) {
@@ -254,8 +270,11 @@ export class RegistrationService {
     } catch (lockError) {
       // No request is in flight anymore, so release the key: without this,
       // the record would sit PENDING and block same-key retries for 24h.
+      // Only if this attempt still holds the key. A stalled predecessor that has since been
+      // stolen from must not mark the *stealer's* record FAILED — a same-key retry would
+      // then see a failure for a reservation that is on its way to being committed.
       await IdempotencyRecord.updateOne(
-        { key: idempotencyKey, status: IdempotencyStatus.PENDING },
+        { key: idempotencyKey, status: IdempotencyStatus.PENDING, ownerToken: attemptToken },
         { $set: { status: IdempotencyStatus.FAILED } },
       );
       throw lockError;
@@ -416,8 +435,12 @@ export class RegistrationService {
       };
 
       // 8. Commit Idempotency Record
+      // Fenced, for the mirror-image reason. A predecessor that stalled past the steal
+      // window and then finished would otherwise stamp its own response body over the
+      // record the stealer now owns, and the stealer's client would replay somebody else's
+      // reservation from its own key.
       await IdempotencyRecord.updateOne(
-        { key: idempotencyKey },
+        { key: idempotencyKey, ownerToken: attemptToken },
         {
           $set: {
             status: IdempotencyStatus.COMMITTED,
@@ -670,7 +693,19 @@ export class RegistrationService {
         for (const candidate of waitlistedCandidates) {
           if (!shiftDoc) break;
 
-          // Verify candidate has no schedule conflicts
+          // Verify candidate has no schedule conflicts.
+          //
+          // Only a *conflict* skips a candidate. A bare `catch` here read every failure as
+          // "this person is busy": a replica-set stepdown, a dropped socket, a slow query
+          // hitting its timeout — each one silently passed over the head of the queue, with
+          // no log and no retry, and handed the seat to whoever was behind them. The person
+          // skipped never learns it happened, and neither does anybody else, because the
+          // cascade then reports a perfectly ordinary promotion.
+          //
+          // `assertNoScheduleConflicts` signals a real clash with `ApiError.conflict`, and
+          // that is the only thing this treats as one. Anything else rethrows into the outer
+          // `catch`, which releases the held seat and surfaces the failure to the caller —
+          // the seat goes back to the shift rather than to the wrong volunteer.
           let hasConflict = false;
           try {
             await this.assertNoScheduleConflicts(
@@ -679,7 +714,8 @@ export class RegistrationService {
               shiftDoc.endTime,
               shiftId,
             );
-          } catch {
+          } catch (probeError) {
+            if (!(probeError instanceof ApiError) || probeError.statusCode !== 409) throw probeError;
             hasConflict = true;
           }
 
@@ -822,11 +858,29 @@ export class RegistrationService {
       status: RegistrationStatus.WAITLISTED,
     }).sort({ waitlistPosition: 1, createdAt: 1 });
 
+    // Conditional on the row still being in the queue it is being renumbered inside.
+    //
+    // Reindexing is a read-all followed by a write-each, and between the two a concurrent
+    // cascade can promote a row to CONFIRMED or a concurrent cancel can retire it. An
+    // unconditional write then stamps a waitlist position onto a row that has left the
+    // waitlist — a confirmed volunteer carrying `waitlistPosition: 3`, which the next
+    // cascade's `sort({ waitlistPosition: 1 })` reads as queue order.
+    //
+    // (Mongoose sends a delta for a loaded document, so `save()` did not write the stale
+    // `status` back over the concurrent change — the promotion survived. The position did
+    // not, and that is enough to promote the wrong person next time.)
+    //
+    // At-most-once is the right side to err on here as everywhere else in this file: a row
+    // that misses a renumbering keeps a position that is merely too high, and the next
+    // cancel reindexes again. A row that is renumbered after leaving the queue corrupts the
+    // order for everybody behind it.
     for (let i = 0; i < remaining.length; i++) {
       const targetPos = i + 1;
       if (remaining[i].waitlistPosition !== targetPos) {
-        remaining[i].waitlistPosition = targetPos;
-        await remaining[i].save();
+        await Registration.updateOne(
+          { _id: remaining[i]._id, status: RegistrationStatus.WAITLISTED },
+          { $set: { waitlistPosition: targetPos } },
+        );
       }
     }
   }

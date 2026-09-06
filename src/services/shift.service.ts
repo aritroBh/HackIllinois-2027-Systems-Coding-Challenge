@@ -19,6 +19,7 @@
 import { Types } from 'mongoose';
 import { Shift, IShift, ShiftCategory } from '../models/shift.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
+import { AccountContext } from '../common/types/account';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { SurgePricingEngine, ISurgeResult } from '../common/utils/surgePricing';
@@ -137,19 +138,51 @@ export class ShiftService {
   /**
    * Retrieves a single shift by ID with enriched surge calculations and roster.
    */
-  public static async getShiftById(id: string): Promise<Record<string, unknown>> {
+  public static async getShiftById(
+    id: string,
+    /**
+     * Who is asking. Staff see the roster; everybody else sees how many people are on it.
+     *
+     * This endpoint carries no middleware of its own, so before the parameter existed it
+     * handed the name, certifications, karma and prestige of every confirmed and waitlisted
+     * volunteer to any caller who could reach `GET /shifts/:id` — in `AUTH_MODE=required`,
+     * every signed-in hacker. `GET /registrations` is `requireVolunteerKind`-gated on the
+     * stated grounds that who is working which shift is staff information, and
+     * `GET /shifts/:id/roster` is lead-only and audited; this was the same disclosure with
+     * no gate at all, reachable by changing one path segment.
+     *
+     * Counts stay public deliberately. `filledSlots` and `waitlistCount` are already on the
+     * shift document, the dashboard's shift card only ever reads `.length` off these two
+     * arrays, and "eleven people are signed up" names nobody.
+     */
+    viewer?: AccountContext,
+  ): Promise<Record<string, unknown>> {
     const shift = await Shift.findById(id);
     if (!shift) {
       throw ApiError.notFound('Shift not found.', ErrorCode.SHIFT_NOT_FOUND);
     }
 
+    // Kind, not role: this is the same line `/registrations` draws. A volunteer needs to
+    // know who they are working the desk with; a hacker does not, and an anonymous caller
+    // in legacy mode certainly does not.
+    const staff = viewer?.kind === 'VOLUNTEER';
+
+    const detail = 'name certifications karmaPoints prestigeTier';
     const [confirmedRegs, waitlistedRegs] = await Promise.all([
-      Registration.find({ shiftId: new Types.ObjectId(id), status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } })
-        .populate('volunteerId', 'name certifications karmaPoints prestigeTier')
-        .sort({ confirmedAt: 1 }),
-      Registration.find({ shiftId: new Types.ObjectId(id), status: RegistrationStatus.WAITLISTED })
-        .populate('volunteerId', 'name certifications karmaPoints prestigeTier')
-        .sort({ waitlistPosition: 1 }),
+      staff
+        ? Registration.find({ shiftId: new Types.ObjectId(id), status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } })
+            .populate('volunteerId', detail)
+            .sort({ confirmedAt: 1 })
+        : Registration.find({ shiftId: new Types.ObjectId(id), status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } })
+            .select('_id status')
+            .sort({ confirmedAt: 1 }),
+      staff
+        ? Registration.find({ shiftId: new Types.ObjectId(id), status: RegistrationStatus.WAITLISTED })
+            .populate('volunteerId', detail)
+            .sort({ waitlistPosition: 1 })
+        : Registration.find({ shiftId: new Types.ObjectId(id), status: RegistrationStatus.WAITLISTED })
+            .select('_id status')
+            .sort({ waitlistPosition: 1 }),
     ]);
 
     const surge = SurgePricingEngine.calculate({

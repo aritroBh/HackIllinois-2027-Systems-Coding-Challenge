@@ -140,7 +140,7 @@ export class ShiftController {
 
   public static async getShiftById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const shift = await ShiftService.getShiftById(req.params.id as string);
+      const shift = await ShiftService.getShiftById(req.params.id as string, req.account);
       res.status(200).json({ success: true, data: shift });
     } catch (error) {
       next(error);

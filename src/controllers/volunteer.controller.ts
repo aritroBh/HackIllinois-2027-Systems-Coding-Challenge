@@ -75,8 +75,15 @@ export class VolunteerController {
       // a lead has a reason to ask for it. A caller who asks anyway gets the default rather
       // than an error, because refusing a widening parameter is a worse experience than
       // quietly giving the answer they were entitled to.
+      //
+      // A *proved* lead, not a claimed one. `isLeadOrAbove` reads the role off
+      // `req.account`, and in `AUTH_MODE=legacy` that context can come from a `volunteerId`
+      // the caller put in the query string — so `?kind=ALL&volunteerId=<any lead's id>`
+      // enumerated every attendee account, and account ids are public. `projectionFor`
+      // already draws this distinction correctly; this line did not. The `source` check is
+      // what makes the two agree.
       const asked = String(_req.query.kind ?? '').toUpperCase() === 'ALL';
-      const includeHackers = asked && isLeadOrAbove(_req.account);
+      const includeHackers = asked && _req.account?.source === 'session' && isLeadOrAbove(_req.account);
       const filter = includeHackers ? {} : { kind: AccountKind.VOLUNTEER };
       const volunteers = await Volunteer.find(filter).select(projectionFor(_req)).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: volunteers });

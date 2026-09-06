@@ -51,11 +51,40 @@ export interface ICreateSOSTicketDTO {
 /** A presence fix older than this is not a position any more; fall back to the venue. */
 const LIVE_POSITION_MAX_AGE_MS = 30_000;
 
+/**
+ * How long after a shift ends its holder is still a plausible responder.
+ *
+ * The candidate pool is every registration in a CHECKED_IN (or, failing that, CONFIRMED)
+ * state, and nothing ever asked *when*. Check-out is a thing volunteers forget, so a row
+ * stays CHECKED_IN indefinitely — and at three in the morning the nearest "on-duty"
+ * volunteer was somebody who went to bed at nine. The ticket is marked DISPATCHED, which
+ * stops anybody else looking at it, and the person in distress waits for a responder who is
+ * asleep. That is the worst failure this system has, and it came from a missing clause.
+ *
+ * Half an hour matches the check-in grace and the rest buffer: someone whose shift ended
+ * twenty minutes ago is plausibly still in the building; someone whose shift ended
+ * yesterday is not.
+ */
+const ON_DUTY_GRACE_MS = 30 * 60_000;
+
 /** Lead-or-above, the only role that may reassign, cancel a dispatched ticket, or see exact distances. */
 const isLeadRole = (role?: string): boolean => /SHIFT_LEAD|ORGANIZER|ADMIN/.test(role ?? '');
 
-/** Distances shown to non-leads are rounded to this, so they cannot be used to range. */
-const DISTANCE_BUCKET_M = 10;
+/**
+ * Distances shown to non-leads are rounded to this, so they cannot be used to range.
+ *
+ * Twenty-five metres, not ten, and measured against the *published* position rather than
+ * the exact one — the two go together. Dispatch is an exact reader, and it was quoting a
+ * distance derived from that exact position to a bucket finer than the twenty-metre fuzz
+ * grid. Anyone who can raise a ticket can choose its coordinates, and any volunteer can
+ * dispatch one: three tickets at three chosen points, three ranges good to ten metres, and
+ * a colleague's true position falls out by trilateration — the fuzz undone by arithmetic,
+ * with no exact-read audit row anywhere, because no exact position was ever *returned*.
+ *
+ * A bucket coarser than the fuzz cell, applied to a distance that already went through the
+ * fuzz, leaves the oracle no sharper than the map every player can see.
+ */
+const DISTANCE_BUCKET_M = 25;
 
 /** What a ticket offers when the creator names no figure. The pack's per-urgency ceiling caps it. */
 const DEFAULT_BOUNTY = 150;
@@ -151,7 +180,7 @@ export class SOSService {
    * calculates Haversine distance to the ticket coordinates,
    * and dispatches the closest volunteer.
    */
-  public static async dispatchNearestVolunteer(ticketId: string, viewer?: { role?: string }): Promise<{
+  public static async dispatchNearestVolunteer(ticketId: string, viewer?: { id?: string; role?: string }): Promise<{
     ticket: ISOSTicket;
     dispatchedVolunteer: Record<string, unknown>;
     distanceMeters: number | null;
@@ -168,14 +197,24 @@ export class SOSService {
     // shift but not yet scanned). Tiering preserves dispatch availability when
     // nobody has checked in yet, without the old fallback's fabricated 15m
     // telemetry (it assigned a random volunteer and reported a fake distance).
-    let activeRegs = await Registration.find({ status: RegistrationStatus.CHECKED_IN })
-      .populate('volunteerId')
-      .populate('shiftId');
+    // Still on duty *now*, not merely once. A registration with no shift attached is kept:
+    // an unresolvable reference is a data problem, and dropping the person because of it
+    // would silently shrink the pool for a reason that has nothing to do with them.
+    const dispatchNow = Date.now();
+    const stillOnDuty = (reg: { shiftId?: unknown }): boolean => {
+      const shift = reg.shiftId as unknown as IShift | null;
+      if (!shift || !shift.endTime) return true;
+      return new Date(shift.endTime).getTime() + ON_DUTY_GRACE_MS >= dispatchNow;
+    };
+
+    let activeRegs = (
+      await Registration.find({ status: RegistrationStatus.CHECKED_IN }).populate('volunteerId').populate('shiftId')
+    ).filter(stillOnDuty);
 
     if (activeRegs.length === 0) {
-      activeRegs = await Registration.find({ status: RegistrationStatus.CONFIRMED })
-        .populate('volunteerId')
-        .populate('shiftId');
+      activeRegs = (
+        await Registration.find({ status: RegistrationStatus.CONFIRMED }).populate('volunteerId').populate('shiftId')
+      ).filter(stillOnDuty);
     }
 
     if (activeRegs.length === 0) {
@@ -188,7 +227,7 @@ export class SOSService {
     // rather than silently dropping them. Hackers are never candidates, and an opted-out
     // volunteer simply falls back to their venue — opting out is honoured by dispatch too.
     const now = Date.now();
-    const live = new Map<string, { distanceM: number; ageMs: number }>();
+    const live = new Map<string, { distanceM: number; publishedDistanceM: number; ageMs: number }>();
     for (const p of presenceStore.nearestVolunteers(
       toLocal(ticket.coordinates.latitude, ticket.coordinates.longitude).x,
       toLocal(ticket.coordinates.latitude, ticket.coordinates.longitude).z,
@@ -196,12 +235,19 @@ export class SOSService {
       now,
       500
     )) {
-      live.set(p.e.id, { distanceM: p.distanceM, ageMs: p.ageMs });
+      live.set(p.e.id, { distanceM: p.distanceM, publishedDistanceM: p.publishedDistanceM, ageMs: p.ageMs });
     }
 
     type Candidate = {
       vol: IVolunteer;
+      /** Exact — ranking, and the lead's view. Never leaves this service un-coarsened for anyone else. */
       distanceMeters: number | null;
+      /**
+       * The same distance measured to the fuzzed position, for callers who are not entitled
+       * to an exact read. A venue estimate has no fuzz to apply and no person to expose —
+       * a venue centroid is on the map — so for those the two are the same number.
+       */
+      publishedDistanceMeters: number | null;
       positionSource: 'live' | 'venue' | 'unknown';
       ageMs: number | null;
     };
@@ -220,21 +266,29 @@ export class SOSService {
 
       const fix = live.get(String(vol._id));
       if (fix) {
-        candidates.push({ vol, distanceMeters: fix.distanceM, positionSource: 'live', ageMs: fix.ageMs });
+        candidates.push({
+          vol,
+          distanceMeters: fix.distanceM,
+          publishedDistanceMeters: fix.publishedDistanceM,
+          positionSource: 'live',
+          ageMs: fix.ageMs,
+        });
         continue;
       }
       const venueCoord = shift?.location ? resolveVenueCoordinates(shift.location) : null;
       if (venueCoord) {
+        const venueDistance = GeoEngine.haversineDistanceMeters(ticket.coordinates, venueCoord);
         candidates.push({
           vol,
-          distanceMeters: GeoEngine.haversineDistanceMeters(ticket.coordinates, venueCoord),
+          distanceMeters: venueDistance,
+          publishedDistanceMeters: venueDistance,
           positionSource: 'venue',
           ageMs: null,
         });
         continue;
       }
       // Unmappable venue and no live fix: still a person who could respond.
-      candidates.push({ vol, distanceMeters: null, positionSource: 'unknown', ageMs: null });
+      candidates.push({ vol, distanceMeters: null, publishedDistanceMeters: null, positionSource: 'unknown', ageMs: null });
     }
 
     // Live fixes first, then venue estimates, then unknown; distance within each tier.
@@ -247,12 +301,20 @@ export class SOSService {
     const winner = candidates[0];
     const bestCandidate: IVolunteer | null = winner ? winner.vol : null;
     const shortestDistance = winner?.distanceMeters ?? Infinity;
+    const shortestPublishedDistance = winner?.publishedDistanceMeters ?? Infinity;
 
     // One audit document per dispatch — never one per scanned cell (plan §A4). Written
     // even when no live fix was used: "we looked and found nobody publishing" is exactly
     // the kind of read the log exists to record.
     await PresenceAudit.create({
-      readerId: 'dispatch',
+      // Who read, not merely which subsystem. `docs/PRESENCE.md` promises the log answers
+      // "who read whom and why", and a literal `'dispatch'` answers the second half only —
+      // every dispatch in the event collapsed onto one indistinguishable reader, so the row
+      // could not tell an ordinary night from one volunteer dispatching tickets at chosen
+      // coordinates all evening. The subsystem is already in `reason`; this field is for the
+      // account that asked. It falls back to the literal when there is no session behind the
+      // call (the scheduler's own dispatches, and legacy-mode callers).
+      readerId: viewer?.id ?? 'dispatch',
       reason: 'dispatch',
       ticketId: String(ticket._id),
       candidatesScanned: candidates.length,
@@ -303,7 +365,7 @@ export class SOSService {
         volunteerName: bestCandidate.name,
         // Coarsened even here: the hub drops this field for ordinary subscribers, but a
         // lead-visible frame is not a reason to put an exact range on the wire.
-        distanceMeters: coarsen(shortestDistance),
+        distanceMeters: coarsen(shortestPublishedDistance),
         positionSource: winner!.positionSource,
         venueKey: dispatchVenue.matched ? dispatchVenue.key : null,
       },
@@ -319,11 +381,11 @@ export class SOSService {
         role: bestCandidate.role,
         faction: (bestCandidate as { faction?: unknown }).faction,
       } as Record<string, unknown>,
-      // Coarsened to 10 m for an ordinary caller: an exact metre distance from a chosen
-      // point is a ranging oracle, and repeated across tickets it trilaterates a live
-      // position that the fuzzed wire deliberately withholds. Leads already read exact
-      // positions through the audited `GET /presence`.
-      distanceMeters: isLead ? shortestDistance : coarsen(shortestDistance),
+      // Exact for a lead, who is an entitled reader and whose read is audited below;
+      // fuzz-derived and bucketed for everybody else. See DISTANCE_BUCKET_M for why the
+      // ordinary caller's number is measured to the published position rather than merely
+      // rounded off the exact one.
+      distanceMeters: isLead ? shortestDistance : coarsen(shortestPublishedDistance),
       positionSource: winner!.positionSource,
       positionAgeMs: winner!.ageMs,
       /**
@@ -449,7 +511,21 @@ export class SOSService {
     if (!isLeadRole(actor.role)) throw ApiError.forbidden('Only a lead can reassign a ticket.');
     return SOSService.transition(ticketId, SOSTicketStatus.OPEN, actor, {
       note,
-      set: { assignedVolunteerId: null, dispatchedAt: null, acknowledgedAt: null, onSceneAt: null },
+      // `escalatedAt` clears with the rest of them.
+      //
+      // The sweep finds a stale ticket with `{ status: DISPATCHED, escalatedAt: null }`, so a
+      // ticket that escalated once, was reassigned, and was then ignored all over again could
+      // never escalate a second time — the field it is filtered on still held the first
+      // escalation's timestamp. Reassignment exists precisely because the first responder did
+      // not come; leaving the ticket permanently unable to shout about the second one is the
+      // opposite of what it is for.
+      set: {
+        assignedVolunteerId: null,
+        dispatchedAt: null,
+        acknowledgedAt: null,
+        onSceneAt: null,
+        escalatedAt: null,
+      },
     });
   }
 
@@ -616,13 +692,21 @@ export class SOSService {
     // almost always computed it by mistake — so an unrewarded ticket has to be handled here
     // instead of there. It still resolves, and the responder still gets the badge below: the
     // work was done whether or not anybody was able to attach a reward to it.
+    // What was actually granted, not what was asked for. The daily SOS cap can clamp this
+    // to less than the bounty (and to zero once it is spent), and the broadcast below used
+    // to report the bounty regardless — so a responder past their cap was told they had
+    // earned 150 while their balance did not move. Every other payout in the system
+    // propagates the granted figure; this one did not, and a wire that disagrees with the
+    // ledger is how a support queue fills up on the night.
+    let grantedKarma = 0;
     if (resolved.karmaBounty > 0) {
-      await KarmaService.awardKarma(earnerId, resolved.karmaBounty, KarmaSource.SOS, {
+      const payout = await KarmaService.awardKarma(earnerId, resolved.karmaBounty, KarmaSource.SOS, {
         ticketId: String(resolved._id),
         // Who closed it, when that is not who earned it. A lead closing on somebody's behalf
         // is a normal thing to do and the ledger should say so.
         ...(earnerId === volunteerId ? {} : { resolvedBy: volunteerId }),
       });
+      grantedKarma = payout.awarded;
     }
     const vol = await Volunteer.findById(earnerId);
 
@@ -654,7 +738,7 @@ export class SOSService {
       karmaBounty: resolved.karmaBounty,
       volunteerId,
       volunteerName: vol ? vol.name : 'Volunteer',
-      karmaAwarded: resolved.karmaBounty,
+      karmaAwarded: grantedKarma,
       totalKarma: vol ? vol.karmaPoints : 0,
     };
     eventHub.broadcast({ type: 'SOS_TICKET_RESOLVED', data: resolvedSummary });

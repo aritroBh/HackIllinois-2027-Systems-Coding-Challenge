@@ -596,8 +596,8 @@ export class PresenceStore {
    * Exact nearest on-duty, opted-in volunteers to a point — the dispatch query. Ring
    * expansion over the cell grid; hackers are never candidates. The caller audits once.
    */
-  nearestVolunteers(x: number, z: number, maxAgeMs: number, nowMs: number = Date.now(), limit = 10): Array<{ e: PresenceEntry; distanceM: number; ageMs: number }> {
-    const out: Array<{ e: PresenceEntry; distanceM: number; ageMs: number }> = [];
+  nearestVolunteers(x: number, z: number, maxAgeMs: number, nowMs: number = Date.now(), limit = 10): Array<{ e: PresenceEntry; distanceM: number; publishedDistanceM: number; ageMs: number }> {
+    const out: Array<{ e: PresenceEntry; distanceM: number; publishedDistanceM: number; ageMs: number }> = [];
     const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
     const cx = Math.floor(x / s), cz = Math.floor(z / s);
     // Bounded by the campus, not by hope: an event with two on-duty volunteers must terminate,
@@ -676,7 +676,19 @@ export class PresenceStore {
           if (ageMs > maxAgeMs) continue;
           // Ranking uses the EXACT position, never the fuzzed one the grid indexes by. The
           // cell is only a search structure; dispatch is one of the two audited exact reads.
-          out.push({ e, distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit, ageMs });
+          //
+          // `publishedDistanceM` is the same measurement taken against the position everybody
+          // else already sees. It exists because a *range* to an exact position is an exact
+          // read wearing a number: quote it finely enough, from three chosen points, and the
+          // fuzz is arithmetic to undo. Callers who are entitled to the exact read take
+          // `distanceM`; callers who are not take this, and learn nothing the fuzzed map
+          // did not already show them.
+          out.push({
+            e,
+            distanceM: Math.hypot(e.x - x, e.z - z) * this.cfg.metersPerUnit,
+            publishedDistanceM: Math.hypot(e.fx - x, e.fz - z) * this.cfg.metersPerUnit,
+            ageMs,
+          });
         }
       }
 

@@ -26,6 +26,17 @@ export const reserveShiftSchema = z.object({
     volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
     /** Act-on-behalf: a signed-in lead+ signing this volunteer up. Ignored for everyone else. */
     onBehalfVolunteerId: objectId('Invalid Volunteer ObjectId').optional(),
+    /**
+     * Confirm-or-fail. `false` asks for a seat and nothing else: a full shift answers 409
+     * `SHIFT_FULL` instead of adding the caller to the queue.
+     *
+     * The service has always had this parameter and the `SHIFT_FULL` branch to go with it,
+     * and no HTTP caller could reach either — the schema did not accept the field and the
+     * controller did not forward it, so every request defaulted to `true` and a full shift
+     * always waitlisted. A volunteer who wants the shift or nothing was given a queue place
+     * they did not ask for, and the documented error was unreachable code.
+     */
+    allowWaitlist: z.boolean().optional(),
   }),
   headers: z.object({
     'idempotency-key': z.string().min(8, 'idempotency-key header must be at least 8 characters').optional(),

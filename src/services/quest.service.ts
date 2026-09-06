@@ -354,6 +354,7 @@ export class QuestService {
     // paid again, bounded only by the daily QUEST cap. The docblock at the top of this file
     // says the reward is exactly-once; this is what makes that true rather than usually true.
     let paid = false;
+    let grantedKarma = 0;
     try {
       if (quest.reward.karma > 0) {
         const award = await KarmaService.awardKarma(accountId, quest.reward.karma, KARMA_SOURCE, {
@@ -361,6 +362,7 @@ export class QuestService {
           windowKey: won.windowKey,
         });
         paid = award.awarded > 0;
+        grantedKarma = award.awarded;
       }
       if (quest.reward.sticker) {
         await StickerService.award(accountId, quest.reward.sticker, `QUEST:${quest.id}`);
@@ -387,7 +389,15 @@ export class QuestService {
         questId: quest.id,
         title: quest.title,
         windowKey: won.windowKey,
-        karma: quest.reward.karma,
+        // Granted, not advertised. The daily QUEST cap can clamp a 400-karma quest to the
+        // remainder — or to nothing — and announcing the reward regardless told the player
+        // they had been paid four hundred while their balance did not move. Checkout, gym,
+        // HackStop and booth all put the granted figure on the wire; this was the one that
+        // put the price tag there instead.
+        karma: grantedKarma,
+        // What the quest was worth, so a capped player can see why the two differ rather
+        // than concluding the number is simply wrong.
+        karmaOffered: quest.reward.karma,
         sticker: quest.reward.sticker ?? null,
       },
     });

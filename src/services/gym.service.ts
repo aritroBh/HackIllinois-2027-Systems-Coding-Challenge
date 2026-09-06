@@ -105,7 +105,26 @@ export class GymService {
         );
       }
       if (!volunteer.faction) {
-        await Volunteer.findByIdAndUpdate(volunteerId, { $set: { faction: volunteerFaction } });
+        // Conditional on the account still being unbound. Two first-ever battles declaring
+        // different factions both read `faction == null` and both wrote; the second write
+        // won, so one of the two accounts fought a whole battle for a side it was not, in
+        // the end, on. The filter makes the binding itself the claim: the loser sees the
+        // winner's faction and takes the mismatch branch, which is exactly what a second
+        // request with a different faction is supposed to get.
+        const bound = await Volunteer.findOneAndUpdate(
+          { _id: volunteerId, $or: [{ faction: null }, { faction: { $exists: false } }] },
+          { $set: { faction: volunteerFaction } },
+          { new: true }
+        );
+        if (!bound) {
+          const settled = await Volunteer.findById(volunteerId).select('faction');
+          if (settled?.faction && settled.faction !== volunteerFaction) {
+            throw ApiError.conflict(
+              `Faction allegiance locked to ${settled.faction}. Cannot battle as ${volunteerFaction}.`,
+              ErrorCode.FACTION_ALLEGIANCE_LOCKED
+            );
+          }
+        }
       }
     }
 

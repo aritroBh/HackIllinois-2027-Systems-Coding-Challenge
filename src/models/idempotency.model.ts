@@ -27,6 +27,19 @@ export interface IIdempotencyRecord extends Document {
   userId: string;
   endpoint: string;
   requestHash: string;
+  /**
+   * Which *attempt* currently owns this key.
+   *
+   * A key can change hands: an owner that stalls for more than two minutes is presumed dead
+   * and a second caller steals the record so a crash cannot poison the key for the full
+   * twenty-four hours. Without a token naming the attempt, the settle writes could not tell
+   * which of them they belonged to — the stalled owner finishing late would stamp its own
+   * result over the stealer's, and the stealer's failure path would mark a committed record
+   * FAILED, so two same-key retries could see success and then failure. A fresh token per
+   * acquisition makes every settle write conditional on still holding the key, which is the
+   * same fence the per-volunteer reservation lock uses.
+   */
+  ownerToken: string;
   status: IdempotencyStatus;
   responseStatusCode?: number;
   responseBody?: unknown;
@@ -40,6 +53,9 @@ const IdempotencySchema = new Schema<IIdempotencyRecord>(
     userId: { type: String, required: true },
     endpoint: { type: String, required: true },
     requestHash: { type: String, required: true },
+    // Not required: records written before this field existed have none, and a settle that
+    // matches on `ownerToken: undefined` still behaves correctly for them.
+    ownerToken: { type: String },
     status: {
       type: String,
       enum: Object.values(IdempotencyStatus),
