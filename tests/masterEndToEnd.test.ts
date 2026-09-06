@@ -45,11 +45,15 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       karmaPoints: 100,
     });
 
-    const shift1Start = new Date(timestamp + 3600000); // T+1h
-    const shift1End = new Date(timestamp + 7200000);   // T+2h
+    // The shift is in progress, not upcoming. Check-in is only accepted within half an hour
+    // either side of a shift (checkin.service.ts), and this simulation scans a token in the
+    // same breath as it creates the shift — a fixture that starts an hour from now would be
+    // refused for the time before the geofence it is actually testing ever ran.
+    const shift1Start = new Date(timestamp - 600000);  // T-10m: started, still running
+    const shift1End = new Date(timestamp + 3000000);   // T+50m
 
-    const shiftConflictStart = new Date(timestamp + 7500000); // T+2h 5m (Breaks 30m buffer!)
-    const shiftConflictEnd = new Date(timestamp + 11100000);
+    const shiftConflictStart = new Date(timestamp + 3300000); // 5m after shift 1 ends (breaks the 30m buffer!)
+    const shiftConflictEnd = new Date(timestamp + 6900000);
 
     const testShift1 = await Shift.create({
       title: 'Midnight Snack Distribution',

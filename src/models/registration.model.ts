@@ -31,10 +31,10 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
  *
  * Two different subsets matter, and conflating them is easy:
  *
- *   - **Index-active** (CONFIRMED, WAITLISTED, CHECKED_IN, SWAP_PENDING) — the four states
- *     named in the partial unique index below. One row per (shift, volunteer) across all
- *     four. CANCELLED and COMPLETED are excluded so a volunteer can re-register for a
- *     shift they previously cancelled.
+ *   - **Index-active** (CONFIRMED, WAITLISTED, CHECKED_IN, SWAP_PENDING, COMPLETED) — the
+ *     five states named in the partial unique index below. One row per (shift, volunteer)
+ *     across all five. CANCELLED alone is excluded, so a volunteer can re-register for a
+ *     shift they previously cancelled — but not for one they already worked.
  *   - **Schedule-occupying** (CONFIRMED, CHECKED_IN, SWAP_PENDING) — the three states
  *     `assertNoScheduleConflicts` treats as claiming the volunteer's time. WAITLISTED is
  *     deliberately absent: a queue position is not an assignment, so a volunteer may sit
@@ -105,9 +105,15 @@ const RegistrationSchema = new Schema<IRegistration>(
  * insert. This partial unique index makes the second insert fail with duplicate-key
  * error 11000, which `errorHandler` maps to a 409.
  *
- * The partial filter is what makes re-registration possible: only the four active
- * states participate, so a CANCELLED row does not block a volunteer from signing up
- * for that shift again.
+ * The partial filter is what makes re-registration possible after a CANCELLED row: a
+ * volunteer who drops out and changes their mind can sign up again.
+ *
+ * COMPLETED is IN the filter, and that is the difference between "I withdrew" and "I already
+ * did this". Excluding it let a volunteer who had worked a shift and been paid for it register
+ * for the same shift again while it was still open, mint a fresh QR token, check in, check out
+ * and be paid a second time — with `filledSlots` incremented again each round, permanently
+ * consuming a seat somebody else could have taken. Cancelling is a change of mind; finishing
+ * is not something you can do twice.
  */
 RegistrationSchema.index(
   { shiftId: 1, volunteerId: 1 },
@@ -120,6 +126,7 @@ RegistrationSchema.index(
           RegistrationStatus.WAITLISTED,
           RegistrationStatus.CHECKED_IN,
           RegistrationStatus.SWAP_PENDING,
+          RegistrationStatus.COMPLETED,
         ],
       },
     },

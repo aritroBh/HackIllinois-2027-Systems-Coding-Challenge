@@ -597,7 +597,19 @@ export class SOSService {
     }
 
     // Award karma bounty atomically ($inc — concurrent resolves can't lost-update).
-    await Volunteer.updateOne({ _id: new Types.ObjectId(volunteerId) }, { $addToSet: { badges: 'FIRST_RESPONDER' } });
+    // The bounty follows the WORK, not the click.
+    //
+    // A lead may resolve a ticket on behalf of the volunteer it was dispatched to — somebody
+    // has to close a call when the responder's phone is dead — and the payout named the
+    // caller, so the lead collected the responder's bounty and the responder got nothing.
+    // Silently, and in favour of the person with the power to do it, which is the worst
+    // direction for a mistake like this to point.
+    //
+    // The earner is the assignee when there is one, and otherwise whoever resolved an
+    // unclaimed ticket, which is the case the OPEN path is for.
+    const earnerId = resolved.assignedVolunteerId ? String(resolved.assignedVolunteerId) : volunteerId;
+
+    await Volunteer.updateOne({ _id: new Types.ObjectId(earnerId) }, { $addToSet: { badges: 'FIRST_RESPONDER' } });
     // A zero bounty pays nothing, and asking to award nothing is an error rather than a no-op.
     //
     // `awardKarma` refuses a non-positive amount on purpose — a caller who computes zero has
@@ -605,9 +617,14 @@ export class SOSService {
     // instead of there. It still resolves, and the responder still gets the badge below: the
     // work was done whether or not anybody was able to attach a reward to it.
     if (resolved.karmaBounty > 0) {
-      await KarmaService.awardKarma(volunteerId, resolved.karmaBounty, KarmaSource.SOS, { ticketId: String(resolved._id) });
+      await KarmaService.awardKarma(earnerId, resolved.karmaBounty, KarmaSource.SOS, {
+        ticketId: String(resolved._id),
+        // Who closed it, when that is not who earned it. A lead closing on somebody's behalf
+        // is a normal thing to do and the ledger should say so.
+        ...(earnerId === volunteerId ? {} : { resolvedBy: volunteerId }),
+      });
     }
-    const vol = await Volunteer.findById(volunteerId);
+    const vol = await Volunteer.findById(earnerId);
 
     // Recompute prestige tier from the new balance (single follow-up write; karma itself is already atomic).
     if (vol) {
@@ -619,7 +636,10 @@ export class SOSService {
 
     domainEvents.emit('sos.resolved', {
       ticketId: String(resolved._id),
-      resolverId: volunteerId,
+      // The person the quest economy should credit is the one who did the work, which is the
+      // same one the bounty went to. A lead closing a call on somebody's behalf must not
+      // advance the lead's quests either.
+      resolverId: earnerId,
       category: String(resolved.category),
       venueKey: resolveVenue(resolved.tableLocation).key,
     });

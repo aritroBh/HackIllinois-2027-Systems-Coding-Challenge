@@ -281,7 +281,16 @@ export class RegistrationService {
         );
       }
 
-      // 3. Invariant I2: Check if user already holds an active registration for this shift
+      // 3. Invariant I2: does this volunteer already hold a row for this shift?
+      //
+      // The same five states as the partial unique index, COMPLETED included. This lookup is
+      // a courtesy that produces a readable message; the index is the guarantee, and the two
+      // must name the same set or the message says one thing while the write does another.
+      //
+      // COMPLETED is here because a shift you have already worked and been paid for is not a
+      // shift you can sign up for again. Without it a volunteer could work the same shift
+      // twice — a fresh QR token, a second check-out, a second payment — and consume a seat
+      // each time.
       const existingActiveReg = await Registration.findOne({
         shiftId: new Types.ObjectId(shiftId),
         volunteerId: new Types.ObjectId(volunteerId),
@@ -291,13 +300,16 @@ export class RegistrationService {
             RegistrationStatus.WAITLISTED,
             RegistrationStatus.CHECKED_IN,
             RegistrationStatus.SWAP_PENDING,
+            RegistrationStatus.COMPLETED,
           ],
         },
       });
 
       if (existingActiveReg) {
         throw ApiError.conflict(
-          `Volunteer is already registered for this shift with status: ${existingActiveReg.status}.`,
+          existingActiveReg.status === RegistrationStatus.COMPLETED
+            ? 'Volunteer has already worked this shift.'
+            : `Volunteer is already registered for this shift with status: ${existingActiveReg.status}.`,
           ErrorCode.ALREADY_REGISTERED,
         );
       }
@@ -890,34 +902,47 @@ export class RegistrationService {
     // falls at 6 p.m. locally, mid-shift. Hours are attributed by overlap so an overnight
     // shift splits across the two days it actually spans, instead of loading all of it onto
     // the first and leaving the second free. The zone maths is `Intl`, so no date library.
-    const { dayStart, dayEnd } = chicagoDayRange(newStart);
-    const overlapMs = (aStart: Date, aEnd: Date): number =>
-      Math.max(
-        0,
-        Math.min(aEnd.getTime(), dayEnd.getTime()) -
-          Math.max(aStart.getTime(), dayStart.getTime()),
-      );
+    // EVERY day the new shift touches, not only the one it starts on.
+    //
+    // The overlap split is what makes an overnight shift count against both days it spans, and
+    // checking only the start day threw half of that away: a volunteer with seven hours already
+    // booked on Saturday could add a shift running 22:00 Friday to 06:00 Saturday, whose six
+    // Saturday hours were never weighed against Saturday's total. Thirteen hours in a day, from
+    // a rule that exists precisely to stop that, and the comment above already described the
+    // behaviour this now has.
+    const days = [chicagoDayRange(newStart)];
+    const endDay = chicagoDayRange(newEnd);
+    if (endDay.dayStart.getTime() !== days[0].dayStart.getTime()) days.push(endDay);
 
-    let totalDurationMs = overlapMs(newStart, newEnd);
+    for (const { dayStart, dayEnd } of days) {
+      const overlapMs = (aStart: Date, aEnd: Date): number =>
+        Math.max(
+          0,
+          Math.min(aEnd.getTime(), dayEnd.getTime()) -
+            Math.max(aStart.getTime(), dayStart.getTime()),
+        );
 
-    for (const reg of activeRegs) {
-      const activeShift = reg.shiftId as unknown as IShift;
-      if (!activeShift || !activeShift.startTime || !activeShift.endTime)
-        continue;
+      let totalDurationMs = overlapMs(newStart, newEnd);
 
-      totalDurationMs += overlapMs(
-        new Date(activeShift.startTime),
-        new Date(activeShift.endTime),
-      );
-    }
+      for (const reg of activeRegs) {
+        const activeShift = reg.shiftId as unknown as IShift;
+        if (!activeShift || !activeShift.startTime || !activeShift.endTime)
+          continue;
 
-    if (totalDurationMs > MAX_DAILY_HOURS_MS) {
-      const hours = (totalDurationMs / (1000 * 3600)).toFixed(1);
-      throw ApiError.conflict(
-        `Daily fatigue limit exceeded: Adding this shift brings total daily volunteer time to ${hours} hours (Max: 8.0 hours).`,
-        ErrorCode.DAILY_FATIGUE_EXCEEDED,
-        { totalHoursRequested: hours, maxDailyHoursAllowed: 8.0 },
-      );
+        totalDurationMs += overlapMs(
+          new Date(activeShift.startTime),
+          new Date(activeShift.endTime),
+        );
+      }
+
+      if (totalDurationMs > MAX_DAILY_HOURS_MS) {
+        const hours = (totalDurationMs / (1000 * 3600)).toFixed(1);
+        throw ApiError.conflict(
+          `Daily fatigue limit exceeded: Adding this shift brings total daily volunteer time to ${hours} hours (Max: 8.0 hours).`,
+          ErrorCode.DAILY_FATIGUE_EXCEEDED,
+          { totalHoursRequested: hours, maxDailyHoursAllowed: 8.0 },
+        );
+      }
     }
   }
 
