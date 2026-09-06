@@ -195,6 +195,68 @@ describe('SOS lifecycle', () => {
   });
 });
 
+describe('the SOS journey, over HTTP, with two different people', () => {
+  it('walks all five states and pays the responder, not the raiser', async () => {
+    // The whole journey as two humans actually perform it, through the routes rather than the
+    // service. Every earlier SOS test drives one side of this; this is the one that would have
+    // caught a guard that refused the legitimate path as readily as the illegitimate one.
+    const hacker = await makeAccount({ name: 'Journey Jo', kind: AccountKind.HACKER, role: VolunteerRole.HACKER });
+    const responder = await makeAccount({ name: 'Journey Ravi' });
+    const raiser = await signIn(hacker.id);
+    const helper = await signIn(responder.id);
+
+    // Dispatch only considers people who are on shift, so put the responder on one. Without
+    // this the dispatch step refuses and the journey stops at its first move — which is the
+    // right behaviour and the wrong test.
+    const shift = await Shift.create({
+      title: 'Journey desk', description: 'x', category: ShiftCategory.LOGISTICS,
+      location: 'Siebel Center Atrium',
+      startTime: new Date(Date.now() - 3600_000), endTime: new Date(Date.now() + 3600_000),
+      capacity: 4, baseKarma: 10,
+    });
+    await Registration.create({
+      shiftId: shift._id, volunteerId: responder._id,
+      status: RegistrationStatus.CHECKED_IN, idempotencyKey: uniqueKey('journey'),
+    });
+
+    const created = await raiser.agent.post('/api/v1/sos/tickets').set('X-CSRF-Token', raiser.csrf).send({
+      hackerName: 'Journey Jo', tableLocation: 'Siebel Center Atrium',
+      description: 'raised by one, closed by another', urgency: 'HIGH', karmaBounty: 200,
+      coordinates: { latitude: 40.11380, longitude: -88.22470 },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.data.status).toBe(SOSTicketStatus.OPEN);
+    // Somebody was charged, so the reward stands.
+    expect(created.body.data.karmaBounty).toBe(200);
+    const id = created.body.data._id;
+
+    // The raiser cannot collect on their own call, even while it is OPEN and unclaimed.
+    const selfServe = await raiser.agent.post(`/api/v1/sos/tickets/${id}/resolve`).set('X-CSRF-Token', raiser.csrf).send({});
+    expect(selfServe.status).toBe(403);
+
+    for (const [step, expected] of [
+      ['dispatch', SOSTicketStatus.DISPATCHED],
+      ['acknowledge', SOSTicketStatus.ACKNOWLEDGED],
+      ['on-scene', SOSTicketStatus.ON_SCENE],
+      ['resolve', SOSTicketStatus.RESOLVED],
+    ] as Array<[string, SOSTicketStatus]>) {
+      const res = await helper.agent.post(`/api/v1/sos/tickets/${id}/${step}`).set('X-CSRF-Token', helper.csrf).send({});
+      // The step name is in the assertion so a future failure says which move was refused.
+      expect(`${step}:${res.status}`).toBe(`${step}:200`);
+      const after = await SOSTicket.findById(id);
+      expect(after!.status).toBe(expected);
+    }
+
+    // The responder is paid the bounty; the raiser is not.
+    expect((await Volunteer.findById(responder.id))!.karmaPoints).toBe(200);
+    expect((await Volunteer.findById(hacker.id))!.karmaPoints).toBe(0);
+    // And a second resolve is a clean conflict rather than a second payment.
+    const again = await helper.agent.post(`/api/v1/sos/tickets/${id}/resolve`).set('X-CSRF-Token', helper.csrf).send({});
+    expect(again.status).toBe(409);
+    expect((await Volunteer.findById(responder.id))!.karmaPoints).toBe(200);
+  });
+});
+
 describe('the SOS bounty cannot be paid to the person who raised the ticket', () => {
   it('refuses a creator resolving their own ticket, however it was raised', async () => {
     // The mint this closes: an OPEN ticket is deliberately resolvable by whoever gets there
