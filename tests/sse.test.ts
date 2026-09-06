@@ -317,6 +317,61 @@ describe('SSE hub v2', () => {
       expect(full).toEqual(ticket);
     });
 
+    it('a lead demoted mid-stream stops receiving the full ticket', async () => {
+      // `fullSos` and the channel set were decided once at connect and never revisited,
+      // while an SSE stream stays open for hours on a heartbeat. Revocation is checked on
+      // every *request*, and an open stream makes no more requests — so a lead who opened
+      // `?channels=sos`, was demoted, and left the tab open kept receiving un-redacted
+      // tickets, `SOS_ESCALATED_FULL` included. `src/presence/session.ts` states the
+      // invariant this violated: losing a privilege has to take effect immediately,
+      // including on an open stream.
+      const { Volunteer, VolunteerRole } = await import('../src/models/volunteer.model');
+      const { evictAccountCache } = await import('../src/middleware/identity');
+
+      const boss = await Volunteer.create({
+        name: 'Demoted Dana',
+        email: `dana-sse-${Date.now()}@illinois.edu`,
+        role: VolunteerRole.SHIFT_LEAD,
+      });
+      const id = String(boss._id);
+
+      const s = await stream('/events?channels=sos', { 'x-test-role': 'SHIFT_LEAD', 'x-test-account': id });
+      eventHub.broadcast({ type: 'SOS_TICKET_CREATED', data: ticket });
+      expect(JSON.parse((await s.next(isEvent)).data!)).toEqual(ticket);
+
+      await Volunteer.updateOne({ _id: boss._id }, { $set: { role: VolunteerRole.VOLUNTEER } });
+      evictAccountCache(id);
+      await eventHub.reauthorise();
+
+      eventHub.broadcast({ type: 'SOS_TICKET_CREATED', data: ticket });
+      const after = JSON.parse((await s.next(isEvent)).data!);
+      expect(after.coordinates).toBeUndefined();
+      expect(after.hackerName).toBeUndefined();
+      expect(after.tableLocation).toBeUndefined();
+      expect(after.ticketId).toBe('t1');
+    });
+
+    it('a revoked account is dropped from its open stream', async () => {
+      const { Volunteer, VolunteerRole } = await import('../src/models/volunteer.model');
+      const { evictAccountCache } = await import('../src/middleware/identity');
+
+      const gone = await Volunteer.create({
+        name: 'Revoked Rae',
+        email: `rae-sse-${Date.now()}@illinois.edu`,
+        role: VolunteerRole.SHIFT_LEAD,
+      });
+      const id = String(gone._id);
+      const s = await stream('/events?channels=sos', { 'x-test-role': 'SHIFT_LEAD', 'x-test-account': id });
+
+      // What `POST /auth/revoke/:id` does: bump the version every session is checked against.
+      await Volunteer.updateOne({ _id: gone._id }, { $inc: { sessionVersion: 1 } });
+      evictAccountCache(id);
+      await eventHub.reauthorise();
+
+      const evicted = await s.next((f) => f.event === 'EVICTED');
+      expect(JSON.parse(evicted.data!).reason).toBe('ACCESS_REVOKED');
+    });
+
     it('legacy mode keeps the anonymous stream open and unredacted, as today', async () => {
       const anon = await stream('/events?channels=sos');
       eventHub.broadcast({ type: 'SOS_TICKET_CREATED', data: ticket });

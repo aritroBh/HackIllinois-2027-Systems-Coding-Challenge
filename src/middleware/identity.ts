@@ -42,6 +42,22 @@ export function __clearAccountCache(): void {
 }
 
 /** Drop one account from the cache so a revocation on THIS instance is immediate. */
+/**
+ * Re-resolve an account's current role, kind and session version.
+ *
+ * Exported for long-lived connections, which are the one place the request-scoped identity
+ * middleware cannot help: an SSE stream authorises itself once at connect and can then stay
+ * open for hours. Reads through the same sixty-second cache as `attachIdentity`, so calling
+ * it once per heartbeat per client costs nothing beyond the first miss.
+ *
+ * Returns null when the account no longer exists.
+ */
+export async function refreshAccountContext(
+  accountId: string
+): Promise<Omit<AccountContext, 'source'> | null> {
+  return loadAccount(accountId, Date.now());
+}
+
 export function evictAccountCache(accountId: string): void {
   accountCache.delete(accountId);
 }
@@ -310,7 +326,10 @@ export function resolveOnBehalf(req: Request): { subjectId: string; delegatedBy:
   const body = req.body as Record<string, unknown> | undefined;
   const named = body?.onBehalfVolunteerId;
   if (typeof named !== 'string' || !OBJECT_ID_PATTERN.test(named)) return null;
-  if (named === account.id) return null;
+  // Case-insensitively: an ObjectId hex string compares equal to itself in either case, and
+  // a lead who typed their own id with capitals would otherwise be logged as delegating to
+  // themselves and take the on-behalf path for a self call.
+  if (named.toLowerCase() === account.id.toLowerCase()) return null;
   console.info(`[on-behalf] ${account.role} ${account.id} acting for ${named} on ${req.method} ${req.originalUrl}`);
   return { subjectId: named, delegatedBy: account.id };
 }

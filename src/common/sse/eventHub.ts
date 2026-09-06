@@ -56,6 +56,7 @@ import { env } from '../../config/env';
 import { AccountContext, isLeadOrAbove } from '../types/account';
 import { ErrorCode } from '../errors/errorCodes';
 import { streamLimits, SlotHandle } from '../streamLimits';
+import { refreshAccountContext } from '../../middleware/identity';
 
 export type Channel = 'ops' | 'sos' | 'game' | 'presence' | 'presence:exact' | 'announce' | 'me';
 
@@ -275,7 +276,12 @@ class SSEBroadcastHub {
       this.droppedUpTo.set(ch, 0);
     }
     if (process.env.NODE_ENV !== 'test') {
-      this.heartbeatInterval = setInterval(() => this.sweep(), HEARTBEAT_MS);
+      this.heartbeatInterval = setInterval(() => {
+        this.sweep();
+        // Re-authorisation rides the heartbeat rather than living inside `sweep`, which is
+        // synchronous and has tests that depend on it staying that way.
+        void this.reauthorise();
+      }, HEARTBEAT_MS);
       if (this.heartbeatInterval.unref) {
         this.heartbeatInterval.unref();
       }
@@ -399,6 +405,75 @@ class SSEBroadcastHub {
     if (raw === undefined) return null;
     const n = Number(raw);
     return Number.isInteger(n) && n >= 0 ? n : null;
+  }
+
+  /**
+   * Re-check, on every heartbeat, that each client is still allowed what it was allowed at
+   * connect.
+   *
+   * `fullSos` and the channel set were computed once in `registerClient` and never revisited,
+   * while an SSE stream can stay open for hours on a heartbeat. So a SHIFT_LEAD who opened
+   * `?channels=sos`, was then demoted or had their sessions revoked, and simply left the tab
+   * open, went on receiving un-redacted tickets — `SOS_ESCALATED_FULL` puts the whole
+   * document on that channel, coordinates, description, hacker name and table included.
+   * Revocation is checked on every *request*, and this connection makes no more requests.
+   *
+   * `src/presence/session.ts` states this invariant plainly — losing a privilege has to take
+   * effect immediately, including on an open stream — and the presence WebSocket honours it
+   * by re-reading its facts each tick. This is the other half.
+   *
+   * Reads go through the identity module's sixty-second cache, so the steady-state cost is a
+   * map lookup per client per heartbeat.
+   */
+  public async reauthorise(): Promise<void> {
+    const mode = authMode();
+    // A snapshot, because a client can be removed while we await.
+    for (const client of [...this.clients.values()]) {
+      const previous = client.account;
+      if (!previous) continue;
+      if (!this.clients.has(client.id)) continue;
+
+      let current: Awaited<ReturnType<typeof refreshAccountContext>>;
+      try {
+        current = await refreshAccountContext(previous.id);
+      } catch {
+        // A database blip is not evidence that anybody lost a privilege. Leave the client
+        // as it is and re-check on the next heartbeat.
+        continue;
+      }
+      if (!this.clients.has(client.id)) continue;
+
+      // Deleted, or every session revoked since this stream opened.
+      if (!current || current.sessionVersion !== previous.sessionVersion) {
+        this.writeControl(client, 'EVICTED', {
+          reason: 'ACCESS_REVOKED',
+          message: 'Your access changed. Reconnect to continue.',
+        });
+        client.res.end();
+        this.removeClient(client);
+        continue;
+      }
+
+      client.account = { ...current, source: previous.source };
+
+      // Redaction follows the role as it is now, not as it was at connect.
+      client.fullSos = isLeadOrAbove(client.account) || (mode === 'legacy' && false);
+
+      // And a channel the account may no longer join is dropped from under it.
+      for (const ch of [...client.channels]) {
+        if (this.mayJoin(ch, client.account, mode)) continue;
+        client.channels.delete(ch);
+        this.byChannel.get(ch)?.delete(client);
+      }
+      if (client.channels.size === 0) {
+        this.writeControl(client, 'EVICTED', {
+          reason: 'ACCESS_REVOKED',
+          message: 'You no longer have access to any of the channels this stream carried.',
+        });
+        client.res.end();
+        this.removeClient(client);
+      }
+    }
   }
 
   private removeClient(client: IClient): void {
