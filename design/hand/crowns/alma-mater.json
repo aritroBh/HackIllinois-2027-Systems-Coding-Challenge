@@ -1,0 +1,19 @@
+{
+  "_note": "Alma centre with her arms out before a klismos throne; Learning left and Labor right, standing behind it with their hands clasped over the throne back. Restored to bare bronze in 2014, so no patina. Floodlit from the four corners of the granite plinth. The synthesised footprint is 20 m square, so world units read directly here.",
+  "kind": "statue",
+  "ops": [
+    { "op": "box", "from": "ground", "u": 0, "v": 0, "y": 0, "w": 2.1, "d": 1.5, "h": 0.6, "mat": "granite" },
+    { "op": "box", "from": "ground", "u": 0, "v": 0, "y": 0.6, "w": 1.55, "d": 1.05, "h": 0.32, "mat": "granite" },
+
+    { "op": "box", "from": "ground", "u": 0, "v": 0.48, "y": 0.92, "w": 1.35, "d": 0.42, "h": 1.13, "mat": "bronze" },
+    { "op": "box", "from": "ground", "u": 0, "v": 0.54, "y": 2.05, "w": 1.47, "d": 0.3, "h": 0.18, "mat": "bronze" },
+
+    { "op": "figure", "from": "ground", "u": 0, "v": -0.08, "y": 0.92, "h": 3.03, "arms": 1, "mat": "bronze" },
+    { "op": "figure", "from": "ground", "u": -0.93, "v": 0.68, "y": 0.92, "h": 2.78, "mat": "bronze" },
+    { "op": "figure", "from": "ground", "u": 0.93, "v": 0.68, "y": 0.92, "h": 2.78, "mat": "bronze" },
+    { "op": "box", "from": "ground", "u": 0, "v": 0.63, "y": 2.65, "w": 1.8, "d": 0.18, "h": 0.15, "mat": "bronze" },
+
+    { "op": "lights", "from": "ground", "u": -1.25, "v": -0.95, "u2": 1.25, "v2": -0.95, "count": 2, "y": 0.1, "size": 0.14, "k": 1.7 },
+    { "op": "lights", "from": "ground", "u": -1.25, "v": 0.95, "u2": 1.25, "v2": 0.95, "count": 2, "y": 0.1, "size": 0.14, "k": 1.7 }
+  ]
+}

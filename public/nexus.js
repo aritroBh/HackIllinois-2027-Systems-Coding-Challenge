@@ -308,7 +308,15 @@
     if (!activeTab) activeTab = document.querySelector('.tab-content.active')?.id || null;
     const list = visibleTabs();
     if (list.length === 0) return; // nothing registered yet: keep the static fallback buttons
-    if (!list.some((t) => t.id === activeTab)) activeTab = list[0].id;
+    // The active tab is gone (or was never one of ours). Reassigning the variable is not
+    // enough: a tab's section is created lazily by showTab, so simply pointing at the new
+    // id leaves the nav highlighting a panel that does not exist. Defer the switch so it
+    // happens after this nav render, then go through the real path.
+    if (!list.some((t) => t.id === activeTab)) {
+      const target = list[0].id;
+      activeTab = target;
+      queueMicrotask(() => { if (activeTab === target && !document.getElementById(target)?.classList.contains('active')) showTab(target); });
+    }
 
     host.setAttribute('role', 'tablist');
     host.replaceChildren(...list.map((def) => {

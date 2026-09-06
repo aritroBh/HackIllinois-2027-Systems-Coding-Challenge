@@ -1,0 +1,13 @@
+{
+  "_note": "Cubic Brutalist massing in dark red-brown brick: a tall fly tower at one end, a low reflective glass pavilion at the other, and the wide white limestone terrace stairs across the front.",
+  "kind": "hall",
+  "ops": [
+    { "op": "box", "u": 0.56, "v": -0.2, "y": 0, "w": "0.3L", "d": "0.45S", "h": 1.6, "mat": "brick" },
+
+    { "op": "box", "u": -0.5, "v": 0, "y": 0, "w": "0.3L", "d": "0.5S", "h": 0.5, "mat": "glass" },
+    { "op": "box", "u": -0.5, "v": 0, "y": 0.5, "w": "0.28L", "d": "0.48S", "h": 0.05, "mat": "lamp", "k": 0.6 },
+
+    { "op": "box", "from": "ground", "u": 0, "v": 1.15, "y": 0, "w": "0.7L", "d": 1.2, "h": 0.35, "mat": "limestoneBuff" },
+    { "op": "lights", "from": "ground", "u": -0.5, "v": 1.15, "u2": 0.5, "v2": 1.15, "count": 4, "y": 0.45, "size": 0.16, "k": 1.5 }
+  ]
+}

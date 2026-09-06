@@ -1,0 +1,15 @@
+{
+  "_note": "Red brick under a grey standing-seam metal hip roof, with the long curved skylight strip along the ridge, two brick chimneys, and a semicircular window in each gable. The 24-hour reading room stays lit.",
+  "kind": "tower",
+  "ops": [
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "1.0L", "d": "1.0S", "h": 0.12, "mat": "limestoneBuff" },
+    { "op": "spire4", "u": 0, "v": 0, "y": 0.12, "w": "0.96L", "d": "0.96S", "h": 0.9, "mat": "standingSeam" },
+    { "op": "box", "u": 0, "v": 0, "y": 0.5, "w": "0.6L", "d": 0.5, "h": 0.06, "mat": "glass", "k": 0.5 },
+
+    { "op": "box", "u": -0.72, "v": 0, "u2": 0.72, "v2": 0, "count": 2, "y": 0.5, "r": 0.15, "h": 0.7, "mat": "brick" },
+    { "op": "lights", "u": -0.98, "v": 0, "u2": 0.98, "v2": 0, "count": 2, "y": 0.25, "size": 0.26, "k": 1.0 },
+
+    { "op": "box", "u": 0, "v": 0, "y": "-0.3H", "w": "1.005L", "d": "1.005S", "h": 0.07, "mat": "lamp", "k": 0.35 },
+    { "op": "lights", "from": "ground", "u": -0.6, "v": 1.02, "u2": 0.6, "v2": 1.02, "count": 2, "y": 0.15, "size": 0.16, "k": 1.4 }
+  ]
+}

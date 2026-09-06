@@ -1,0 +1,10 @@
+{
+  "_note": "Red brick gymnasium with limestone coping and a low gable. The clerestory band around the main floor is what shows from outside once the hall is full.",
+  "kind": "hall",
+  "ops": [
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "1.0L", "d": "1.0S", "h": 0.12, "mat": "limestoneBuff" },
+    { "op": "spire4", "u": 0, "v": 0, "y": 0.12, "w": "0.98L", "d": "0.98S", "h": 0.5, "mat": "slate" },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.16H", "w": "1.005L", "d": "1.005S", "h": 0.16, "mat": "glass", "k": 0.4 },
+    { "op": "lights", "from": "ground", "u": -0.4, "v": 1.02, "u2": 0.4, "v2": 1.02, "count": 2, "y": 0.15, "size": 0.16, "k": 1.4 }
+  ]
+}

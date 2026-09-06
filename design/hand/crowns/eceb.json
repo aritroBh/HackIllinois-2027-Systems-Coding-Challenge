@@ -1,0 +1,16 @@
+{
+  "_note": "Net-zero glass hall wrapped in vertical terracotta rain-screen fins, with a steel roof deck carrying the solar array. The floor bands are cool, not sodium, so they take the glass material and glow in its own colour.",
+  "kind": "tower",
+  "ops": [
+    { "op": "box", "from": "ground", "u": -0.96, "v": -1.02, "u2": 0.96, "v2": -1.02, "count": 14, "y": 0.2, "w": 0.12, "d": 0.28, "h": ["1.0H", -0.3], "mat": "terracotta" },
+    { "op": "box", "from": "ground", "u": -0.96, "v": 1.02, "u2": 0.96, "v2": 1.02, "count": 14, "y": 0.2, "w": 0.12, "d": 0.28, "h": ["1.0H", -0.3], "mat": "terracotta" },
+
+    { "op": "box", "u": 0, "v": 0, "y": "-0.8H", "w": "0.98L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.35 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.6H", "w": "0.98L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.35 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.4H", "w": "0.98L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.35 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.2H", "w": "0.98L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.35 },
+
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "0.8L", "d": "0.7S", "h": 0.12, "mat": "concreteGrey" },
+    { "op": "box", "u": 0, "v": 0, "y": 0.12, "w": "0.5L", "d": "0.5S", "h": 0.05, "mat": "faction", "k": 0.35 }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "_note": "The bowl is U-shaped and open at the north, where the brick end pavilions stand; the horseshoe closes at the south. Grey-white stone colonnades run along both great halls, some two hundred columns in the real thing. Field green with Illini-orange end zones, and floodlight masts on both sidelines.",
+  "kind": "bowl",
+  "ops": [
+    { "op": "box", "from": "ground", "u": 0, "v": 0, "y": 0.1, "w": "0.44L", "d": "0.44S", "h": 0.05, "mat": "field" },
+    { "op": "box", "from": "ground", "u": -0.38, "v": 0, "u2": 0.38, "v2": 0, "count": 2, "y": 0.11, "w": "0.04L", "d": "0.3S", "h": 0.05, "mat": "terracotta", "k": 0.3 },
+
+    { "op": "ring", "from": "ground", "y": [0.096, "0.1H"], "w": "0.60L", "d": "0.60S", "mat": "limestoneBuff", "k": 0.08 },
+    { "op": "ring", "from": "ground", "y": [0.072, "0.2H"], "w": "0.72L", "d": "0.72S", "mat": "limestoneBuff", "k": 0.08 },
+    { "op": "ring", "from": "ground", "y": [0.048, "0.3H"], "w": "0.84L", "d": "0.84S", "mat": "limestoneBuff", "k": 0.08 },
+    { "op": "ring", "from": "ground", "y": [0.024, "0.4H"], "w": "0.92L", "d": "0.92S", "mat": "limestoneBuff", "k": 0.08 },
+    { "op": "ring", "from": "ground", "y": ["0.5H", 0.02], "w": "0.98L", "d": "0.98S", "mat": "lamp", "k": 0.55 },
+
+    { "op": "box", "from": "ground", "u": 0, "v": -1.06, "y": 0, "w": "0.84L", "d": 0.9, "h": "0.275H", "mat": "brick" },
+    { "op": "box", "from": "ground", "u": 0, "v": 1.06, "y": 0, "w": "0.84L", "d": 0.9, "h": "0.275H", "mat": "brick" },
+    { "op": "colonnade", "from": "ground", "u": -0.8, "v": -1.11, "u2": 0.8, "v2": -1.11, "count": 30, "y": 0, "r": 0.12, "h": "0.45H", "mat": "limestoneBuff" },
+    { "op": "colonnade", "from": "ground", "u": -0.8, "v": 1.11, "u2": 0.8, "v2": 1.11, "count": 30, "y": 0, "r": 0.12, "h": "0.45H", "mat": "limestoneBuff" },
+
+    { "op": "box", "from": "ground", "u": -1.04, "v": 0, "y": 0, "w": 1.8, "d": "0.7S", "h": "0.55H", "mat": "brick" },
+    { "op": "box", "from": "ground", "u": 1.0, "v": -1.0, "u2": 1.0, "v2": 1.0, "count": 2, "y": 0, "r": 0.8, "h": "0.475H", "mat": "brick" },
+
+    { "op": "horseshoe", "from": "ground", "ra": "0.56L", "rb": "0.56S", "count": 8, "phase": 0.0625, "open": [0, 0], "y": 0, "r": 0.07, "h": ["0.5H", 2.0], "mat": "concreteGrey" },
+    { "op": "lights", "from": "ground", "ra": "0.56L", "rb": "0.56S", "count": 8, "phase": 0.0625, "y": ["0.5H", 2.0], "size": 0.3, "k": 1.8 }
+  ]
+}

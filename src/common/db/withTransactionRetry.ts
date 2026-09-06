@@ -14,9 +14,11 @@
  *
  *  - **TransientTransactionError.** The transaction saw a write conflict or a stepdown and
  *    committed nothing at all. Nothing it wrote is durable, so re-running the whole body is
- *    safe and is the only way to make progress. This runner re-runs the body exactly once.
- *    A conflict that survives a second attempt is contention the caller should hear about
- *    rather than a hiccup to grind through.
+ *    safe and is the only way to make progress. This runner re-runs it up to five times with
+ *    a short jittered backoff. The figure is not arbitrary: the bounty ledger has every
+ *    concurrent request contending on one document, and with a single retry a request that
+ *    loses twice fails while its budget still has room. Losing a race is not a reason to
+ *    refuse someone.
  *
  *  - **UnknownTransactionCommitResult.** The commit was sent and the answer was lost. The
  *    transaction may already be durable. Re-running the body here is the double-charge
@@ -72,6 +74,8 @@ export interface ITransactionRetryOptions {
    * unreachable primary surfaces instead of hanging the request.
    */
   maxCommitAttempts?: number;
+  /** Whole-body re-runs allowed after a transient conflict. Default 5. */
+  maxBodyAttempts?: number;
   /** Passed through to `startTransaction`; majority write concern is the default. */
   transactionOptions?: TransactionOptions;
 }
@@ -89,16 +93,35 @@ const DEFAULT_TRANSACTION_OPTIONS: TransactionOptions = {
  *           back with it.
  * @returns Whatever `fn` returned, once the commit is known to have succeeded.
  */
+/**
+ * A few milliseconds, growing, with jitter. Retrying instantly just re-runs the same race;
+ * the jitter is what stops N losers all coming back at the same instant and colliding again.
+ */
+async function backoff(attempt: number): Promise<void> {
+  const base = Math.min(2 ** attempt, 16);
+  await new Promise((resolve) => setTimeout(resolve, base + Math.floor(Math.random() * base)));
+}
+
 export async function withTransactionRetry<T>(
   fn: (session: ClientSession) => Promise<T>,
   options: ITransactionRetryOptions = {}
 ): Promise<T> {
   const maxCommitAttempts = options.maxCommitAttempts ?? 3;
+  // How many times the WHOLE body may be re-run after a transient conflict.
+  //
+  // One retry is the textbook figure and it is not enough here. The bounty reservation has
+  // every concurrent request contending on a single ledger document, so with ten in flight
+  // a given transaction can lose the race twice in a row through no fault of its own. With
+  // one retry those requests surface an error, which means a budget with room in it refuses
+  // a legitimate reservation. Re-running a transient failure is safe by definition — it
+  // committed nothing — so the bound exists to stop a genuinely deadlocked workload
+  // spinning, not to ration attempts.
+  const maxBodyAttempts = options.maxBodyAttempts ?? 5;
   const transactionOptions = options.transactionOptions ?? DEFAULT_TRANSACTION_OPTIONS;
   const session = await mongoose.startSession();
 
   try {
-    let bodyRerun = false;
+    let bodyAttempts = 1;
 
     for (;;) {
       session.startTransaction(transactionOptions);
@@ -110,8 +133,9 @@ export async function withTransactionRetry<T>(
         await abortQuietly(session);
         const duplicate = asDuplicateKeyError(err);
         if (duplicate) throw duplicate;
-        if (!bodyRerun && hasErrorLabel(err, 'TransientTransactionError')) {
-          bodyRerun = true;
+        if (bodyAttempts < maxBodyAttempts && hasErrorLabel(err, 'TransientTransactionError')) {
+          bodyAttempts += 1;
+          await backoff(bodyAttempts);
           continue;
         }
         throw err;
@@ -122,9 +146,10 @@ export async function withTransactionRetry<T>(
       } catch (err) {
         // A commit can itself report the transaction as transient, which means it aborted
         // server-side and wrote nothing. That is a whole-body case, not a commit case.
-        if (!bodyRerun && hasErrorLabel(err, 'TransientTransactionError')) {
+        if (bodyAttempts < maxBodyAttempts && hasErrorLabel(err, 'TransientTransactionError')) {
           await abortQuietly(session);
-          bodyRerun = true;
+          bodyAttempts += 1;
+          await backoff(bodyAttempts);
           continue;
         }
         await abortQuietly(session);

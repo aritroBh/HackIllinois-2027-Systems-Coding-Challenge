@@ -14,6 +14,7 @@ import { env } from './config/env';
 import { attachPresenceWs } from './presence/wsTransport';
 import { presenceService } from './presence/service';
 import { startScheduler, stopScheduler } from './scheduler';
+import { wireEconomy } from './economy/wiring';
 
 export interface ServerHooks {
   /** Called with the server before it listens; presence attaches its upgrade handler here. */
@@ -46,6 +47,10 @@ export function createServer(app: Application, hooks: ServerHooks = {}): http.Se
     presenceService.start();
     server.on('close', () => presenceService.stop());
   }
+
+  // Reward rules subscribe to the domain bus here rather than inside the services that
+  // publish, so a service never has to know what its event is worth.
+  wireEconomy();
 
   // Periodic work (SOS escalation, the SSE presence sweep) — one timer for the process.
   startScheduler();

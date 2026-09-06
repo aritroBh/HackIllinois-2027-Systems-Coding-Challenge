@@ -106,6 +106,37 @@ const spireGeo = (seg) => cached(`spire${seg}`, () => spireGeometry(seg));
 const domeGeo = () => cached('dome', () => domeGeometry(30, 14));
 const bandGeo = () => cached('band', () => ringGeometry(0.9, 1.0, 72));
 
+/** Copy of `geo` turned about Y and stretched in the XZ plane. */
+function transformed(geo, angle, kx, kz) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const src = geo.positions, srcN = geo.normals;
+  const positions = new Float32Array(src.length);
+  const normals = new Float32Array(srcN.length);
+  for (let i = 0; i < src.length; i += 3) {
+    positions[i] = (src[i] * c + src[i + 2] * s) * kx;
+    positions[i + 1] = src[i + 1];
+    positions[i + 2] = (-src[i] * s + src[i + 2] * c) * kz;
+    // Inverse-scale the normal, the same correction mergeStatic applies.
+    const nx = (srcN[i] * c + srcN[i + 2] * s) / kx;
+    const ny = srcN[i + 1];
+    const nz = (-srcN[i] * s + srcN[i + 2] * c) / kz;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    normals[i] = nx / l; normals[i + 1] = ny / l; normals[i + 2] = nz / l;
+  }
+  return { positions, normals, indices: geo.indices };
+}
+
+/**
+ * A pyramid over a unit square, which is what roofs a rectangular block.
+ *
+ * spireGeometry(4) gives a diamond: its base vertices sit on the axes, not on
+ * the corners. The quarter turn that squares it up cannot be instance yaw,
+ * because yaw is applied after scaling and would skew the roof on any oblong
+ * footprint; and the turn alone leaves the square inscribed in the diamond, a
+ * factor of root two too small. Turn and stretch it once, here.
+ */
+const spire4Geo = () => cached('spire4', () => transformed(spireGeometry(4), Math.PI / 4, Math.SQRT2, Math.SQRT2));
+
 /**
  * Columns are drawn twelve-sided rather than the twenty-eight the dynamic path
  * used. A stadium colonnade is sixty of them and they are thumb-thick on
@@ -225,8 +256,9 @@ function positions(op, ctx) {
       if (op.open && inArc(turn, op.open[0], op.open[1])) continue;
       const a = turn * TAU;
       const p = metric(f, cu + Math.cos(a) * ra, cv + Math.sin(a) * rb);
-      // Negative yaw matches the frame's own rotation convention, which is how
-      // the folded plates of the State Farm saucer stood square to the rim.
+      // mergeStatic turns a piece by -ry, so the yaw that points its long side
+      // along the tangent is -a. That is what stands the State Farm saucer's
+      // folded plates square to the rim.
       out.push({ x: p.x, z: p.z, ry: op.face ? -a : 0 });
     }
     return out;
@@ -269,12 +301,12 @@ function raise(ctx, y) { if (y > ctx.topY) ctx.topY = y; }
  * ------------------------------------------------------------------ */
 
 /** Anything that stands on its base and rises by `sy`. */
-function solid(op, ctx, geo, sy, extraRy, fallbackMat) {
+function solid(op, ctx, geo, sy, fallbackMat) {
   const { bucket, item } = surfaceFor(op, ctx, fallbackMat);
   const { sx, sz } = plan(op, ctx);
   const y = baseY(op, ctx);
   for (const p of positions(op, ctx)) {
-    ctx[bucket].push({ geo, x: p.x, y, z: p.z, ry: ctx.f.ry + p.ry + (op.ry || 0) + extraRy, sx, sy, sz, ...item });
+    ctx[bucket].push({ geo, x: p.x, y, z: p.z, ry: ctx.f.ry + p.ry + (op.ry || 0), sx, sy, sz, ...item });
   }
   return y;
 }
@@ -282,47 +314,44 @@ function solid(op, ctx, geo, sy, extraRy, fallbackMat) {
 const OPS = {
   box(op, ctx) {
     const h = len(op.h, ctx, 0.2);
-    raise(ctx, solid(op, ctx, boxGeo(), h, 0, 'body') + h);
+    raise(ctx, solid(op, ctx, boxGeo(), h, 'body') + h);
   },
 
   prism(op, ctx) {
     const h = len(op.h, ctx, 0.2);
-    raise(ctx, solid(op, ctx, prismGeo(28), h, 0, 'body') + h);
+    raise(ctx, solid(op, ctx, prismGeo(28), h, 'body') + h);
   },
 
   prism8(op, ctx) {
     const h = len(op.h, ctx, 0.2);
-    raise(ctx, solid(op, ctx, prismGeo(8), h, 0, 'body') + h);
+    raise(ctx, solid(op, ctx, prismGeo(8), h, 'body') + h);
   },
 
   spire(op, ctx) {
     const h = len(op.h, ctx, 0.5);
-    raise(ctx, solid(op, ctx, spireGeo(12), h, 0, 'roof') + h);
+    raise(ctx, solid(op, ctx, spireGeo(12), h, 'roof') + h);
   },
 
-  // The four-sided spire's ridges sit on the diagonals of its own axes, so a
-  // quarter turn puts them over the corners of the block underneath.
   spire4(op, ctx) {
     const h = len(op.h, ctx, 0.5);
-    raise(ctx, solid(op, ctx, spireGeo(4), h, Math.PI / 4, 'roof') + h);
+    raise(ctx, solid(op, ctx, spire4Geo(), h, 'roof') + h);
   },
 
   dome(op, ctx) {
     const { sx } = plan(op, ctx);
     const rise = len(op.h, ctx, sx * 0.5);
-    raise(ctx, solid(op, ctx, domeGeo(), rise * 2, 0, 'dome') + rise);
+    raise(ctx, solid(op, ctx, domeGeo(), rise * 2, 'dome') + rise);
   },
 
   // A flat band: the lit rim under a saucer, a tier line around a bowl. The
   // ring generator has unit radius, so w and d are halved into semi-axes.
   ring(op, ctx) {
     const { bucket, item } = surfaceFor(op, ctx, 'trim');
-    const f = ctx.f;
-    const sx = op.r !== undefined ? len(op.r, ctx, f.L / 2) : len(op.w, ctx, f.L) / 2;
-    const sz = op.r !== undefined ? sx : len(op.d, ctx, f.S) / 2;
+    const size = plan(op, ctx);
+    const sx = size.sx / 2, sz = size.sz / 2;
     const y = baseY(op, ctx);
     for (const p of positions(op, ctx)) {
-      ctx[bucket].push({ geo: bandGeo(), x: p.x, y, z: p.z, ry: f.ry + p.ry, sx, sy: 1, sz, ...item });
+      ctx[bucket].push({ geo: bandGeo(), x: p.x, y, z: p.z, ry: ctx.f.ry + p.ry, sx, sy: 1, sz, ...item });
     }
     raise(ctx, y);
   },
@@ -384,11 +413,13 @@ const OPS = {
       at(h * 0.545, h * 0.188, h * 0.272, h * 0.158, geo8);
       at(h * 0.926, h * 0.109, h * 0.148, h * 0.109, octaGeo());
       if (op.arms) {
+        // Offset along the frame's long axis in world space, so a repeated
+        // figure carries its own arms rather than the first one's.
         for (const side of [-1, 1]) {
-          const arm = metric(ctx.f, (op.u ?? 0) * ctx.f.L / 2 + side * h * 0.272, (op.v ?? 0) * ctx.f.S / 2);
+          const reach = side * h * 0.272;
           ctx[bucket].push({
-            geo: boxGeo(), x: arm.x, y: y + h * 0.718, z: arm.z, ry: ry - side * 0.15,
-            sx: h * 0.495, sy: h * 0.059, sz: h * 0.069, ...item,
+            geo: boxGeo(), x: p.x + reach * ctx.f.c, y: y + h * 0.718, z: p.z - reach * ctx.f.s,
+            ry: ry - side * 0.15, sx: h * 0.495, sy: h * 0.059, sz: h * 0.069, ...item,
           });
         }
       }

@@ -1,0 +1,17 @@
+{
+  "_note": "Rusticated grey-tan limestone, not the orange sandstone the earlier pass assumed. The square 132 ft campanile stands at the Green and Wright corner, four corner turrets with conical caps around a red terracotta tile pyramid. The belfry loft glows: it holds the chimes. The hall behind it keeps a slate gable.",
+  "kind": "belltower",
+  "ops": [
+    { "op": "spire4", "u": 0, "v": 0, "y": 0, "w": "0.98L", "d": "0.98S", "h": 0.32, "mat": "slate" },
+
+    { "op": "box", "u": 0.68, "v": -0.64, "y": "-0.7H", "w": 1.25, "d": 1.25, "h": 3.4, "mat": "limestoneGrey" },
+    { "op": "box", "u": 0.68, "v": -0.64, "y": ["-0.7H", 2.5], "w": 1.28, "d": 1.28, "h": 0.3, "mat": "lamp", "k": 0.5 },
+    { "op": "box", "u": 0.68, "v": -0.64, "y": ["-0.7H", 3.4], "w": 1.45, "d": 1.45, "h": 0.18, "mat": "limestoneBuff" },
+
+    { "op": "prism8", "u": 0.68, "v": -0.64, "ra": 0.778, "count": 4, "phase": 0.125, "y": ["-0.7H", 3.58], "r": 0.13, "h": 0.55, "mat": "limestoneGrey" },
+    { "op": "spire", "u": 0.68, "v": -0.64, "ra": 0.778, "count": 4, "phase": 0.125, "y": ["-0.7H", 4.13], "r": 0.15, "h": 0.42, "mat": "terracotta" },
+    { "op": "spire4", "u": 0.68, "v": -0.64, "y": ["-0.7H", 3.58], "r": 0.6, "h": 1.4, "mat": "terracotta" },
+
+    { "op": "lights", "from": "ground", "u": 0.68, "v": -0.64, "ra": 0.95, "count": 2, "phase": 0.25, "y": 0.14, "size": 0.16, "k": 1.4 }
+  ]
+}

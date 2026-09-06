@@ -1,0 +1,19 @@
+{
+  "_note": "Reads at night as glass plus a green drum: a glass upper storey over the red brick base, the verdigris copper-clad cylinder at the north end, and lit floor bands where the labs run late.",
+  "kind": "tower",
+  "ops": [
+    { "op": "box", "u": 0, "v": 0, "y": "-0.75H", "w": "1.005L", "d": "1.005S", "h": 0.08, "mat": "lamp", "k": 0.45 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.5H", "w": "1.005L", "d": "1.005S", "h": 0.08, "mat": "lamp", "k": 0.45 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.25H", "w": "1.005L", "d": "1.005S", "h": 0.08, "mat": "lamp", "k": 0.45 },
+
+    { "op": "prism", "u": -0.2, "v": 0, "y": "-0.45H", "r": 1.4, "h": ["0.45H", 0.9], "mat": "verdigris" },
+
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "1.0L", "d": "1.0S", "h": 0.12, "mat": "limestoneBuff" },
+    { "op": "box", "u": 0.1, "v": -0.06, "y": 0.12, "w": "0.32L", "d": "0.3S", "h": 0.36, "mat": "concreteGrey" },
+
+    { "op": "box", "u": 0.44, "v": 0.3, "y": 0.12, "w": "0.45L", "d": "0.45S", "h": 0.7, "mat": "glass" },
+    { "op": "box", "u": 0.44, "v": 0.3, "y": 0.12, "w": "0.42L", "d": "0.42S", "h": 0.05, "mat": "lamp", "k": 0.7 },
+
+    { "op": "lights", "from": "ground", "u": -0.6, "v": 1.02, "u2": 0.6, "v2": 1.02, "count": 2, "y": 0.15, "size": 0.16, "k": 1.4 }
+  ]
+}

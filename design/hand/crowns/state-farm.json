@@ -1,0 +1,14 @@
+{
+  "_note": "The folded-edge saucer: a low concrete drum, a scalloped rim of forty-eight tilted plates, and the shallow ribbed dome above. The dome top stays dark; the whole rim reads as a lit band, because that is where the concourse light spills out from underneath.",
+  "kind": "dome",
+  "ops": [
+    { "op": "prism", "from": "ground", "u": 0, "v": 0, "y": 0, "w": "0.6L", "d": "0.6S", "h": "0.55H", "mat": "concreteGrey" },
+    { "op": "prism", "from": "ground", "u": 0, "v": 0, "y": "0.55H", "w": "1.025L", "d": "1.025S", "h": 0.3, "mat": "concreteRibbed" },
+
+    { "op": "box", "from": "ground", "ra": "0.98R", "count": 48, "face": true, "y": ["0.55H", 0.3], "w": 0.16, "d": "0.27R", "h": 0.55, "mat": "concreteRibbed" },
+    { "op": "dome", "from": "ground", "u": 0, "v": 0, "y": ["0.55H", 0.3], "w": "0.975L", "d": "0.975S", "h": "0.275R", "mat": "concreteRibbed" },
+
+    { "op": "ring", "from": "ground", "y": ["0.55H", 0.02], "r": "1.02R", "mat": "lamp", "k": 1.4 },
+    { "op": "lights", "from": "ground", "ra": "0.9R", "count": 12, "phase": 0.032, "y": "0.3H", "size": 0.22, "k": 1.6 }
+  ]
+}

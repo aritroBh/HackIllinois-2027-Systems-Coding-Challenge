@@ -7,6 +7,8 @@ import { requireAccount } from '../../middleware/identity';
 import { Volunteer } from '../../models/volunteer.model';
 import { Registration } from '../../models/registration.model';
 import { PowerUpInventory } from '../../models/powerup.model';
+import { QuestService } from '../../services/quest.service';
+import { StickerService } from '../../services/sticker.service';
 import { AuthService } from '../../services/auth.service';
 import { presenceService } from '../../presence/service';
 import { presenceStore } from '../../presence/store';
@@ -128,6 +130,27 @@ meRouter.get('/card', requireAccount, async (req: Request, res: Response, next: 
         tier: account.prestigeTier,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Quest progress for the current windows, and the sticker book. */
+meRouter.get('/quests', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const quests = await QuestService.forAccount(req.account!.id);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ success: true, data: quests });
+  } catch (error) {
+    next(error);
+  }
+});
+
+meRouter.get('/stickers', requireAccount, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const owned = await StickerService.forAccount(req.account!.id);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ success: true, data: owned });
   } catch (error) {
     next(error);
   }

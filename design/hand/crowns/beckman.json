@@ -1,0 +1,16 @@
+{
+  "_note": "Buff limestone and precast banded with dark granite, carrying two green-tinted glass towers rather than the single block the first pass drew. The arched limestone gateway with its lantern posts stands on the south approach.",
+  "kind": "tower",
+  "ops": [
+    { "op": "box", "u": 0, "v": 0, "y": "-0.67H", "w": "1.01L", "d": "1.01S", "h": 0.08, "mat": "granite" },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.34H", "w": "1.01L", "d": "1.01S", "h": 0.08, "mat": "granite" },
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "1.0L", "d": "1.0S", "h": 0.14, "mat": "limestoneBuff" },
+
+    { "op": "box", "u": -0.3, "v": 0, "u2": 0.3, "v2": 0, "count": 2, "y": 0.14, "w": "0.22L", "d": "0.5S", "h": 1.3, "mat": "glass" },
+    { "op": "box", "u": -0.3, "v": 0, "u2": 0.3, "v2": 0, "count": 2, "y": 1.44, "w": "0.22L", "d": "0.5S", "h": 0.06, "mat": "lamp", "k": 0.6 },
+
+    { "op": "box", "from": "ground", "u": 0, "v": 1.22, "y": 0, "w": 1.6, "d": 0.5, "h": 1.2, "mat": "limestoneBuff" },
+    { "op": "box", "from": "ground", "u": -0.18, "v": 1.22, "u2": 0.18, "v2": 1.22, "count": 2, "y": 0, "r": 0.14, "h": 1.0, "mat": "granite" },
+    { "op": "lights", "from": "ground", "u": -0.18, "v": 1.22, "u2": 0.18, "v2": 1.22, "count": 2, "y": 1.12, "size": 0.16, "k": 1.6 }
+  ]
+}

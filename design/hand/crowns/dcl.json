@@ -1,0 +1,15 @@
+{
+  "_note": "Buff brick with a concrete parapet and a flat roof. Cool-white lab bands rather than sodium windows, and the loading dock on the long facade where the overnight supply runs come in.",
+  "kind": "tower",
+  "ops": [
+    { "op": "box", "u": 0, "v": 0, "y": 0, "w": "1.0L", "d": "1.0S", "h": 0.12, "mat": "precast" },
+    { "op": "box", "u": 0.15, "v": -0.08, "y": 0.12, "w": "0.3L", "d": "0.28S", "h": 0.4, "mat": "concreteGrey" },
+
+    { "op": "box", "u": 0, "v": 0, "y": "-0.75H", "w": "1.005L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.28 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.5H", "w": "1.005L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.28 },
+    { "op": "box", "u": 0, "v": 0, "y": "-0.25H", "w": "1.005L", "d": "1.005S", "h": 0.07, "mat": "glass", "k": 0.28 },
+
+    { "op": "box", "from": "ground", "u": -0.5, "v": 1.04, "y": 0.6, "w": "0.3L", "d": 0.7, "h": 0.1, "mat": "concreteGrey" },
+    { "op": "lights", "from": "ground", "u": -0.75, "v": 1.04, "u2": -0.25, "v2": 1.04, "count": 3, "y": 0.7, "size": 0.14, "k": 1.6 }
+  ]
+}

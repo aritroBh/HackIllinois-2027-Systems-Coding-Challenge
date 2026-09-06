@@ -30,6 +30,7 @@ import { program, mesh, framebuffer, disposeFramebuffer, instancedMesh, drawInst
 import { MATERIAL_GLSL, MATERIALS } from './materials.js';
 import { createTileManager } from './tiles.js';
 import { createPlayerLayer, PLAYER_VS, PLAYER_FS, SLOT_W, SLOT_H } from './players.js';
+import { bakeCrown } from './crowns.js';
 import { bakeTile, treeTemplate, lampTemplate } from './tile-bake.js';
 
 /* ------------------------------------------------------------------ *
@@ -644,6 +645,13 @@ export function createCampusRenderer(canvas, opts = {}) {
   let tiles = null, treeInst = null, lampInst = null, instVersion = -1, instAt = 0;
   /** Remote trainers (plan §B4): one instanced draw, built lazily on the first setPlayers. */
   let playerLayer = null;
+  /**
+   * Baked crowns (plan §B2): monument id → { stone, warm, glow } static meshes built once
+   * from the pack's recipe. Three draws per landmark instead of the twenty-odd the
+   * hand-written switch below issues, and the switch stays as the fallback for a monument
+   * whose pack carries no recipe.
+   */
+  const crownMeshes = new Map();
   let factionColours = {};
   const bakeOpts = { vscale: VSCALE };
   const LEVEL_NAMES = ['low', 'med', 'high'];
@@ -1281,6 +1289,56 @@ export function createCampusRenderer(canvas, opts = {}) {
    * Landmark-specific mass on top of the extruded footprint. Every piece uses
    * the building's real material; the faction shows as light on it.
    */
+  /**
+   * Build the three merged meshes for one monument's recipe. Failure is not fatal: a recipe
+   * that throws leaves the monument on the hand-written path rather than leaving a hole in
+   * the skyline.
+   */
+  function bakeCrownFor(mo) {
+    if (!mo.crown || crownMeshes.has(mo.id)) return crownMeshes.get(mo.id) ?? null;
+    try {
+      const baked = bakeCrown(mo, mo.crown, { lamp: LAMP });
+      const meshes = {
+        stone: baked.stone ? buildStatic(baked.stone) : null,
+        warm: baked.warm ? buildStatic(baked.warm) : null,
+        glow: baked.glow ? buildStatic(baked.glow) : null,
+      };
+      crownMeshes.set(mo.id, meshes);
+      if (baked.warnings?.length) console.debug(`[crowns] ${mo.id}:`, baked.warnings.join('; '));
+      return meshes;
+    } catch (err) {
+      console.warn(`[crowns] ${mo.id} recipe failed, using the built-in silhouette:`, err.message);
+      crownMeshes.set(mo.id, null);
+      return null;
+    }
+  }
+
+  /**
+   * Draw a baked crown: the stone in its own material with the faction as rim light, the
+   * warm lamps and the faction glow additively on top.
+   */
+  function drawBakedCrown(mo, meshes, hot) {
+    progStatic.use();
+    gl.uniform1f(progStatic.u.uWindows, 0);
+    for (const key of ['stone', 'warm', 'glow']) {
+      const m = meshes[key];
+      if (!m) continue;
+      if (key !== 'stone') {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.depthMask(false);
+      }
+      gl.bindVertexArray(m.vao);
+      gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_INT, 0);
+      if (key !== 'stone') {
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+      }
+    }
+    progScene.use();
+    void hot;
+  }
+
   function drawMonumentCrown(mo, t, hot) {
     const { cx, cz } = mo;
     const base = mo.h;
@@ -1733,7 +1791,10 @@ export function createCampusRenderer(canvas, opts = {}) {
         // Alma Mater's plinth footprint is granite paving.
         drawMesh(fm, { ...stone(MAT.granite, mo, hot), albedoK: 0.9 });
       }
-      drawMonumentCrown(mo, t, hot);
+      // A pack-supplied recipe wins; the hand-written silhouette is the fallback.
+      const baked = bakeCrownFor(mo);
+      if (baked) drawBakedCrown(mo, baked, hot);
+      else drawMonumentCrown(mo, t, hot);
     }
 
     for (const o of orbiters) {
@@ -2274,6 +2335,11 @@ export function createCampusRenderer(canvas, opts = {}) {
       disposeMesh(greenMesh);
       if (tiles) tiles.destroy();
       if (playerLayer) playerLayer.destroy();
+      for (const meshes of crownMeshes.values()) {
+        if (!meshes) continue;
+        for (const m of Object.values(meshes)) disposeMesh(m);
+      }
+      crownMeshes.clear();
       if (treeInst) { disposeMesh(treeInst); gl.deleteBuffer(treeInst.instanceBuffer); }
       if (lampInst) { disposeMesh(lampInst); gl.deleteBuffer(lampInst.instanceBuffer); }
       gl.deleteTexture(spriteTex);
