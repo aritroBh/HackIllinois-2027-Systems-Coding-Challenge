@@ -548,8 +548,15 @@
     // Lite mode: no renderer to measure with, but a real GPS fix to measure *from*. Without
     // this branch the flat map's readout said "in range — spin it!" beside a Spin button that
     // stayed disabled for ever, because the disabled branch below keys off the renderer.
+    // Same precedence as `playerCoords`: in lite mode a real fix wins over a hidden sprite.
+    //
+    // `!window.campus?.getPlayer?.()` assumed lite implies no renderer player. It does not —
+    // lite hides the canvas and leaves the renderer standing — so a trainer placed before the
+    // switch kept gating these buttons from the Quad while the phone said otherwise. The two
+    // must agree, because this decides what the button says and `playerCoords` decides what
+    // the server is told; disagreeing is how a button reads "Spin" and the spin is refused.
     const liteFix = window.Nexus?.lite?.fix;
-    if (liteFix && !window.campus?.getPlayer?.()) { gateSpinsFrom(liteFix); return; }
+    if (liteFix && (window.Nexus?.flags?.lite || !window.campus?.getPlayer?.())) { gateSpinsFrom(liteFix); return; }
     if (!has('getNearby') || !window.campus.getPlayer?.()) {
       // No renderer, or a trainer that has not been placed: there is nothing to measure, and
       // "nothing to measure" is not a reason to allow the action. This branch used to force

@@ -184,14 +184,27 @@ const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
  * limit on the proof, but no proof at all.
  */
 function playerCoords() {
+  // A real device fix beats a sprite, and in lite mode it beats it *first*.
+  //
+  // This used to try the renderer's player before lite's `watchPosition`, on the stated
+  // premise that "lite mode has no renderer and therefore no placed trainer". That premise is
+  // false. Lite hides the canvas; it does not tear the renderer down, so anyone who opens
+  // Campus and then switches to lite keeps a player object sitting at the demo drop point on
+  // the Quad — and every action then measured from there.
+  //
+  // Two ways that hurt, and the second is worse. Standing on a HackStop with GPS on, the
+  // button read "213 m" and stayed disabled, because it was measuring the sprite. And the
+  // coordinates posted to the server for a spin, a battle or a deploy were the sprite's too —
+  // so in lite mode the geofence was evaluated at a fixed point on the Quad for everybody,
+  // whatever their phone said. That is a lockout for anyone genuinely at a stop and a free
+  // pass for anything within 75 m of that one spot.
+  //
+  // Outside lite the sprite is a control the player can see and steer, so their intent wins.
+  const liteFix = window.Nexus?.lite?.fix ?? null;
+  if (liteFix && window.Nexus?.flags?.lite) return liteFix;
   const p = typeof campus?.getPlayer === 'function' ? campus.getPlayer() : null;
   if (p && fromWorld) return fromWorld(p.x, p.z);
-  // Lite mode has no renderer and therefore no placed trainer, but it does run its own
-  // `watchPosition` — so it carries a *better* proof of presence than the 3D path, not a
-  // worse one: a real device fix rather than a sprite the player dragged somewhere. Without
-  // this the flat map told you a HackStop was "in range — spin it!" beside a Spin button
-  // that could never enable, which is two panels disagreeing about the same fact.
-  return window.Nexus?.lite?.fix ?? null;
+  return liteFix;
 }
 
 /**

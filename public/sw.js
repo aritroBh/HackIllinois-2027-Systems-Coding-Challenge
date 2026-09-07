@@ -98,7 +98,9 @@
   // `v42`: the quest board stops offering quests you are already on, and a refused claim is
   //        said where you are rather than in the War Room console.
   // `v43`: a handover no longer shows the departing account's shifts as the arriving one's.
-  const VERSION = 'v43';
+  // `v44`: in lite mode a real GPS fix now beats the hidden demo sprite, for both the button
+  //        gate and the coordinates sent to the server.
+  const VERSION = 'v44';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
