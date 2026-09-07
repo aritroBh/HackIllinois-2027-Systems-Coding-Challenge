@@ -90,10 +90,18 @@ CONTENT_PACK=my-event PORT=3300 QR_HMAC_SECRET=$(openssl rand -hex 24) npm run d
 Open `http://127.0.0.1:3300/dashboard/`, click **every tab in the nav**, and keep the
 browser console visible while you do it. You are looking for two things:
 
-1. **Any red line in the console.** The client is JavaScript and a thrown exception stops
-   the rest of the panel silently — you get a blank area, not an error message. A blank
-   panel and a panel with nothing to show look identical to a reader and are not the same
-   thing at all.
+1. **Any red line in the console**, with exactly one expected exception, below. The client
+   is JavaScript and a thrown exception stops the rest of the panel silently — you get a
+   blank area, not an error message. A blank panel and a panel with nothing to show look
+   identical to a reader and are not the same thing at all.
+
+   The one you *should* see before you have done §3 is
+   `Campus renderer failed: Error: campus model 404`. Your pack has no baked campus yet, the
+   Campus tab shows a **RENDERER FAILED** badge, and that is the honest degraded state rather
+   than a bug. It goes away when you bake. Every other red line is a finding.
+
+   That exception is spelled out because a check that cries wolf on step one is a check
+   people learn to skip, which would defeat the point of this whole section.
 2. **Any name from *our* event in *your* UI.** Search the page for a venue, a team or a
    building you did not put in your pack. Anything you find is a value hard-coded in the
    client rather than read from your pack, and it will still be there on the day.

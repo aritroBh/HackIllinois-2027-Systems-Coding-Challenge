@@ -1508,3 +1508,19 @@ over. A missing gate that somebody knows about beats a gate that fires on the wr
 reading `getUTCHours` would have returned 19.63 for both, so the fixture discriminates. The offset
 being five hours rather than six also confirms the reason `Intl` was used instead of a fixed offset
 — it is September, so Chicago is on CDT.
+
+### Verified after the fix, rather than taken on trust
+
+The session that owns `public/` fixed it in `048b64e`. The claim was not accepted on the strength
+of the commit message: the same reproduction was run again against a fresh boot of
+`example-campus`. The faction strip now renders **RED 0 held / BLUE 0 held / UNCLAIMED 1 held ·
+500 CP** — the pack's own factions, not three phantoms — the Clock Tower stronghold row draws with
+its REINFORCE button, the `TypeError` is gone from the console, and the count reads "1 monument
+**is** a stronghold", so the singular case was fixed with it.
+
+One console error remains and is expected: `campus model 404`, because `example-campus` has no
+baked campus until FORK_GUIDE §3 is done, and the Campus tab degrades to a RENDERER FAILED badge.
+FORK_GUIDE §2 now names that one line explicitly as the single expected exception. Telling a forker
+that *any* red line is a finding, when the very first boot always produces one, would be a check
+people learn to skip — which is the same failure as a gate that fires on the wrong thing, and it
+was introduced and removed in the same hour.
