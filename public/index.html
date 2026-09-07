@@ -48,22 +48,29 @@
     `nexus.js` replaces every button here from the `registerTab()` registry as soon as it runs,
     and *that* render is the one that carries roles, badges and the roving tabindex. This
     markup only ever shows in the gap before scripts execute, or for a reader with JavaScript
-    off — but it had drifted three tabs behind the registry (no Lead, no Me, no Quests, still
-    listing Chaos Lab) and it marked War Room active when Lead sorts first. It also carried
-    none of the ARIA the live nav has, so a screen reader that read the page early got five
-    unlabelled buttons.
+    off.
 
-    Kept in step with `registerTab()` calls by `scripts/checkShell.mjs`. Order and ids must
-    match the registry; roles cannot, because there is no session yet — so this lists only the
-    tabs every account can see, and the live render adds the rest.
+    What was wrong with it, stated accurately after a reviewer caught the first version of this
+    comment overstating all three of its claims: it listed `tab-shifts`, `tab-campus`,
+    `tab-pokeshift`, `tab-qr` and `tab-leaderboard`, every one of which is still a registered
+    tab — so nothing here named something deleted. Two of the five are role-gated (`tab-shifts`
+    and `tab-qr` are `roles: STAFF`), which is exactly what a nav rendered before any session
+    must not assume. `tab-me` and `tab-quests`, which every role can open, were missing. And it
+    carried none of the ARIA the live nav has, so a reader arriving before the scripts did got
+    five unlabelled buttons.
+
+    Kept in step by `scripts/checkShell.mjs`, which checks the ids, the ARIA, the order and
+    which button is marked active. Roles cannot be checked against a session, because there is
+    not one yet — so this lists only the tabs open to every role, and the live render adds the
+    rest.
   -->
   <div id="announce-banner" role="status" aria-live="polite" hidden></div>
 
   <nav class="tabs-nav" aria-label="Sections">
     <div class="inner" role="tablist">
       <button class="pb tab-btn active" id="tabbtn-tab-me" role="tab" aria-selected="true" aria-controls="tab-me" tabindex="0" data-action="tab" data-tab="tab-me">Me</button>
-      <button class="pb tab-btn" id="tabbtn-tab-quests" role="tab" aria-selected="false" aria-controls="tab-quests" tabindex="-1" data-action="tab" data-tab="tab-quests">Quests</button>
       <button class="pb tab-btn" id="tabbtn-tab-campus" role="tab" aria-selected="false" aria-controls="tab-campus" tabindex="-1" data-action="tab" data-tab="tab-campus">Campus</button>
+      <button class="pb tab-btn" id="tabbtn-tab-quests" role="tab" aria-selected="false" aria-controls="tab-quests" tabindex="-1" data-action="tab" data-tab="tab-quests">Quests</button>
       <button class="pb tab-btn" id="tabbtn-tab-pokeshift" role="tab" aria-selected="false" aria-controls="tab-pokeshift" tabindex="-1" data-action="tab" data-tab="tab-pokeshift">Turf Wars</button>
       <button class="pb tab-btn" id="tabbtn-tab-leaderboard" role="tab" aria-selected="false" aria-controls="tab-leaderboard" tabindex="-1" data-action="tab" data-tab="tab-leaderboard">Ranks</button>
     </div>
@@ -85,7 +92,7 @@
               <!-- Was in the global header, where every role saw it and a hacker clicking it
                    got a 403 from an endpoint they had no business calling. The War Room is
                    `roles: STAFF`, which is who the schedule import is for. -->
-              <button id="adonix-sync-btn" class="pb pb-patina pb-sm" data-action="adonix-sync" title="Re-import the official schedule from Adonix">Sync Adonix</button>
+              <button id="adonix-sync-btn" class="pb pb-patina pb-sm" data-action="adonix-sync" title="Re-import the official schedule from Adonix" hidden>Sync Adonix</button>
             </div>
           </div>
 

@@ -373,7 +373,39 @@
   }
 
   /** Disable Spin buttons until the player stands within the geofence. */
+  /**
+   * Enable or disable each Spin button by great-circle distance from a lat/lng.
+   *
+   * The 3D path measures in world units through the renderer's spatial index; this measures
+   * straight from a device fix, which is what lite mode has. Both end at the same 75 m
+   * geofence, and the server measures it again — this only decides what the button says.
+   */
+  function gateSpinsFrom(at) {
+    const R = 6371000, rad = Math.PI / 180;
+    document.querySelectorAll('[data-action="spin"]').forEach((btn) => {
+      const lat = Number(btn.dataset.lat), lon = Number(btn.dataset.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        btn.disabled = true; btn.textContent = 'Spin';
+        btn.title = 'This HackStop has no coordinates, so its distance cannot be checked';
+        return;
+      }
+      const x = (lon - at.longitude) * rad * Math.cos(((at.latitude + lat) / 2) * rad);
+      const y = (lat - at.latitude) * rad;
+      const d = Math.round(Math.sqrt(x * x + y * y) * R);
+      const ok = d <= PROX_RADIUS;
+      if (btn.disabled !== !ok) btn.disabled = !ok;
+      const label = ok ? 'Spin' : `${d} m`;
+      if (btn.textContent !== label) btn.textContent = label;
+      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${PROX_RADIUS} m to spin`;
+    });
+  }
+
   function gateSpins() {
+    // Lite mode: no renderer to measure with, but a real GPS fix to measure *from*. Without
+    // this branch the flat map's readout said "in range — spin it!" beside a Spin button that
+    // stayed disabled for ever, because the disabled branch below keys off the renderer.
+    const liteFix = window.Nexus?.lite?.fix;
+    if (liteFix && !window.campus?.getPlayer?.()) { gateSpinsFrom(liteFix); return; }
     if (!has('getNearby') || !window.campus.getPlayer?.()) {
       // No renderer, or a trainer that has not been placed: there is nothing to measure, and
       // "nothing to measure" is not a reason to allow the action. This branch used to force
@@ -419,6 +451,11 @@
     if (on) {
       if (!navigator.geolocation) { toast('No geolocation on this device — use WASD on the map instead.'); return; }
       if (!has('setPlayerLatLng')) { toast('The map is still loading the player layer.'); return; }
+      // Turning walking on while it is already on used to overwrite the handle and strand the
+      // previous watch: two callbacks driving the sprite, and `clearWatch` only ever able to
+      // reach the newer one. The off-branch below is the only place that cleared, so the leak
+      // survived every subsequent toggle.
+      if (state.geoWatch != null) navigator.geolocation.clearWatch(state.geoWatch);
       state.geoWatch = navigator.geolocation.watchPosition(
         (pos) => {
           const r = window.campus.setPlayerLatLng(pos.coords.latitude, pos.coords.longitude);
@@ -465,6 +502,19 @@
 
   /** HUD over the map: avatar/level, control meter, minimap, nearest stop, WASD hint. */
   function updateHud(force = false) {
+    // Lite mode owns `#hud-nearest`.
+    //
+    // `body.lite` keeps the bottom-right HUD corner visible — it holds the nearest-HackStop
+    // readout and the presence roster, neither of which needs the renderer — and `lite.js`
+    // writes that readout from its own geolocation watch. This function is not driven only by
+    // the render loop: `onTabChange` calls it on every switch to the Campus tab, the handover
+    // handler calls it, and so do the walk, follow and place actions. Any of those firing
+    // while lite is active overwrote the live readout with "Place your trainer to start
+    // walking" — an instruction for a renderer that is not running.
+    //
+    // Everything else this function writes (the minimap, the control meter, the FPS strip, the
+    // walk hint) is inside a HUD box that `body.lite` hides, so there is nothing here to do.
+    if (window.Nexus?.flags?.lite) return;
     const now = performance.now();
     if (!force && now - state.lastHud < 500) return;
     state.lastHud = now;
@@ -728,6 +778,23 @@
 
   window.game = {
     state, init, renderTrainer, computeEarned, award, toast, tick,
+    // The spin geofence, so `lite.js` reports the same radius rather than keeping its own
+    // copy of the number. The server enforces it either way; this is what the UI promises.
+    PROX_RADIUS,
+    gateSpins,
+    /**
+     * Stop the GPS watch, if one is running. Returns whether there was one.
+     *
+     * `lite.js` calls this when it mounts. Both files run a `watchPosition` and both publish
+     * to the presence service, and entering lite mode does not stop the renderer's walk — so
+     * without this, enabling lite while walking left two watches live, two publishers, and
+     * only one of them (lite's) stopped on unmount.
+     */
+    stopWalk() {
+      if (state.geoWatch == null) return false;
+      toggleWalk(false);
+      return true;
+    },
     onCampusReady, onProximity, gateSpins, openEncounter, closeEncounter,
     handle(action, el) { const fn = ACTIONS[action]; if (fn) { fn(el); return true; } return false; },
     levelFor, levelProgress,

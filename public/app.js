@@ -177,8 +177,13 @@ const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
  */
 function playerCoords() {
   const p = typeof campus?.getPlayer === 'function' ? campus.getPlayer() : null;
-  if (!p || !fromWorld) return null;
-  return fromWorld(p.x, p.z);
+  if (p && fromWorld) return fromWorld(p.x, p.z);
+  // Lite mode has no renderer and therefore no placed trainer, but it does run its own
+  // `watchPosition` — so it carries a *better* proof of presence than the 3D path, not a
+  // worse one: a real device fix rather than a sprite the player dragged somewhere. Without
+  // this the flat map told you a HackStop was "in range — spin it!" beside a Spin button
+  // that could never enable, which is two panels disagreeing about the same fact.
+  return window.Nexus?.lite?.fix ?? null;
 }
 
 /**
@@ -435,7 +440,6 @@ const CLICK_ACTIONS = {
   // buttons above kept working, because those go through this delegated listener.
   // Routing the shell through the same map fixes it without weakening the CSP.
   'adonix-sync': () => triggerAdonixSync(),
-  'sos-simulate': () => simulateHackerSOS(),
   'sos-refresh': () => loadSOSTickets(),
   'chaos-bomb': () => runConcurrencyBomb(),
   'chaos-drop': () => simulateDropCascade(),
@@ -1249,16 +1253,26 @@ async function resolveCyclicTrade() {
  * `refreshQrToken`, `clearQrToken`, `startQrCountdown`, `simulateDeskScan` and
  * `simulateReplayAttack`, plus four module variables holding a live HMAC credential.
  *
- * It is gone because `views/me.js` does the same job better and for everybody. That panel
- * mints against the *session's own* account — the server derives the volunteer from the
- * session either way, so this one's "list every CONFIRMED registration and hope one is mine"
+ * It is gone because `views/me.js` does the same job and does it once. That panel mints
+ * against the *session's own* account — the server derives the volunteer from the session
+ * either way, so this one's "list every CONFIRMED registration and hope one of them is mine"
  * lookup was working around a problem it had invented — draws a real QR, runs its own
- * countdown, clears on handover, and sits in a tab every role can open. This one was behind
- * `roles: STAFF`, so the volunteers who actually check in could not reach it.
+ * countdown, and clears on handover.
  *
- * Two panels minting the same credential is also two places to get the handover wipe right.
- * Round eight fixed `me.js`; this copy was missed and had to be fixed separately in round
- * fourteen. There is one now, and `me.js` clears it on `session:handover`.
+ * An earlier version of this comment said the Trainer tab's `roles: STAFF` kept the volunteers
+ * who check in from reaching it. That is backwards, and a reviewer caught it: `STAFF` is
+ * VOLUNTEER, SHIFT_LEAD, ORGANIZER and ADMIN, so every account entitled to mint could already
+ * open this tab. The only role it excluded was HACKER, who cannot mint at all.
+ *
+ * The real reason is duplication. Two panels minting one credential is two places to get the
+ * handover wipe right, and this repository has already got it wrong once: round eight fixed
+ * `me.js`, this copy was missed, and it had to be fixed separately in round fourteen. There is
+ * one now, and `me.js` clears it on `session:handover`.
+ *
+ * One capability went with it and is not replaced: the deleted lookup fell back to the first
+ * CONFIRMED registration when nobody was signed in, so `AUTH_MODE=legacy` could show a token
+ * anonymously. `me.js` requires a session user. That is the right trade — an anonymous token
+ * is a live credential minted for whoever the list happened to return first.
  *
  * `simulateDeskScan` and `simulateReplayAttack` are not replaced. Both performed a real
  * `POST /attendance/verify` — an actual check-in, and an actual replay of a live credential
@@ -1305,60 +1319,15 @@ async function loadSOSTickets() {
   }
 }
 
-/**
- * Sample distress calls. `coordinates` are mandatory server-side — the dispatch
- * engine measures Haversine distance from them — and omitting them made every
- * simulated SOS fail validation silently. Each sample carries the real
- * coordinates of the venue its table location names.
+/*
+ * `SOS_SAMPLES` and `simulateHackerSOS` used to sit here, behind a `sos-simulate` action.
+ *
+ * It posted a fixture as a real ticket — "Alex (Hardware Hacker)", a seat number, a medical
+ * or hardware category, a description — into the queue that volunteers actually work, and
+ * dispatch would then route a real person to a table where nobody needed help. Its button
+ * went in the commit before this one; the action id did not, and an action id is reachable
+ * from the console and from any element that happens to carry it.
  */
-const SOS_SAMPLES = [
-  {
-    hackerName: 'Alex (Hardware Hacker)', tableLocation: 'Table 42 (Siebel Basement)',
-    coordinates: { latitude: 40.113725, longitude: -88.224810 },
-    category: 'HARDWARE_MALFUNCTION', urgency: 'HIGH', requiredSkill: 'HARDWARE', karmaBounty: 250,
-    description: 'Soldering station shorted out, need a backup ESP32.',
-  },
-  {
-    hackerName: 'Devin (Hacker Team 19)', tableLocation: 'ECEB 2nd Floor Balcony',
-    coordinates: { latitude: 40.114828, longitude: -88.228056 },
-    category: 'POWER_OUTAGE', urgency: 'CRITICAL', requiredSkill: 'EVENT_LOGISTICS', karmaBounty: 200,
-    description: 'Power strip blew a fuse — four laptops at 15%.',
-  },
-  {
-    hackerName: 'Maya (Team Quantum)', tableLocation: 'Kenney Gym bleachers',
-    coordinates: { latitude: 40.113054, longitude: -88.228012 },
-    category: 'SPILL_CLEANUP', urgency: 'MEDIUM', requiredSkill: 'EVENT_LOGISTICS', karmaBounty: 150,
-    description: 'Boba spill under Table 108, right by the power run.',
-  },
-  {
-    hackerName: 'Ren (Team Altgeld)', tableLocation: 'Illini Union South Lounge',
-    coordinates: { latitude: 40.109540, longitude: -88.227340 },
-    category: 'HARDWARE_MALFUNCTION', urgency: 'HIGH', requiredSkill: 'HARDWARE', karmaBounty: 220,
-    description: 'Projector HDMI handshake failing minutes before the demo.',
-  },
-  {
-    hackerName: 'Priya (Team Foellinger)', tableLocation: 'Foellinger Auditorium stage left',
-    coordinates: { latitude: 40.106030, longitude: -88.227210 },
-    category: 'LOGISTICS_SUPPLIES', urgency: 'MEDIUM', requiredSkill: 'EVENT_LOGISTICS', karmaBounty: 160,
-    description: 'Out of extension cords for the closing-ceremony rehearsal.',
-  },
-];
-
-async function simulateHackerSOS() {
-  const pick = SOS_SAMPLES[Math.floor(Math.random() * SOS_SAMPLES.length)];
-
-  try {
-    const json = await Nexus.api('/api/v1/sos/tickets', { method: 'POST', body: pick, lenient: true });
-    if (json.success) {
-      logSosTerminal(`[SOS] Simulated ticket ${json.data._id.slice(-6)} raised at ${pick.tableLocation}`);
-      loadSOSTickets();
-    } else {
-      logSosTerminal(`[ERROR] Could not raise ticket: ${json.message}`);
-    }
-  } catch (err) {
-    logSosTerminal(`[ERROR] ${err.message}`);
-  }
-}
 
 async function dispatchNearestVolunteer(ticketId, btn) {
   logSosTerminal(`[DISPATCH] Computing Haversine distances for ticket ${ticketId.slice(-6)}…`);
@@ -1411,6 +1380,31 @@ function changeUserFaction(faction) {
   if (sel) sel.style.borderColor = factionOf(faction).color;
   renderGymsList();
   window.game?.onFactionChange();
+}
+
+/**
+ * Show the schedule import only to the roles the endpoint accepts.
+ *
+ * `POST /adonix/sync` is `requireRole('ORGANIZER')` (src/routes/v1/adonix.routes.ts:18), but
+ * the button was moved into the War Room, which is `roles: STAFF` — VOLUNTEER and SHIFT_LEAD
+ * included. Both would have seen it, clicked it and got a 403 rendered as
+ * "[ERROR] Adonix sync failed" in a log panel. Moving it out of the global header fixed the
+ * hacker case and left the two siblings, which is this repository's most frequent bug shape.
+ *
+ * Hidden rather than disabled: there is nothing the reader could do to earn it, so a greyed
+ * control would only pose a question with no answer. The server decides regardless.
+ *
+ * Reads the session rather than taking a user, because the first version took one and was
+ * called from the wrong function with a variable that did not exist there — every faction
+ * change would have thrown a ReferenceError, and the account signed in at page load never
+ * reached the gate at all. There is nothing to pass now.
+ */
+function gateAdonixSync() {
+  const btn = document.getElementById('adonix-sync-btn');
+  if (!btn) return;
+  const user = window.Nexus?.session?.user;
+  const role = user?.role || user?.kind;
+  btn.hidden = !(role === 'ORGANIZER' || role === 'ADMIN');
 }
 
 async function loadGymsData() {
@@ -2112,6 +2106,7 @@ function onSessionChange(user) {
     logChaosTerminal(`[EVENT] Signed in as ${user.displayName || user.id}`);
   }
   renderGymsList();
+  gateAdonixSync();
   window.game?.onFactionChange();
 }
 
@@ -2134,6 +2129,13 @@ async function init() {
     const sel = document.getElementById('user-faction-selector');
     if (sel && [...sel.options].some((o) => o.value === me.faction)) sel.value = me.faction;
   }
+  // The boot session has already been emitted by the time this listener is attached — the
+  // `await` above is what waits for it — so the account signed in at page load never reaches
+  // `onSessionChange`. The faction restore just above exists for the same reason. Without this
+  // call the Adonix button stayed hidden for the organiser it was gated *to*, which is the
+  // "entitled user silently loses the feature" shape, from the fix that was meant to prevent
+  // the unentitled ones getting a 403.
+  gateAdonixSync();
   Nexus.onEvent('session', onSessionChange);
 
   /**

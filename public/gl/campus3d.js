@@ -1717,6 +1717,21 @@ export function createCampusRenderer(canvas, opts = {}) {
 
   function frame(now) {
     raf = requestAnimationFrame(frame);
+
+    // Nothing to draw into.
+    //
+    // `resize()` clamps the backbuffer to at least 1x1 (`Math.max(1, …)`), so `W` and `H` are
+    // never zero and the guard below can never fire — which meant this loop kept doing full
+    // scene work whenever the canvas was not on screen. That is not a rare case: every
+    // inactive tab is `display: none` (`.tab-content` in styles.css), and lite mode hides this
+    // canvas outright, so the renderer it exists to switch off went on running behind it.
+    //
+    // `clientWidth`/`clientHeight` are the layout box, which IS zero for a `display: none`
+    // element, so they answer the question `W`/`H` cannot. The next frame is still scheduled —
+    // it costs nothing and the loop resumes by itself when the canvas is shown again, with no
+    // API for anyone to forget to call.
+    if (!canvas.clientWidth || !canvas.clientHeight) return;
+
     resize();
     if (!W || !H) return;
 

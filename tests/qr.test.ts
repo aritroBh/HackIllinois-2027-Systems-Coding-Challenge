@@ -62,7 +62,7 @@ function rasterise(
   return { data, size };
 }
 
-/** The colours `draw()` actually paints — cream light modules on near-black ink, not #fff/#000. */
+/** The colours `draw()` actually paints: a cream ground with near-black modules, not #fff/#000. */
 const INK: [number, number, number] = [0x08, 0x15, 0x2b];
 const CREAM: [number, number, number] = [0xff, 0xf3, 0xe0];
 
@@ -108,11 +108,12 @@ describe('the attendance QR is a QR', () => {
   });
 
   /**
-   * The tests above rasterise pure black on pure white. The page does not: `draw()` paints
-   * cream (#FFF3E0) modules on ink (#08152B) so the symbol belongs to the dashboard rather
-   * than sitting in it as a white rectangle. That is a real change to what a scanner sees —
-   * the light modules are 4% down on white and tinted warm — and a symbol that decodes in the
-   * idealised palette but not the shipped one would pass every test here and fail at the desk.
+   * The tests above rasterise pure black on pure white. The page does not: `draw()` fills the
+   * canvas cream (#FFF3E0) and paints the dark modules in ink (#08152B), so the symbol belongs
+   * to the dashboard rather than sitting in it as a white rectangle. That is a real change to
+   * what a scanner sees — the light modules are 4% down on white and tinted warm, and the dark
+   * ones are not black — and a symbol that decodes in the idealised palette but not the shipped
+   * one would pass every test here and fail at the desk.
    */
   it('still decodes in the cream-on-ink palette the page actually paints', () => {
     const { encode } = loadEncoder();

@@ -177,13 +177,39 @@ if (!fs.existsSync(lockPath)) {
   } else {
     const fallback = [...navBlock[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
 
-    // Every registerTab() call across the front end, with its roles literal if it has one.
+    /*
+     * Every registerTab() call across the front end, with the roles it declares.
+     *
+     * The call bodies are brace-matched rather than bounded by a character count. A lazy
+     * `[\s\S]{0,400}?` was tried first and was quietly wrong: `views/sos.js` puts an
+     * `addEventListener(…)` inside its `render`, so the first `})` is an inner one about 550
+     * characters in, and the pattern matched **nothing at all** in that file. `tab-sos` was
+     * invisible to this gate, and the "did the scan work" count below still saw nine hits
+     * from the other files and stayed quiet — a gate that could not fail for one tab.
+     *
+     * Comments are stripped first, so a commented-out call cannot register a phantom tab.
+     */
     const registered = new Map();
-    for (const rel of ['public/app.js', 'public/views/me.js', 'public/views/lead.js',
-                       'public/views/sos.js', 'public/views/quests.js']) {
-      const src = fs.readFileSync(path.join(root, rel), 'utf8');
-      for (const m of src.matchAll(/registerTab\(\{([\s\S]{0,400}?)\}\)/g)) {
-        const body = m[1];
+    const TAB_SOURCES = ['public/app.js', 'public/views/me.js', 'public/views/lead.js',
+                         'public/views/sos.js', 'public/views/quests.js'];
+    /** The `{...}` object literal starting at `from`, by brace depth, ignoring quoted braces. */
+    const objectAt = (src, from) => {
+      let depth = 0, quote = null;
+      for (let i = from; i < src.length; i += 1) {
+        const c = src[i];
+        if (quote) { if (c === '\\') i += 1; else if (c === quote) quote = null; continue; }
+        if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+        if (c === '{') depth += 1;
+        else if (c === '}') { depth -= 1; if (depth === 0) return src.slice(from, i + 1); }
+      }
+      return null;
+    };
+    for (const rel of TAB_SOURCES) {
+      const raw = fs.readFileSync(path.join(root, rel), 'utf8');
+      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+        const body = objectAt(src, m.index + m[0].length - 1);
+        if (!body) { problems.push(`checkShell: unbalanced registerTab({ in ${rel}`); continue; }
         // `id:` is a string literal in app.js and a module constant in the view files.
         let id = body.match(/id:\s*'([^']+)'/)?.[1];
         if (!id) {
@@ -191,26 +217,93 @@ if (!fs.existsSync(lockPath)) {
           if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
         }
         if (!id) continue;
-        const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? 'EVERYONE';
+        const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? null;
         registered.set(id, roles);
       }
     }
-    if (registered.size < 5) problems.push(`checkShell could only find ${registered.size} registerTab() calls; the scan is broken`);
+    // Every tab this repository actually has. A drop below it means the scan broke, not that
+    // tabs were deleted — and this is the number the sos.js miss above slipped past, so it is
+    // now the real total rather than a floor low enough to hide one.
+    const EXPECTED_TABS = 8;
+    if (registered.size < EXPECTED_TABS) {
+      problems.push(
+        `checkShell found ${registered.size} registerTab() calls across ${TAB_SOURCES.length} files ` +
+        `but expects at least ${EXPECTED_TABS}. Either a tab was removed (update EXPECTED_TABS) ` +
+        'or the scanner no longer matches how they are written.'
+      );
+    }
 
     for (const id of fallback) {
       if (!registered.has(id)) {
         problems.push(`index.html's fallback nav lists "${id}", which no registerTab() call declares`);
       }
     }
+    /*
+     * "Open to every role" is a property of the role set, not of how it was spelled.
+     *
+     * `app.js` writes `roles: EVERYONE`; `views/me.js` and `views/quests.js` write the same
+     * five roles out as an array literal. Matching only the identifier meant those two counted
+     * as gated, so deleting their fallback buttons would have passed this gate silently — the
+     * exact drift it was added to catch.
+     */
+    const ALL_ROLES = ['VOLUNTEER', 'SHIFT_LEAD', 'ORGANIZER', 'ADMIN', 'HACKER'];
+    const openToEveryone = (roles) => {
+      if (roles === null || roles === 'EVERYONE') return true;   // no `roles` key means everyone
+      if (!roles.startsWith('[')) return false;                  // some other named constant
+      const listed = [...roles.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+      return ALL_ROLES.every((r) => listed.includes(r));
+    };
     for (const [id, roles] of registered) {
-      if (roles === 'EVERYONE' && !fallback.includes(id)) {
+      if (openToEveryone(roles) && !fallback.includes(id)) {
         problems.push(`tab "${id}" is open to every role but has no button in index.html's fallback nav`);
       }
     }
-    // The fallback marks one tab active; it must be one it actually lists.
-    const active = navBlock[1].match(/class="pb tab-btn active"[^>]*data-tab="([^"]+)"/)?.[1];
+    /*
+     * Order.
+     *
+     * `index.html` tells the reader this markup is kept in step with the registry, and order
+     * is half of what "in step" means — a fallback that lists the same tabs in a different
+     * sequence still jumps under the reader when nexus.js re-renders. `orderedTabs()` sorts on
+     * `order` and breaks ties on `label` (nexus.js), so that is reproduced here.
+     */
+    const seq = [...registered.entries()]
+      .filter(([id]) => fallback.includes(id))
+      .map(([id]) => id);
+    // Sorting needs the order and label, which the scan above did not keep. Re-read them.
+    const meta = new Map();
+    for (const rel of TAB_SOURCES) {
+      const src = fs.readFileSync(path.join(root, rel), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+        const body = objectAt(src, m.index + m[0].length - 1);
+        if (!body) continue;
+        let id = body.match(/id:\s*'([^']+)'/)?.[1];
+        if (!id) {
+          const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
+          if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
+        }
+        if (!id) continue;
+        meta.set(id, {
+          order: Number(body.match(/order:\s*(\d+)/)?.[1] ?? 100),
+          label: body.match(/label:\s*'([^']+)'/)?.[1] ?? id,
+        });
+      }
+    }
+    const expected = [...seq].sort((a, b) =>
+      (meta.get(a).order - meta.get(b).order) || meta.get(a).label.localeCompare(meta.get(b).label));
+    if (expected.join(',') !== fallback.join(',')) {
+      problems.push(
+        `index.html's fallback nav is in the order [${fallback.join(', ')}] but the registry ` +
+        `sorts these as [${expected.join(', ')}]`
+      );
+    }
+
+    // The fallback marks one tab active; it must be one it actually lists, and it must be the
+    // one the registry would open first.
+    const active = navBlock[1].match(/class="pb tab-btn active"[\s\S]*?data-tab="([^"]+)"/)?.[1];
     if (!active) problems.push('index.html\'s fallback nav marks no tab active');
     else if (!fallback.includes(active)) problems.push(`the fallback nav marks "${active}" active but does not list it`);
+    else if (active !== expected[0]) problems.push(`the fallback nav marks "${active}" active, but "${expected[0]}" sorts first`);
     // ...and carry the ARIA the live render carries, since this is what an early screen
     // reader gets.
     for (const attr of ['role="tab"', 'aria-selected', 'aria-controls']) {

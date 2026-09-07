@@ -7,11 +7,12 @@
  * confirmed registration, and the server derives the volunteer from the session, so there
  * is no id to pass on this path.
  *
- * "No way to mint one for somebody else" is true of this tab and not of the whole client:
- * the older Trainer QR path in `app.js` still posts `{volunteerId, shiftId}`, which a server
- * in `AUTH_MODE=legacy` believes. That is the documented open-demo contract rather than a
- * hole — `required` mode refuses a body id that disagrees with the session — but a reader
- * who took this sentence for a global guarantee would be wrong.
+ * "No way to mint one for somebody else" is now true of the whole client, which it was not
+ * when this was written. The older Trainer path in `app.js` posted `{volunteerId, shiftId}`
+ * and a server in `AUTH_MODE=legacy` believed it; that panel and its four module variables
+ * were deleted, and this tab is the only thing that mints an attendance token. The server
+ * side is unchanged and still governs: `legacy` believes a body id for an action, `required`
+ * refuses one that disagrees with the session.
  *
  * The walking ETA is local arithmetic. The renderer knows where the player is in world
  * units, the content pack knows where the venue is in degrees, and both share the frame
@@ -219,12 +220,22 @@
 
   const cell = (value, label) => `<div class="stat"><div class="v">${esc(value)}</div><div class="hud-label">${esc(label)}</div></div>`;
 
+  /**
+   * The board this account can actually open.
+   *
+   * War Room is `roles: STAFF` (app.js), which excludes HACKER; the Quests board lists every
+   * role. This button used to name `tab-shifts` unconditionally, so a hacker pressed a
+   * labelled button and `showTab` refused it with a `console.warn` — visible to nobody, on a
+   * screen that gave no other way forward.
+   */
+  const boardTab = () => (N.session.user?.kind === 'HACKER' ? 'tab-quests' : 'tab-shifts');
+
   function nextShiftPanel() {
     const s = state.next;
     if (!s) {
       return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Next up</div><h3>Nothing booked</h3></div></div>
         <div class="empty-state">No shift on your card yet.
-          <button class="pb" type="button" data-action="tab" data-tab="tab-shifts">Open the quest board</button></div></div>`;
+          <button class="pb" type="button" data-action="tab" data-tab="${boardTab()}">Open the quest board</button></div></div>`;
     }
     const starts = new Date(s.startTime).getTime();
     const metres = metresToShift(s);
@@ -249,7 +260,21 @@
       </div>`;
   }
 
+  /**
+   * The check-in token, or a sentence saying why there is not one.
+   *
+   * Returning '' for a hacker left a visible hole where every other role has a panel: the tab
+   * simply had one fewer card and said nothing about it. Absence is not an explanation — a
+   * hacker reading this screen has no way to tell whether check-in is broken, still loading,
+   * or not theirs.
+   */
   function tokenPanel() {
+    if (N.session.user?.kind === 'HACKER') {
+      return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Check in</div><h3>Not your check-in</h3></div></div>
+        <p class="ob-hint">Attendance tokens are how <em>volunteers</em> clock on to a shift. As a hacker you never need one — raise an SOS from the SOS tab if you need somebody, and spin HackStops on the campus map for power-ups.</p></div>`;
+    }
+    // `AccountKind` is VOLUNTEER | HACKER and the branch above takes HACKER, so this only
+    // catches an account with no kind at all — signed out, or a session still loading.
     if (N.session.user?.kind !== 'VOLUNTEER') return '';
     if (!canMint()) {
       return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Check in</div><h3>No token yet</h3></div></div>

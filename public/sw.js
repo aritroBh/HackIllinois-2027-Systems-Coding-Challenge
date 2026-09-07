@@ -63,7 +63,7 @@
   // `v8`: the campus never stands itself down now; low-power is a choice, not a guess.
   // `v9`: contrast and type pass — invisible ink-on-dark text, undefined tokens, 7px Silkscreen.
   // `v10`: destructive demo controls removed from the shipped nav.
-  const VERSION = 'v11';
+  const VERSION = 'v17';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

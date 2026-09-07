@@ -102,13 +102,21 @@
    * a lite-mode user could see the stops and never reach one.
    *
    * This is a second watch rather than a refactor of the first because the two modes want
-   * different things: `game.js` drives a camera and a sprite, this drives two numbers. They
-   * never run at once — `mount()` starts this one, `unmount()` stops it — and both hand the
-   * fix to the same presence publisher, which is the only place that decides whether a
-   * position is shared at all.
+   * different things: `game.js` drives a camera and a sprite, this drives two numbers. Both
+   * hand the fix to the same presence publisher, which is the only place that decides whether
+   * a position is shared at all.
+   *
+   * They must not both be live, and nothing made that true on its own: entering lite mode does
+   * not stop the renderer, so a user who was already walking and then chose the flat map had
+   * two watches running and two publishers, of which `unmount()` stopped one. `startWatch()`
+   * closes game.js's first.
    */
 
-  const PROX_M = 75;  // matches game.js's PROX_RADIUS: the radius a HackStop can be spun from.
+  // The radius a HackStop can be spun from. Read from `game.js` rather than copied, because
+  // the readout down here and the Spin buttons over there have to agree about the same number
+  // — one saying "in range" while the other stays disabled is the bug this whole branch
+  // exists to fix. The literal is the fallback for game.js not having loaded.
+  const proxRadius = () => window.game?.PROX_RADIUS ?? 75;
 
   /** Metres between two WGS84 points. Equirectangular; exact enough over one campus. */
   function metresBetween(a, b) {
@@ -120,6 +128,8 @@
 
   function startWatch() {
     if (state.geoWatch != null || !navigator.geolocation) return;
+    // See the note above: one watch at a time, and lite mode owns it while it is mounted.
+    window.game?.stopWalk?.();
     state.geoWatch = navigator.geolocation.watchPosition(
       (pos) => {
         state.fix = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -127,10 +137,16 @@
         // accuracy gate all live there, and none of them are this file's business.
         N.presence?.publish?.(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? 999, pos.coords.heading ?? undefined);
         paintNearest();
+        // The Spin buttons are gated on distance and there is no renderer tick to re-gate
+        // them, so this is the only thing that can. Without it a lite-mode player walks into
+        // range, is told to spin, and the button stays disabled until they change tab.
+        window.game?.gateSpins?.();
         draw(true);
       },
-      // No toast: nothing here asked for a location, so a refusal is an answer, not an error.
-      () => { state.fix = null; paintNearest(); },
+      // A refusal is an answer, not an error, so there is no toast — but the watch is finished
+      // either way and holding its handle only guarantees `startWatch` will decline to open
+      // another one after the reader grants permission.
+      () => { state.fix = null; stopWatch(); paintNearest(); },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   }
@@ -144,9 +160,13 @@
    * Write the nearest-HackStop readout.
    *
    * Into `#hud-nearest`, the same box the 3D HUD uses, because it is the same fact in the same
-   * place — `body.lite` keeps that corner visible for exactly this. `game.js` only writes it
-   * from the renderer's frame callback, which is not running, so in lite mode this file is the
-   * only writer and there is no race between them.
+   * place — `body.lite` keeps that corner visible for exactly this.
+   *
+   * `game.js`'s `updateHud()` writes the same element, and it is *not* driven only by the
+   * render loop: `onTabChange` calls it on every switch to the Campus tab, and so do the
+   * handover handler and the walk, follow and place actions. Any of those firing in lite mode
+   * replaced this readout with "Place your trainer to start walking". `updateHud` now returns
+   * early on `Nexus.flags.lite`, so while lite is mounted this file is the only writer.
    */
   function paintNearest() {
     const near = document.getElementById('hud-nearest');
@@ -169,7 +189,8 @@
     const d = Math.round(best.d);
     const segs = 8, on = Math.max(0, Math.min(segs, Math.round(segs * (1 - Math.min(1, d / 600)))));
     const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
-    const hint = d <= PROX_M ? 'in range — spin it!' : `walk ${d - PROX_M} m closer to spin`;
+    const prox = proxRadius();
+    const hint = d <= prox ? 'in range — spin it!' : `walk ${d - prox} m closer to spin`;
     near.innerHTML = `${label}<div class="near-name">${esc(best.name)}</div>`
       + `<div class="near-dist"><b>${d} m</b><span>${hint}</span></div><div class="segbar">${bar}</div>`;
   }
@@ -364,6 +385,14 @@
     value: {
       get active() { return !!state.active; },
       get reason() { return state.reason; },
+      /**
+       * The last device fix, as `{ latitude, longitude }`, or null.
+       *
+       * `app.js`'s `playerCoords()` reads this when the renderer is down, so a spin or a gym
+       * contest in lite mode carries a real position rather than being refused. Shaped like
+       * `fromWorld()`'s return value so that function needs no branch.
+       */
+      get fix() { return state.fix ? { latitude: state.fix.lat, longitude: state.fix.lng } : null; },
       enable: (why = 'you chose low-power mode') => { writeChoice(true); apply(true, why); },
       disable: () => { writeChoice(false); apply(false, 'you asked for the 3D map'); boot3D(); },
       redraw: () => draw(true),
