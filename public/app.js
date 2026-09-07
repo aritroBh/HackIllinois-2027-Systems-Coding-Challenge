@@ -1293,9 +1293,12 @@ async function refreshQrToken(mineGen = handoverGeneration) {
 
     if (json.success) {
       currentQrToken = json.data.token;
-      // Local-only render: never ship the live HMAC token to a third-party QR API.
-      const local = document.getElementById('qr-local');
-      if (local) local.innerText = currentQrToken;
+      // Local-only render: never ship the live HMAC token to a third-party QR API, which is
+      // what every hosted QR image service would require. `qr.js` encodes it in the page.
+      //
+      // This used to print the token as text, which is why the panel that says "show this at
+      // the desk" could not be shown to a desk: no scanner reads base64.
+      window.NexusQR?.render(document.getElementById('qr-local'), currentQrToken);
       startQrCountdown(json.data.expiresInSeconds);
       logQrTerminal(`Token generated (slice ${json.data.timeSlice}) — ${currentQrToken.substring(0, 24)}…`);
     } else {
@@ -1326,8 +1329,7 @@ function clearQrToken() {
   currentQrToken = null;
   currentQrVolunteerId = null;
   currentQrShiftId = null;
-  const local = document.getElementById('qr-local');
-  if (local) local.innerText = '';
+  window.NexusQR?.render(document.getElementById('qr-local'), '');
   const text = document.getElementById('countdown-text');
   if (text) text.innerText = 'No live token';
   const fill = document.getElementById('countdown-fill');

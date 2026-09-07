@@ -263,7 +263,7 @@
           <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New token' : 'Mint token'}</button>
         </div>
         <div class="qr-container">
-          <div class="qr-box"><div id="me-token-code" style="width:100%;height:100%;overflow:hidden;word-break:break-all;font-size:12px;line-height:1.3;color:var(--prairie-lt)">${esc(live ? state.token.token : '')}</div></div>
+          <div class="qr-box"><div id="me-token-code" class="qr-target"></div></div>
           <div>
             <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
             <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
@@ -344,6 +344,10 @@
         <div class="rail">${statsPanel()}${settingsPanel()}</div>
       </div>`;
     paintCountdown();
+    // The token is drawn, not printed. `qr.js` encodes it in the page — the panel says "show
+    // this at the desk" and a desk scanner cannot read base64, which is what this box held
+    // before. Rendered after `innerHTML` because the element has to exist first.
+    window.NexusQR?.render(document.getElementById('me-token-code'), state.token ? state.token.token : '');
   }
 
   /* ------------------------------------------------------------------ *

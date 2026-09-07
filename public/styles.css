@@ -793,3 +793,49 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .lead-row .hud-label { margin: 0; flex: none; }
 .lead-row .px-input { flex: none; width: 7ch; text-align: center; }
 .lead-row .pb { margin-left: auto; }
+
+/* ---------------- The attendance QR (qr.js) ----------------
+   The box used to hold the token as green text under a heading that says "show this at the
+   desk". No scanner reads base64, so the feature stopped one step short of the desk. The
+   canvas is drawn in-page — the token is a live credential and must never reach a hosted
+   QR image service. */
+
+.qr-target { width: 100%; height: 100%; display: grid; place-items: center; }
+.qr-canvas {
+  width: 100%; height: auto; max-width: 100%;
+  /* Pixel art, not a photo: the modules must stay square-edged at any scale or a phone has to
+     work harder to find them. */
+  image-rendering: pixelated;
+  border: 2px solid var(--ink);
+}
+/* If encoding ever fails, show the token rather than an empty square: the desk can type it. */
+.qr-fallback { font-family: var(--f-body); font-size: 13px; line-height: 1.3; color: var(--prairie-lt); word-break: break-all; overflow: auto; }
+
+/* Available to a screen reader and to nothing else. The QR carries the token visually; this
+   carries the same token for anyone who cannot point a camera at it. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------------- Readability ----------------
+   The tab strip is the most-read text in the application and was set at the same 10 px as a
+   button caption. Silkscreen has no lowercase and a small x-height, so 10 px reads smaller
+   than 10 px usually does. */
+.tab-btn { font-size: 12px; letter-spacing: 0.8px; padding: 11px 16px; min-height: 36px; }
+
+/* ---------------- Low-power map ----------------
+   `lite.js` toggles `body.lite` and mounts its flat map at z-index 1. The 3D HUD sits at 3 and
+   4 — so in low-power mode the FPS counter, the nearest-beacon card, the walk hint and the
+   world labels all drew *on top of the flat map*, including on top of the panel's own
+   "Load 3D" button. The way back to the 3D campus was rendered underneath the thing it was
+   trying to replace, which is why low-power mode looked like the 3D map had been deleted.
+
+   `apply()` has toggled this class since the file was written and nothing ever styled it. */
+
+body.lite #lite-map { z-index: 6; }
+/* World labels belong to the 3D scene; there is no scene to label. */
+body.lite .world-labels { display: none; }
+/* The 3D HUD is hidden rather than merely covered: half of it (FPS, building count, the WASD
+   hint, the retro/cinematic toggles) describes a renderer that is not running. */
+body.lite .viewport-hud { display: none; }

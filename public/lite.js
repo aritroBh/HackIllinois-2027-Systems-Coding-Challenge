@@ -28,8 +28,6 @@
 
   const KEY = 'nexus.lite.v1';
   const REDRAW_MS = 2000;
-  const BATTERY_FLOOR = 0.2;
-  const MEMORY_FLOOR = 2;              // GB, per navigator.deviceMemory
   const QUERY = /(?:^|[?&])lite(?:=([^&]*))?(?=&|$)/;
   const FALLBACK_COLOR = { TEAM_KERNEL: '#22d3ee', TEAM_TENSOR: '#a78bfa', TEAM_SILICON: '#fbbf24', NEUTRAL: '#7c8daa' };
 
@@ -57,23 +55,23 @@
     return m ? !(m[1] === '0' || m[1] === 'false') : null;
   }
 
-  /** A reason to skip the renderer without asking, or null to boot it. */
-  function autoReason() {
-    if (navigator.connection?.saveData) return 'Data Saver is on';
-    const mem = navigator.deviceMemory;
-    if (typeof mem === 'number' && mem <= MEMORY_FLOOR) return `this device reports ${mem} GB of memory`;
-    return null;
-  }
-
-  function checkBattery() {
-    if (typeof navigator.getBattery !== 'function') return;
-    navigator.getBattery().then((b) => {
-      // This resolves after the first paint, so only stand the renderer down if
-      // nothing booted it meanwhile and the user still has no saved answer.
-      if (b.level >= BATTERY_FLOOR || window.campus || readChoice() !== null) return;
-      apply(true, `the battery is at ${Math.round(b.level * 100)}%`);
-    }).catch(() => { /* the permission was refused; boot normally */ });
-  }
+  /*
+   * There is no automatic downgrade any more, and that is a deliberate reversal.
+   *
+   * This file used to stand the 3D campus down on its own: Data Saver, a device reporting two
+   * gigabytes or less, or a battery under the floor. The battery rule is the one that bit — it
+   * is evaluated on every load and never recorded, so a laptop running on battery got the flat
+   * map every single time, with no memory of having chosen anything and (because the panel
+   * mounted *under* the 3D HUD) no visible way back. From the outside that is indistinguishable
+   * from the 3D campus having been deleted.
+   *
+   * The campus is the thing worth showing. A guess about somebody's hardware is not a good
+   * enough reason to hide it from them, and the renderer already has a real fallback for the
+   * only case that genuinely cannot work: no WebGL2, which it detects and reports honestly.
+   *
+   * The flat map is still here and still good. It is now reached the way a preference should
+   * be — `?lite` in the URL, or the toggle — and never by the page deciding for you.
+   */
 
   function apply(on, reason) {
     state.reason = reason;
@@ -258,9 +256,6 @@
   const forced = queryChoice();
   const saved = readChoice();
   if (forced !== null) apply(forced, forced ? 'the ?lite flag is set' : 'the ?lite=0 flag is set');
-  else if (saved !== null) apply(saved, saved ? 'you chose low-power mode' : 'you asked for the 3D map');
-  else {
-    const why = autoReason();
-    if (why) apply(true, why); else checkBattery();
-  }
+  else if (saved === true) apply(true, 'you chose low-power mode');
+  // Anything else boots the campus. `saved === false` needs no call: not applying is the 3D map.
 })();

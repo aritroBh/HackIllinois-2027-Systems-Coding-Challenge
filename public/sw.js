@@ -57,7 +57,11 @@
   // `v4`: pxselect.js joins the shell, and the type scale moved — a cached v3 bundle would show
   //       the old sizes and the OS dropdown next to a page that had stopped using either.
   // `v5`: dropdown options wrap instead of truncating, and only one list opens at a time.
-  const VERSION = 'v5';
+  // `v6`: qr.js joins the shell — the attendance panel draws a real scannable code now — and
+  //       the tab strip grew to a readable size.
+  // `v7`: low-power map stacking — the way back to the 3D campus was under the 3D HUD.
+  // `v8`: the campus never stands itself down now; low-power is a choice, not a guess.
+  const VERSION = 'v8';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
@@ -85,6 +89,7 @@
     '/dashboard/session.js',
     '/dashboard/theme.js',
     '/dashboard/lite.js',
+    '/dashboard/qr.js',
     '/dashboard/pxselect.js',
     '/dashboard/a11y.js',
     '/dashboard/pwa.js',
