@@ -479,6 +479,7 @@
     if (!window.campus) return;
     if (has('setPlayer')) {
       window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction });
+      if (!positionSource) positionSource = 'demo';
       applyPlayerSprite();
     }
     if (has('setProximityRadius')) window.campus.setProximityRadius(PROX_RADIUS);
@@ -619,9 +620,24 @@
           // Share the fix with the presence service (it decides whether to publish: the
           // opt-in, the 10 m / 5 s cadence and the accuracy gate all live there).
           window.Nexus?.presence?.publish?.(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? 999, pos.coords.heading ?? undefined);
-          if (r && !r.onCampus && !state.flags.__offCampusToldAt) {
-            state.flags.__offCampusToldAt = Date.now(); saveFlags();
-            toast("You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");
+          if (r) {
+            positionSource = r.onCampus ? 'gps' : 'gps-far';
+            positionOffBy = r.onCampus ? 0 : metresOutsideCampus(pos.coords.latitude, pos.coords.longitude);
+            updateHud(true);
+          }
+          // Said once per session, not once per lifetime.
+          //
+          // This was gated on a flag persisted to localStorage, so the one explanation of why
+          // the sprite is not moving was shown exactly once, ever, and never again on any
+          // later visit — including the visit where somebody first wonders about it. The
+          // distance is in the message now, because "off campus" and "ten thousand kilometres
+          // away" are different situations and only one of them is worth walking off.
+          if (!r?.onCampus && !offCampusToldThisSession) {
+            offCampusToldThisSession = true;
+            const km = Math.round(positionOffBy / 1000);
+            toast(km >= 5
+              ? `You are about ${km.toLocaleString()} km from campus, so the map cannot show your real position. Walk the map with WASD instead.`
+              : "You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");
           }
         },
         (err) => { toast(`Location unavailable: ${err.message}. WASD still works.`); toggleWalk(false); },
@@ -681,7 +697,22 @@
     if (lv) {
       syncFromCaches();
       const pct = Math.round(levelProgress(state.karma) * 100);
-      lv.innerHTML = `${state.head ? `<img class="pxi" alt="" src="${S.imageDataURL(state.head, 1)}">` : S.img('trainer', 2)}<div><div class="hud-label">${escq(state.name.toUpperCase())} · LV ${state.level}</div><div class="pxbar"><i style="width:${pct}%"></i></div><div class="hud-label fac" style="--c:${factionOf?.(state.faction)?.color || '#35B8C4'}">■ ${escq(String(state.faction).replace('TEAM_', 'TEAM '))}</div></div>`;
+      // A demo placement the player has since driven with the keyboard is no longer the drop
+      // point, and saying "DEMO POSITION" of a sprite they are steering reads as broken. This
+      // is also what keeps the `keys` branch below reachable — a state nothing can enter is
+      // the shape this repository keeps having to delete.
+      if (positionSource === 'demo') {
+        const p = window.campus?.getPlayer?.();
+        if (p && (Math.abs(p.x - -2) > 0.5 || Math.abs(p.z - -8) > 0.5)) positionSource = 'keys';
+      }
+      // The position line. Silence here was the whole problem: a demo placement and a real
+      // GPS fix looked identical, so the map appeared to claim it knew where you were.
+      const km = positionOffBy >= 1000 ? `${Math.round(positionOffBy / 1000).toLocaleString()} km` : `${Math.round(positionOffBy)} m`;
+      const where = positionSource === 'gps' ? { text: 'GPS · ON CAMPUS', cls: 'ok' }
+        : positionSource === 'gps-far' ? { text: `GPS · ${km} AWAY`, cls: 'warn' }
+          : positionSource === 'keys' ? { text: 'WALKING WITH KEYS', cls: '' }
+            : { text: 'DEMO POSITION · NOT YOUR GPS', cls: 'warn' };
+      lv.innerHTML = `${state.head ? `<img class="pxi" alt="" src="${S.imageDataURL(state.head, 1)}">` : S.img('trainer', 2)}<div><div class="hud-label">${escq(state.name.toUpperCase())} · LV ${state.level}</div><div class="pxbar"><i style="width:${pct}%"></i></div><div class="hud-label fac" style="--c:${factionOf?.(state.faction)?.color || '#35B8C4'}">■ ${escq(String(state.faction).replace('TEAM_', 'TEAM '))}</div><div class="hud-label pos ${where.cls}">${escq(where.text)}</div></div>`;
     }
 
     const ctrl = $('hud-control');
@@ -744,6 +775,46 @@
    * it is skipped outright under `prefers-reduced-motion`, where the same beats still play
    * out in the message line with no motion and no waiting.
    */
+  /**
+   * Where the trainer on the map actually came from.
+   *
+   * `onCampusReady` drops a sprite at a fixed spot on the Quad so the map has somebody on it,
+   * and that placement was indistinguishable on screen from a real GPS fix — same name tag,
+   * same sprite, same "nearest HackStop" readout counting down to a distance from a position
+   * the player has never been to. Somebody standing in another country, with location
+   * permission granted, saw themselves on the Quad and reasonably concluded the app was
+   * lying. It was: it just never said which of the two it was showing.
+   *
+   * `null` until something places the trainer; then 'demo', 'gps', 'gps-far' or 'keys'.
+   */
+  let positionSource = null;
+  /** Metres from the campus bounding box when the fix is outside it; 0 otherwise. */
+  let positionOffBy = 0;
+  /** Per-session, deliberately: see the note where it is set. */
+  let offCampusToldThisSession = false;
+
+  /**
+   * Great-circle metres from a fix to the nearest edge of the campus bounding box.
+   *
+   * The renderer clamps an outside fix to the map edge and reports `onCampus: false`, which
+   * is all it needs. A person wants the number: "off campus" reads like a street away, and
+   * ten thousand kilometres is a different fact about their evening.
+   */
+  function metresOutsideCampus(lat, lng) {
+    const box = window.campusMeta?.bbox;
+    if (!Array.isArray(box) || box.length !== 4) return 0;
+    const [s, w, n, e] = box;
+    const clampedLat = Math.max(s, Math.min(n, lat));
+    const clampedLng = Math.max(w, Math.min(e, lng));
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (clampedLat - lat) * rad;
+    const dLng = (clampedLng - lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(lat * rad) * Math.cos(clampedLat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+
   /** Gym ids with a battle write in flight. Outlives the stage, which is the point. */
   const inFlight = new Set();
 

@@ -85,7 +85,12 @@
   // `v33`: round twenty — the nearest-stop readout uses that stop's fence, not the campus one.
   // `v34`: round twenty-one — the faction picker is disabled while its write is in flight,
   //        and a handover re-renders everything that reads the faction, not just the picker.
-  const VERSION = 'v35';
+  // `v35`: comment corrections only; no behaviour change.
+  // `v36`: round twenty-two — a faction write that never settles no longer disables the
+  //        picker for ever, and the renders that precede it moved inside the try.
+  // `v37`: the map says whether the trainer's position is your GPS or a demo placement, and
+  //        how far off-campus a real fix is.
+  const VERSION = 'v37';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

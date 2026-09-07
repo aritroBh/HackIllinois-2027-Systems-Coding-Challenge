@@ -516,6 +516,12 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 }
 .sw-update .pb { margin-bottom: 0; }
 
+/* Where the trainer's position came from. `warn` is the case that matters: a demo placement
+   or a GPS fix outside the map, both of which look exactly like a real position without it. */
+.hud-label.pos { margin-top: 3px; letter-spacing: 0.4px; color: var(--mute); }
+.hud-label.pos.ok { color: var(--prairie-lt); }
+.hud-label.pos.warn { color: var(--harvest); }
+
 /* Battle theatrics.
  *
  * Every rule below is inside `prefers-reduced-motion: no-preference`. game.js also refuses

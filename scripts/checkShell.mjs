@@ -215,7 +215,10 @@ if (!fs.existsSync(lockPath)) {
      * cannot read it, so it must say so rather than pass.
      */
     const reportIndirectRegistrations = (rel, src) => {
-      for (const m of src.matchAll(/registerTab\(\s*(?!\{)/g)) {
+      // `\s*` inside the lookahead, not outside it. Outside, the engine backtracks `\s*` to
+      // empty on `registerTab( {`, the lookahead then examines the space rather than the
+      // brace, succeeds, and a perfectly valid registration is reported as unreadable.
+      for (const m of src.matchAll(/registerTab\s*\((?!\s*\{)/g)) {
         const shown = src.slice(m.index, m.index + 60).split('\n')[0];
         problems.push(
           `${rel} calls registerTab() with something other than an inline object literal `
@@ -259,7 +262,7 @@ if (!fs.existsSync(lockPath)) {
       const raw = fs.readFileSync(path.join(root, rel), 'utf8');
       const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
       reportIndirectRegistrations(rel, src);
-      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+      for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) { problems.push(`checkShell: unbalanced registerTab({ in ${rel}`); continue; }
         // `id:` is a string literal in app.js and a module constant in the view files.
@@ -385,7 +388,7 @@ if (!fs.existsSync(lockPath)) {
     for (const rel of TAB_SOURCES) {
       const src = fs.readFileSync(path.join(root, rel), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+      for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) continue;
         let id = body.match(/id:\s*'([^']+)'/)?.[1];

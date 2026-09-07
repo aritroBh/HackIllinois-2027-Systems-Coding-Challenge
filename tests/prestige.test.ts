@@ -98,7 +98,13 @@ describe('the seed cannot restate the rule and get it wrong', () => {
     // pattern below and was skipped entirely, so the assertion passed on a seed containing
     // the exact literal it exists to refuse. Contrived as a keystroke, ordinary as the
     // residue of somebody annotating a line they meant to come back to.
-    const stripped = seed.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
+    // Line comments anywhere, not only at the start of a line: `prestigeTier // note` on one
+    // line and `: 'X'` on the next slips past a start-anchored strip, and then `prestigeTier\s*:`
+    // never matches, so the assignment is invisible rather than refused. The `[^:]` guard is
+    // the same one `checkShell` uses, so a `https://` inside a string is not mistaken for one.
+    const stripped = seed
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1 ');
     const assignments = [...stripped.matchAll(/prestigeTier\s*:\s*([^,\n]+)/g)].map((m) => m[1].trim());
     expect(assignments.length).toBeGreaterThan(0);   // a parser that matches nothing is not a pass
     for (const value of assignments) {

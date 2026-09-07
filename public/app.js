@@ -24,6 +24,8 @@ let volunteersCache = [];
  * cache, so it is not only the bag that would be wrong.
  */
 let handoverGeneration = 0;
+/** Which faction write owns the picker. A late response from an older one must not repaint. */
+let factionWriteGeneration = 0;
 // The session user's faction when signed in.
 //
 // This used to say the picker overrode it "in this tab only: no endpoint writes an account's
@@ -831,9 +833,11 @@ function renderGymsList() {
  * next to a button that falls back to `PROX_RADIUS` — so on a pack whose campus radius is not
  * 75 the label and the control beside it disagreed.
  *
- * Not "one place": there are three readers of `event.campus.geofenceMeters` in the client —
- * this, `applyGeofence` in game.js, and `geofenceMetres` in views/me.js — because they live
- * in three files that do not import one another. What they share is the *field*, and the
+ * Not "one place": there are four readers of `event.campus.geofenceMeters` in the client —
+ * this and `applyBranding` in this file, `applyGeofence` in game.js, and `geofenceMetres` in
+ * views/me.js — spread across three files that do not import one another. (An earlier version
+ * of this very sentence said three, having missed the one twelve hundred lines above it. A
+ * comment that exists to enumerate is worth nothing if the enumeration is wrong.) What they share is the *field*, and the
  * precedence above it is resolved server-side, so they cannot disagree about the rule even
  * though they each read it separately. Claiming one place was flattering; the property that
  * matters is that none of them computes anything.
@@ -1455,8 +1459,9 @@ function paintFactionPicker(faction, locked, pending = false) {
  */
 async function changeUserFaction(faction) {
   const previous = currentVolunteerFaction;
+  const generation = ++factionWriteGeneration;
   currentVolunteerFaction = faction;
-  // Locked for the duration of the write, not just on success.
+  // Disabled for the duration of the write — disabled, not locked.
   //
   // Nothing stopped a second pick while the first PATCH was in flight, and each call closes
   // over its own `previous`. Two overlapping writes could then finish in the order that made
@@ -1465,16 +1470,44 @@ async function changeUserFaction(faction) {
   // 409 path re-reads the card — but until then the HUD and the gym list are labelled for the
   // wrong team. There is no reason to allow a second pick during the first; allegiance is a
   // one-time choice and the control has nothing useful to say while it is being made.
+  //
+  // `pending`, not `locked`, and the distinction is the whole point of the third state: the
+  // lock strings assert an outcome the server has not granted yet. An earlier version of this
+  // very sentence said "locked for the duration", which asserted it in prose instead.
   paintFactionPicker(faction, false, true);
-  renderGymsList();
-  window.game?.onFactionChange();
+
+  // A write that never settles must not disable this control for ever.
+  //
+  // `fetch` has no timeout. A blackholed request on a flaky radio leaves the promise pending
+  // for minutes, and neither `catch` nor `finally` runs — so the picker sits at "saving",
+  // disabled, with no way back but a reload. The guard is a generation counter rather than a
+  // bare timer: re-enabling on a timeout alone would re-open the overlapping-write race this
+  // state exists to close, because a late response could still arrive and repaint after a
+  // newer pick had started.
+  const giveUp = setTimeout(() => {
+    if (generation !== factionWriteGeneration) return;
+    currentVolunteerFaction = previous;
+    paintFactionPicker(previous, false);
+    renderGymsList();
+    window.game?.onFactionChange();
+    logChaosTerminal('[ERROR] Faction change timed out; nothing was saved.');
+    window.game?.toast?.('That did not reach the server. Pick again.');
+  }, 15000);
+
   try {
+    // Inside the `try`: these paint from `currentVolunteerFaction`, and a throw here used to
+    // reject the whole function before the PATCH was sent, stranding the picker at "saving"
+    // with no request in flight to settle it.
+    renderGymsList();
+    window.game?.onFactionChange();
     const res = await Nexus.api('/api/v1/me/faction', { method: 'PATCH', body: { faction } });
+    if (generation !== factionWriteGeneration) return;   // a newer pick owns the control now
     // `bound: false` is a success, not a refusal: re-sending the side you already hold
     // answers 200 so a retry after a dropped response is not an error.
     paintFactionPicker(res?.data?.faction || faction, true);
     logChaosTerminal(`[FACTION] ${factionOf(faction).label}${res?.data?.bound ? ' — allegiance bound.' : ''}`);
   } catch (err) {
+    if (generation !== factionWriteGeneration) return;   // superseded; do not repaint
     // A 409 means the server holds a side this browser did not know about — the account
     // bound it somewhere else, another tab or another device. Rolling back to `previous` and
     // locking *that* would pin this tab to a faction the server will refuse on every battle
@@ -1512,6 +1545,8 @@ async function changeUserFaction(faction) {
     // thing the reader needs and the one thing a canned message could not know.
     logChaosTerminal(`[ERROR] ${err.message}`);
     window.game?.toast?.(err.message);
+  } finally {
+    clearTimeout(giveUp);
   }
 }
 
