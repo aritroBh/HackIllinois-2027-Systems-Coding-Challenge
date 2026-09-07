@@ -42,35 +42,7 @@
  *
  * None of these coefficients is derived from data. The event has not run.
  */
-import { pack } from '../../content/loader';
-
-/**
- * The wall-clock hour at the event, as a fraction.
- *
- * `Intl` is doing the real work: it is the only thing in the standard library that knows
- * `America/Chicago` was UTC−6 in February and is UTC−5 in June, and getting that wrong by an
- * hour would move the peak an hour off the shift it exists to pay for.
- *
- * `hourCycle: 'h23'` rather than `hour12: false`, because the latter is specified to produce
- * "24" for midnight in some locales — which would put midnight a full day away from 00:30 on a
- * cosine that wraps at 24, i.e. at the trough instead of near the peak.
- *
- * The formatter is built once. Constructing an `Intl.DateTimeFormat` is not cheap, and the
- * listing path calls `calculate` once per shift in a loop.
- */
-const eventClock = new Intl.DateTimeFormat('en-GB', {
-  timeZone: pack.event.timezone,
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
-
-function eventLocalHour(when: Date): number {
-  const parts = eventClock.formatToParts(when);
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
-  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
-  return hour + minute / 60;
-}
+import { eventLocalHour } from './eventClock';
 
 /**
  * What the caller knows about the shift. `currentTime` defaults to now and is overridden by

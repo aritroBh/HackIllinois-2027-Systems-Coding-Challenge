@@ -61,6 +61,7 @@ import { Shift } from '../models/shift.model';
 import { Volunteer } from '../models/volunteer.model';
 import { DynamicQrTokenEngine, IVerificationResult } from '../common/utils/crypto';
 import { SurgePricingEngine } from '../common/utils/surgePricing';
+import { eventLocalHourOfDay } from '../common/utils/eventClock';
 import { GeoEngine, resolveVenue } from '../common/utils/geo';
 import { geofenceMetersFor } from '../common/utils/geofence';
 import { ApiError } from '../common/errors/apiError';
@@ -601,11 +602,18 @@ export class CheckInService {
       );
     }
 
-    // The graveyard badge is judged in UTC rather than the host's local zone, so the same
-    // check-in earns it (or does not) whatever region the server happens to run in.
+    // The graveyard badge is judged on the event's wall clock.
+    //
+    // It used to read `getUTCHours()`, under a comment reasoning that UTC keeps the answer the
+    // same whatever region the server runs in. That half is right and is why this does not read
+    // the host's local zone either — but it then treated UTC as the event's clock. At the shipped
+    // pack's `America/Chicago`, the window `2..5` UTC is 8 p.m. to 11 p.m. local, so the
+    // graveyard badge went to evening shifts and was unreachable by the 3:30 a.m. cleanup it is
+    // named for. Identical defect, identical cause, and one file over from the surge multiplier
+    // where it was found first — which is why the clock is now shared rather than copied.
     const earnedBadges: string[] = [];
-    const utcHour = checkIn.checkInTime.getUTCHours();
-    if (utcHour >= 2 && utcHour <= 5) earnedBadges.push('MIDNIGHT_KRAKEN');
+    const localHour = eventLocalHourOfDay(checkIn.checkInTime);
+    if (localHour >= 2 && localHour <= 5) earnedBadges.push('MIDNIGHT_KRAKEN');
     if (surge.surgeMultiplier >= 3.0) earnedBadges.push('SIEBEL_GUARDIAN');
     // Hours and badges are this service's own bookkeeping; karma is not. Routing the payout
     // through KarmaService is what keeps the daily cap and the ledger honest, and it

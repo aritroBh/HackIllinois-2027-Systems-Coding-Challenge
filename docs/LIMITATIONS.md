@@ -202,6 +202,10 @@ either those two become real memorabilia entries awarded through `StickerService
 is formally two fields. Both change what the offline card and the leaderboard read, and both
 want the owner's agreement first. Recorded rather than left for the next reader to rediscover.
 
-The hour comparison is also in UTC while the karma ledger, the quest windows and the surge curve
-all read `pack.event.timezone`, so "2 a.m. to 5 a.m." is 8 p.m. to 11 p.m. at a Chicago event —
-the same defect that was fixed in `surgePricing.ts`, still present here.
+The hour comparison used to be in UTC as well, so "2 a.m. to 5 a.m." was 8 p.m. to 11 p.m. at a
+Chicago event and the graveyard badge was unreachable by the graveyard shift. That half is fixed:
+both it and the surge curve read the event's wall clock through `src/common/utils/eventClock.ts`, and
+the clock is shared rather than copied so the next thing that needs it cannot drift from them.
+
+What remains open here is only the ledger question above — which badge strings belong in
+`Volunteer.badges`, and whether an award without a `StickerLedger` row is acceptable.
