@@ -57,6 +57,15 @@ export const KarmaSource = Object.fromEntries(KARMA_SOURCES.map((s) => [s, s])) 
   readonly [K in KarmaSourceKey]: K;
 };
 
+/**
+ * What an award actually did, which is not always what was asked for.
+ *
+ * Callers are expected to report and to persist `awarded` rather than the figure they
+ * requested. The daily cap can hold part of a request back, and a row that records the offer
+ * instead of the grant is precisely what makes a disputed balance impossible to reconstruct
+ * — the thing this service exists to prevent. `checkin.service.ts` corrects both of the rows
+ * it had already written once this comes back, and explains why at the point it does it.
+ */
 export interface IKarmaAward {
   /** Karma actually added to the balance, after the daily cap was applied. */
   awarded: number;
@@ -73,6 +82,11 @@ export interface IKarmaAward {
   multiplier: number;
 }
 
+/**
+ * Either spelling of an account id. `awardKarma` normalises to an `ObjectId` before anything
+ * touches the ledger, because two spellings of one account would key two ledger rows and
+ * therefore hand that account two daily caps.
+ */
 export type AccountRef = string | Types.ObjectId;
 
 /**
@@ -93,6 +107,12 @@ const CAP_CAS_ATTEMPTS = 5;
  */
 const MULTIPLIED_SOURCES = new Set(['SHIFT', 'CHECKOUT', 'QUEST', 'SOS', 'GYM', 'HACKSTOP']);
 
+/**
+ * E11000, which both spend paths read as "somebody else opened today's row a moment ago"
+ * rather than as a failure. It is a race that has already resolved in the database's favour,
+ * so the uncapped path simply replays its `$inc` onto the row that won, and the capped one
+ * goes round again and re-clamps against the total that won.
+ */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&

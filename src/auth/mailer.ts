@@ -10,17 +10,31 @@
 import nodemailer, { Transporter } from 'nodemailer';
 import { env } from '../config/env';
 
+/** Plain text only. A magic link is a URL and an HTML body would only add ways to mangle it. */
 export interface OutboundMail {
   to: string;
   subject: string;
   text: string;
 }
 
+/**
+ * `kind` is reported by `/auth/providers` so the dashboard can say "check the server log"
+ * rather than "check your inbox" when a demo is running without SMTP.
+ */
 export interface Mailer {
   readonly kind: 'smtp' | 'console';
   send(mail: OutboundMail): Promise<void>;
 }
 
+/**
+ * Prints the mail instead of sending it, and keeps every one in `sent`.
+ *
+ * That array is unbounded, which is fine for its two uses — a test inspecting the last link,
+ * and a development console — and would be a leak in a long-running process. It is never
+ * selected in production: `getMailer` picks this only when `SMTP_URL` is unset, and the boot
+ * guard in `AuthService.providers` reports the magic-link adapter disabled in production
+ * without one, so nothing routes mail here.
+ */
 export class ConsoleMailer implements Mailer {
   public readonly kind = 'console' as const;
   /** Captured for tests and for the dev console. */
@@ -34,6 +48,12 @@ export class ConsoleMailer implements Mailer {
   }
 }
 
+/**
+ * Nodemailer over a single `SMTP_URL`. The transport is built once in the constructor and
+ * reused, so the connection pool outlives an individual send; a send that fails rejects, and
+ * the magic-link route deliberately does not await it (see `docs/LIMITATIONS.md` — a failure
+ * is logged, not retried, and the response time must not disclose whether an address exists).
+ */
 export class SmtpMailer implements Mailer {
   public readonly kind = 'smtp' as const;
   private readonly transport: Transporter;
@@ -62,6 +82,14 @@ export function __setMailerForTests(mailer: Mailer | null): void {
   instance = mailer;
 }
 
+/**
+ * Whether to offer the magic-link button at all.
+ *
+ * Outside production this is always true, because `ConsoleMailer` prints the link and the
+ * demo flow works end to end with no mail server. In production it requires `SMTP_URL`, so a
+ * deployment that forgot to configure mail shows no button rather than a button that accepts
+ * an address and silently does nothing.
+ */
 export function magicLinkEnabled(): boolean {
   return env.NODE_ENV !== 'production' || !!env.SMTP_URL;
 }

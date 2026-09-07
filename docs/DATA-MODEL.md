@@ -84,9 +84,12 @@ to the side. Every transition is a conditional update predicated on the state be
 a read-modify-save — a cancellation landing mid-flight then loses the race instead of being
 silently overwritten.
 
-The model file groups the statuses three ways, and the grouping matters more than the list:
-**index-active** (occupies a row), **schedule-occupying** (`CONFIRMED`, `CHECKED_IN`,
-`SWAP_PENDING` — the three that block a conflicting shift), and terminal.
+The model file groups the statuses two ways, and the grouping matters more than the list:
+**index-active** (`CONFIRMED`, `WAITLISTED`, `CHECKED_IN`, `SWAP_PENDING`, `COMPLETED` — the
+five the partial unique index counts, so one row per shift and volunteer across all of them)
+and **schedule-occupying** (`CONFIRMED`, `CHECKED_IN`, `SWAP_PENDING` — the three that block a
+conflicting shift). There is no third, terminal grouping: `CANCELLED` is simply the one status
+the index leaves out, which is what lets somebody who dropped out sign up again.
 
 `SWAP_PENDING` is defined but never written today: swaps rewrite the registration in place.
 Whoever wires it up must change `CheckInService.generateToken` and `verifyAndCheckIn` at the
@@ -111,7 +114,10 @@ that dies holding one does not deadlock the volunteer.
 Exactly-once semantics for reservations. Phones on congested event wifi produce requests that
 succeed server-side and time out client-side; the natural client behaviour is to retry, and
 without this table a retry double-books. A repeat carrying the same `Idempotency-Key` replays the
-stored `responseStatusCode` / `responseBody` instead of re-executing. `requestHash` is what stops one account replaying another's, because it is a digest over the
+stored `responseBody` instead of re-executing, and the controller answers it `200` where the
+first attempt got `201` — a difference it takes from the service's `cached` flag, not from the
+record. `responseStatusCode` is written beside the body and read by nobody, so treat it as a
+stored field with no reader rather than as part of the replay. `requestHash` is what stops one account replaying another's, because it is a digest over the
 shift id, the volunteer id **and** `allowWaitlist` — so the same key sent for a different
 request, or by a different person, is a conflict rather than a replay. `ownerToken` solves a
 different problem: it fences a *stalled attempt* out of the record a later attempt has since

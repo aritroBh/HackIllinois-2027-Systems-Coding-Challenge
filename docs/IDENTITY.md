@@ -8,7 +8,7 @@ HttpOnly cookie; the rest of the system only ever sees `req.account`.
 | `AUTH_MODE` | Who can call the API | Body `volunteerId` |
 |---|---|---|
 | `legacy` (default outside production) | anyone; anonymous reads and writes work | believed — this is the zero-setup demo and the original test contract |
-| `required` (forced in production) | a session cookie, except the sign-in endpoints (incl. claim-code issuance behind the organiser secret), `GET /api/v1/content`, `/health`, `/ready` | ignored; a body `volunteerId`/`proposerVolunteerId` naming someone other than your session is a 403 `IDENTITY_MISMATCH` (leads and organisers are exempt so they can act on behalf of a volunteer) |
+| `required` (forced in production) | a session cookie, except the sign-in endpoints (incl. claim-code issuance behind the organiser secret), `GET /api/v1/content`, `GET /api/v1/announcements`, `GET /api/v1/plugins`, `/health` and `/ready` — `ANONYMOUS_ALLOW` in `src/middleware/identity.ts` is the authoritative set | ignored; a body `volunteerId`/`proposerVolunteerId` naming someone other than your session is a 403 `IDENTITY_MISMATCH` (leads and organisers are exempt so they can act on behalf of a volunteer) |
 
 `REQUIRE_AUTH=true` is accepted as a deprecated alias for `AUTH_MODE=required`.
 

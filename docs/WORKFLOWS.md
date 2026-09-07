@@ -181,8 +181,11 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
    same-origin upgrade, plus an origin check and the CSRF nonce. Networks that block
    WebSockets fall back to server-sent events after two failures, with identical rows.
 2. Positions are sent when the phone has moved ten metres or five seconds have passed. The
-   server accepts at most one every two seconds and runs each through gates in order: opted
-   in, on campus, accurate enough, not moving faster than a bus, not muted.
+   server runs each through gates in this order: opted in, on campus, accurate enough, not
+   muted, not sampling more often than every two seconds, not moving faster than a bus. The
+   order is what decides which refusal a client is told about, and the mute is deliberately
+   ahead of the rate and speed gates so a silenced sender hears the same answer whatever
+   else is wrong with the sample.
 3. **What is published is not what was sent.** The position is snapped to a twenty-metre grid,
    jittered by a per-hour stable offset, and published one tick late.
 4. Once a second the server builds the world once, shares one interest computation per

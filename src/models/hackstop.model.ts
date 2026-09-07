@@ -24,6 +24,19 @@
  */
 import mongoose, { Schema, Document } from 'mongoose';
 
+/**
+ * `lastSpunUsers` is the cooldown ledger and it only ever grows: an entry is `$set` on each
+ * spin and nothing removes one — there is no TTL on a map field and no sweep. The bound is
+ * therefore one entry per account that has ever spun *this* beacon, which over one weekend is
+ * a few thousand small entries per document, comfortably inside a BSON document but not a
+ * shape that would survive a permanent installation.
+ *
+ * It is also the reason the list route projects this field away: read whole, it is a
+ * who-was-where-when timeline for the entire event. See `HackStopService.listBeacons`.
+ *
+ * `isActive` is the soft-delete: a retired beacon stays in the collection so existing scan
+ * history still resolves, and drops out of the list.
+ */
 export interface IHackStop extends Document {
   beaconId: string;
   name: string;

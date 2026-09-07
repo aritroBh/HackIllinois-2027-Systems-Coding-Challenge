@@ -53,9 +53,22 @@ import { helloNexusPlugin } from '../../plugins/hello-nexus';
 /** Every plugin that ships in this tree. Add a fork's plugin here; `PLUGINS` turns it on. */
 const CATALOG: readonly ServerPlugin[] = [helloNexusPlugin];
 
+/**
+ * Two seconds is a long time for a hook and a short time for the check-in desk. Anything a
+ * plugin genuinely needs to do — a webhook, a write — fits inside it on a working network, and
+ * a hook that does not fit was going to be a problem anyway. It bounds the registry's wait,
+ * not the plugin's work: see the header.
+ */
 const HOOK_TIMEOUT_MS = 2_000;
+/**
+ * Consecutive, not cumulative, and that is the whole tuning. A plugin whose upstream blips
+ * once an hour never trips this because a success resets the count; a plugin that is simply
+ * broken trips it within five events, which at an event's rate is seconds. A cumulative count
+ * would eventually disable everything that has ever failed.
+ */
 const MAX_CONSECUTIVE_FAILURES = 5;
 
+/** What the registry tracks per plugin. Mutable and in memory only — nothing here survives a restart, so a disabled plugin comes back enabled on the next boot, which is the intended way to retry one. */
 export interface PluginState {
   plugin: ServerPlugin;
   enabled: boolean;
@@ -88,6 +101,24 @@ class PluginRegistry {
   /** Activation order, which is `PLUGINS` order. Routes and assets mount in it. */
   private readonly order: string[] = [];
 
+  /**
+   * Validate the selection and activate what it names, or refuse to boot.
+   *
+   * Every failure here is `process.exit(1)` rather than a warning, and the reasoning is the
+   * same each time: a plugin that is configured and silently not running is the
+   * misconfiguration nobody notices until the feature is missing at 3 a.m. A name that is not
+   * in the catalogue, a name that is not a safe route and directory segment, a plugin built
+   * against a different contract version, two plugins claiming one name — all of them stop the
+   * process while somebody is still watching the console.
+   *
+   * The duplicate-name check runs over the *catalogue*, before selection, because two plugins
+   * sharing a name share a route prefix, an asset prefix and a state entry; there is no
+   * sensible winner. Being named twice in `PLUGINS` is different and is not an error — it
+   * activates once, because a comma-separated list is a set.
+   *
+   * Hooks are bound only when something was activated, so a deployment running no plugins adds
+   * no bus listeners at all.
+   */
   constructor(catalog: readonly ServerPlugin[], selection: string) {
     const known = new Map<string, ServerPlugin>();
     for (const plugin of catalog) {
@@ -143,6 +174,7 @@ class PluginRegistry {
     return this.order.map((name) => this.states.get(name)!.plugin);
   }
 
+  /** The mutable record itself, for the admin view. Callers get the live object, not a copy — read it, do not write it. */
   public state(name: string): PluginState | undefined {
     return this.states.get(name);
   }
@@ -161,6 +193,24 @@ class PluginRegistry {
     });
   }
 
+  /**
+   * Build the capability object a plugin's routes are handed.
+   *
+   * Everything on it is a closure over this registry rather than a reference to anything a
+   * plugin could reach on its own — that is what makes the contract in `types.ts` enforceable
+   * rather than advisory. Two of them re-check `enabled()` at call time rather than at
+   * construction: a plugin holds its context for the life of the process, so a disable that
+   * happens afterwards has to be visible through the object it is already holding.
+   *
+   * The `PLUGIN_<NAME>_` prefix on `broadcast` is a namespace, not decoration. Without it a
+   * plugin could publish `SOS_ESCALATED` on the same hub the war room listens to and set off
+   * the floor. Hyphens become underscores because a plugin name may contain them and an event
+   * type by convention may not.
+   *
+   * A context is minted for a name that was never activated (version falls back to `0.0.0`)
+   * rather than throwing, because the guard is what refuses those requests and a throw here
+   * would move that decision into route construction.
+   */
   public context(name: string): PluginContext {
     const state = this.states.get(name);
     const version = state?.plugin.version ?? '0.0.0';
@@ -182,6 +232,19 @@ class PluginRegistry {
   // Disabling
   // -------------------------------------------------------------------------
 
+  /**
+   * Switch a plugin off, permanently for this process.
+   *
+   * Idempotent by the `!state.enabled` guard, and that guard is doing real work: `disable` is
+   * reached from three unrelated places — a missing asset at boot, a `registerRoutes` that
+   * threw, and the consecutive-failure rule — and a plugin that trips two of them should not
+   * broadcast `PLUGIN_DISABLED` twice, because the dashboard renders that as an incident.
+   * The first reason wins, which is also the useful one: it names what actually broke first.
+   *
+   * There is no `enable`. Re-enabling is a restart, deliberately — a plugin that failed five
+   * times running has not been fixed by being asked again, and the operator's next step is to
+   * look at why.
+   */
   public disable(name: string, reason: string): void {
     const state = this.states.get(name);
     if (!state || !state.enabled) return;
@@ -194,6 +257,16 @@ class PluginRegistry {
     });
   }
 
+  /**
+   * Count one failure against the plugin, and disable it if that was the fifth in a row.
+   *
+   * The count lives on the plugin, not the hook, so a plugin failing alternately in two
+   * different hooks still trips — the thing that is broken is the plugin, and a per-hook count
+   * would let it fail indefinitely by spreading the failures around.
+   *
+   * The log line carries the running count as well as the message, so the operator can see a
+   * plugin walking towards its limit rather than only the moment it arrives.
+   */
   private recordFailure(state: PluginState, hook: HookName, error: unknown): void {
     state.failures += 1;
     const message = error instanceof Error ? error.message : String(error);
@@ -324,6 +397,18 @@ class PluginRegistry {
     });
   }
 
+  /**
+   * Run one hook under the leash and record the outcome.
+   *
+   * This promise is never awaited by a publisher, so it must not reject: an unhandled
+   * rejection from a plugin would crash the process that just committed somebody's check-in.
+   * Every path through here resolves, and the only record of a failure is the counter and the
+   * log.
+   *
+   * A timeout and a throw are counted identically. From the registry's side they are the same
+   * event — the plugin did not finish — and treating a slow plugin more gently than a broken
+   * one would keep the worse of the two running.
+   */
   private async dispatch(state: PluginState, hook: HookName, run: () => void | Promise<void>): Promise<void> {
     try {
       // `run()` is called inside the try so a hook that throws synchronously is counted the

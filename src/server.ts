@@ -16,11 +16,44 @@ import { presenceService } from './presence/service';
 import { startScheduler, stopScheduler } from './scheduler';
 import { wireEconomy } from './economy/wiring';
 
+/**
+ * The escape hatch for an entry point that needs the raw server for something this factory
+ * does not already do for everybody. Presence does not use it — the factory attaches the
+ * upgrade handler itself, under `PRESENCE_ENABLED`, precisely so that no caller has to
+ * remember to ask. Nothing in this repository passes an `attach` today; the three callers of
+ * `createServer` all hand it the app and nothing else.
+ */
 export interface ServerHooks {
-  /** Called with the server before it listens; presence attaches its upgrade handler here. */
+  /** Called with the server before it listens, in the order given. */
   attach?: Array<(server: http.Server) => void>;
 }
 
+/**
+ * Build the process's HTTP server, with everything that has to hang off the raw socket layer
+ * already attached.
+ *
+ * The reason this exists rather than `app.listen` is in the file header: two entry points
+ * drifted. So treat the body as a checklist that every entry point is entitled to — timeouts,
+ * the presence upgrade handler and tick, the economy bus wiring, the scheduler — and add to it
+ * here rather than at a call site.
+ *
+ * The two warnings are the interesting part. Node applies these three timeouts to the same
+ * socket, and the ordering between them is a real constraint rather than a style preference:
+ * `headersTimeout` measures how long the headers may take to arrive, `requestTimeout` bounds
+ * the whole request, and `keepAliveTimeout` says how long an idle socket is kept for reuse.
+ * Configure them out of order and the failure is not a startup error but a fraction of
+ * requests killed mid-flight under load, which is close to undiagnosable from the outside.
+ * They are warnings and not a refusal to boot: a misordered pair still serves traffic, and
+ * refusing to start the event's server over a configuration smell is the worse trade.
+ *
+ * Everything after the timeouts is process-global rather than per-server, and each piece
+ * guards itself against a second call: `wireEconomy` returns early once wired, and both
+ * `startScheduler` and `presenceService.start` return early once their timer exists. So a
+ * second `createServer` in one process yields a second socket but not a second tick. The
+ * corollary is the part that bites: closing one
+ * server stops the scheduler and the presence tick for the whole process, because the `close`
+ * listeners registered here call the same process-wide `stop` functions.
+ */
 export function createServer(app: Application, hooks: ServerHooks = {}): http.Server {
   const server = http.createServer(app);
 

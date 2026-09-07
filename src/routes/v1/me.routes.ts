@@ -1,6 +1,35 @@
 /**
- * `/api/v1/me` — the signed-in account. M1 ships the account card; M5 adds shifts, quests,
- * inventory, stickers and presence preferences.
+ * `/api/v1/me` — the signed-in account's own view of itself. M1 ships the account card; M5
+ * adds shifts, quests, inventory, stickers and presence preferences.
+ *
+ *   GET   /me             requireAccount                 profile; email withheld unless proved
+ *   PATCH /me/presence    requireSession, requireAccount the opt-in toggle (a write)
+ *   GET   /me/shifts      requireSession, requireAccount the rota, and the next workable shift
+ *   GET   /me/inventory   requireSession, requireAccount power-ups held
+ *   GET   /me/card        requireSession, requireAccount the offline trainer card
+ *   GET   /me/sos         requireSession, requireAccount the caller's own live distress call
+ *   GET   /me/quests      requireSession, requireAccount quest progress
+ *   GET   /me/stickers    requireSession, requireAccount the sticker book
+ *
+ * **Read the gate column before adding a route here.** "Me" is not self-evidently safe: in
+ * `AUTH_MODE=legacy` an identity can be *claimed* with `?volunteerId=<id>`, and account ids
+ * are public — `GET /volunteers` and the leaderboard hand them to anonymous callers. So on
+ * `requireAccount` alone, every route on this router answers "tell me about *that named
+ * person*" to anyone who asks. Seven of the eight carry `requireSession` today and the
+ * comment above each one says what it was disclosing before it did — a rota, a live medical
+ * call, a sticker book — which is the same fix arrived at seven times over several review
+ * rounds. `requireSession` is the default for anything on this file, and `requireAccount`
+ * beside it is what makes the `req.account!` in each handler safe to write.
+ *
+ * `GET /` is the one exception and pays for it in the handler instead: a caller whose source
+ * is not `session` gets the same shape with `email` nulled, because the rest of the payload
+ * is already readable from the leaderboard.
+ *
+ * Every GET here sends `Cache-Control: no-store`, and that is a rule rather than a habit:
+ * these responses are keyed only on the URL, `private` does not partition by cookie, and
+ * nothing sends `Vary: Cookie` — so a cacheable `/me` on a shared laptop hands the previous
+ * occupant's account to the next one from disk, past every server-side guard. Two routes here
+ * were fixed for exactly that.
  */
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireAccount, requireSession } from '../../middleware/identity';

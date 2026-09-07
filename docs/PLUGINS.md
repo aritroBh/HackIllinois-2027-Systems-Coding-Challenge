@@ -6,10 +6,12 @@ a HUD widget. It is deliberately small.
 
 ## The trust model
 
-**A plugin is first-party code.** It lives in this repository or in a content pack, it is
+**A plugin is first-party code.** It lives in this repository, under `plugins/<name>/`, it is
 read and reviewed the way core code is read and reviewed, and it is enabled by the people
 running the event. There is no plugin marketplace, no remote loading, and no way to point
-the server at a URL and have it run what comes back.
+the server at a URL and have it run what comes back. A content pack cannot carry a plugin
+either: `CATALOG` in `src/plugins/registry.ts` is a literal array of static imports, and
+nothing under `src/plugins/` ever reads the pack directory.
 
 That single decision is what makes the rest of the design simple. Because plugin code is
 trusted, hooks run in-process, on the same event loop, with the same database handles as
@@ -59,8 +61,10 @@ into a service from a plugin.
 ## Server routes
 
 A plugin may mount routes under `/api/v1/plugins/<name>`. They sit behind the same identity
-middleware and the same rate limiter as core routes, they are restricted to an allow-listed
-set of methods, and they answer 404 while the plugin is disabled. Nothing about a plugin
+middleware and the same rate limiter as core routes, and they answer 404 while the plugin is
+disabled. Nothing constrains *which* methods a plugin registers — `mountPlugins` hands it a
+bare Express router — so the review of the plugin is what stands between a fork and a
+`DELETE` nobody meant to publish. Nothing about a plugin
 route is exempt from the rules in [IDENTITY.md](IDENTITY.md): the session cookie is still
 the only identity, and a cookie-authenticated mutation still needs its CSRF nonce.
 
@@ -68,9 +72,8 @@ the only identity, and a cookie-authenticated mutation still needs its CSRF nonc
 
 There is one path and one manifest.
 
-Every plugin's client files are served same-origin under `/dashboard/plugins/<name>/`,
-whether the plugin lives in the repository or in the content pack. `GET /api/v1/plugins` is
-the single manifest:
+Every plugin's client files are served same-origin under `/dashboard/plugins/<name>/`, read
+off disk from `plugins/<name>/public/`. `GET /api/v1/plugins` is the single manifest:
 
 ```json
 [{ "name": "hello-nexus", "version": "1.0.0", "assets": [{ "url": "/dashboard/plugins/hello-nexus/hello.js", "sha256": "…" }] }]

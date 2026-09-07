@@ -1,6 +1,28 @@
 /**
- * Spatial Geofencing & Haversine Distance Engine.
- * Formulated for HackIllinois venue management across Siebel Center, ECEB, and Kenney Gym.
+ * Venue resolution and distance, the two halves of every geofence in the system.
+ *
+ * A shift stores its location as free text ("Siebel Center Atrium"), because that is what an
+ * organiser types. A check-in arrives with a latitude and longitude. Turning the first into
+ * coordinates is what makes the second comparable, and getting it wrong does not look like a
+ * bug: it looks like an honest volunteer standing at the right desk being told they are in
+ * the wrong place.
+ *
+ * **Two resolvers with deliberately different failure modes.** `resolveVenueCoordinates`
+ * returns `null` when nothing matches, and every caller of it must fail closed — measuring
+ * from the wrong building is worse than refusing. `resolveVenue` cannot return null, so it
+ * falls back to the HQ venue and says so with `matched: false`; callers that need a point on
+ * a map (SOS dispatch ranking, the escalation notice) use it and read the flag rather than
+ * inventing a coordinate of their own.
+ *
+ * **Known gap: this gazetteer is a second copy of the content pack.** `HACKILLINOIS_VENUES`
+ * and `VENUE_KEYWORDS` below hold the same fifteen keys, the same coordinates and the same
+ * hints as `content/hackillinois-2027/venues.json`, and nothing checks that they still agree.
+ * The pack's copy is what `BoothService` and `RaidService` validate against and what the
+ * client renders; this copy is what the check-in geofence and SOS dispatch actually measure
+ * from. So a fork that edits `venues.json` — which the fork guide says is the way to move a
+ * venue — moves the map pin and not the geofence. Reading the pack here is the fix; it is
+ * recorded rather than done because it changes what boots when a pack is missing a venue the
+ * seed data names.
  */
 
 export interface IGeoCoordinates {
@@ -78,6 +100,12 @@ const VENUE_KEYWORDS: Array<{ key: string; hints: string[] }> = [
   { key: 'KENNEY_GYM', hints: ['GYM'] },
 ];
 
+/**
+ * `matched` is the field that matters. `coordinates` is always populated — there is no null
+ * branch to forget — so a caller that ignores `matched` silently measures from Siebel
+ * whatever the shift actually said. Anything that gates access on distance must read it;
+ * anything that only needs a point to sort by may ignore it.
+ */
 export interface IVenueResolution {
   key: string;
   coordinates: IGeoCoordinates;
@@ -127,7 +155,18 @@ const EARTH_RADIUS_METERS = 6371000; // Earth mean radius in meters
 
 export class GeoEngine {
   /**
-   * Calculates the great-circle distance between two geographic coordinates using the Haversine formula.
+   * Great-circle distance on a sphere of mean Earth radius.
+   *
+   * A sphere rather than the WGS84 ellipsoid, which is a real approximation and a harmless
+   * one at this scale: the two disagree by a few tenths of a percent, so over the 75 m the
+   * geofence cares about the difference is well under a metre — an order of magnitude inside
+   * the GPS error the radius was chosen to absorb in the first place. Vincenty would be more
+   * accurate and would not change a single accept/reject decision here.
+   *
+   * The clamp on `a` is not cosmetic. Floating-point drift can push it a hair above 1.0 for
+   * near-antipodal inputs, and `Math.sqrt(1 - a)` then returns NaN, which propagates through
+   * the distance into a geofence comparison that is false for every radius — a fail-closed
+   * refusal with no explanation. Clamping keeps the degenerate case at a finite distance.
    */
   public static haversineDistanceMeters(
     coord1: IGeoCoordinates,
@@ -155,7 +194,17 @@ export class GeoEngine {
   }
 
   /**
-   * Verifies if a volunteer coordinate is within a specified radius (default 75 meters) of a venue.
+   * The distance test, with the answer and the numbers behind it, so a caller can put "you
+   * are 140 m away, the limit is 75" in the error rather than a bare refusal.
+   *
+   * 75 m is the default because consumer GPS is routinely 10–30 m out and worse indoors,
+   * which is where all of these venues are; `docs/LIMITATIONS.md` records the reasoning and
+   * the band either side of it. Callers with their own radius (a beacon's
+   * `geofenceRadiusMeters`) pass it instead.
+   *
+   * Be clear about what this does not do: the coordinate is supplied by the client. A caller
+   * who sends the venue's published position passes from anywhere on earth. This is a guard
+   * against honest mistakes and casual sharing, not an attestation of where anybody is.
    */
   public static isWithinGeofence(
     userCoord: IGeoCoordinates,

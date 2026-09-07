@@ -29,24 +29,48 @@
  */
 const OFFER_SEP = '::';
 
+/** Build the node key. Every id that enters the graph goes through here, so the encoding has one author. */
 export function offerId(volunteerId: string, assignedShiftId: string): string {
   return `${volunteerId}${OFFER_SEP}${assignedShiftId}`;
 }
 
+/**
+ * Read the volunteer back out of a node key.
+ *
+ * `indexOf` rather than a split, because a split would allocate an array per call inside the
+ * executor's inner loop, and because taking the *first* separator is the correct rule: an
+ * ObjectId hex string cannot contain a colon, so there is exactly one, but reading from the
+ * left keeps that true even if the shift half ever gained one.
+ */
 export function volunteerOf(offer: string): string {
   return offer.slice(0, offer.indexOf(OFFER_SEP));
 }
 
+/** The other half — the shift this offer is actually putting on the table, which is the one the rotation moves. */
 export function shiftOf(offer: string): string {
   return offer.slice(offer.indexOf(OFFER_SEP) + OFFER_SEP.length);
 }
 
+/**
+ * One row of the graph: who, what they hold, and what they would take for it.
+ *
+ * `desiredShiftIds` is a wish list and not a preference order — the finder treats every
+ * desired shift as an equally good edge, so a volunteer cannot express "I would rather have
+ * the Saturday one". Ranking the cycles by preference is a change to `findCycles`'s sort,
+ * which today orders only by length.
+ */
 export interface IAssignmentInput {
   volunteerId: string;
   assignedShiftId: string;
   desiredShiftIds: string[];
 }
 
+/**
+ * Pure graph search: no database, no session, no clock. It is handed assignments and returns
+ * candidate rings, and `SwapService` decides which of them is still valid and executes one
+ * inside a transaction — so a cycle returned here is a *proposal*, not a promise. By the time
+ * the executor looks at it a leg may have been cancelled, and it is expected to check.
+ */
 export class CyclicTradeFinder {
   /**
    * Constructs an adjacency list from shift assignments and trade desires.
@@ -87,6 +111,16 @@ export class CyclicTradeFinder {
    * Discovers all elementary directed cycles with length in [minLen, maxLen].
    * Uses canonical ordering (cycle starts at lexicographically smallest ID)
    * to eliminate duplicate cyclic permutations (e.g. A->B->C vs B->C->A).
+   *
+   * `SwapService` calls this with (2, 4) — the defaults — and the upper bound is a real
+   * limit rather than a formality. Depth-limited DFS from every node is exponential in the
+   * bound, and each extra leg is one more registration the executor has to rewrite inside a
+   * single transaction and one more chance that a leg has been cancelled since. A five-way
+   * ring is also a trade nobody can check by eye before agreeing to it.
+   *
+   * The result is sorted shortest-first so the executor prefers a two-way swap to a
+   * three-way when both exist over the same shifts: fewer people moved for the same outcome,
+   * and a smaller transaction to lose.
    */
   public static findCycles(
     adj: Map<string, string[]>,

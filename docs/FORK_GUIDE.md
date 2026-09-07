@@ -1,18 +1,32 @@
 # Forking this for your own hackathon
 
 Almost nothing in `src/` names a building, a faction or an event. The campus, the landmarks,
-the loot table, the palette and the fonts all live in a **content pack** under `content/`,
-and the server reads the pack rather than a literal. Forking is therefore mostly writing
-your own pack and baking your own campus. This page is the order to do it in.
+the palette and the fonts all live in a **content pack** under `content/`, and the server
+reads the pack rather than a literal. Forking is therefore mostly writing your own pack and
+baking your own campus. This page is the order to do it in.
 
-> **The one exception, and it will bite you.** Shift-location resolution does **not** read
-> the pack. `resolveVenue()` in `src/common/utils/geo.ts` matches against a hard-coded
-> `HACKILLINOIS_VENUES` table and a hard-coded keyword list, and `src/services/checkin.service.ts`
-> refuses any check-in whose shift location does not match. So a fork that follows this page
-> exactly gets a system where **every check-in is rejected** and SOS escalation reports a
-> null venue. Until `resolveVenue` reads `pack.venues` and its `hints`, you must edit that
-> gazetteer too. Everything else on this page — content, branding, the campus bake, the game
-> layer — works from the pack alone.
+> **The exceptions, and they will bite you.** Three parts of `src/` still hold their own copy
+> of what the pack describes, and a fork that follows only the steps below inherits
+> HackIllinois in all three.
+>
+> **Shift-location resolution does not read the pack.** `resolveVenue()` in
+> `src/common/utils/geo.ts` matches against a hard-coded `HACKILLINOIS_VENUES` table and a
+> hard-coded keyword list, and `src/services/checkin.service.ts` refuses any check-in whose
+> shift location does not match. So a fork that skips this gets a system where **every
+> check-in is rejected** and SOS escalation reports a null venue. Until `resolveVenue` reads
+> `pack.venues` and its `hints`, you must edit that gazetteer too.
+>
+> **The seed does not read the pack.** `src/seed/seedData.ts` creates the territory gyms and
+> the HackStop beacons from inline arrays keyed on that same gazetteer, so `territories.json`
+> and `beacons.json` are validated and then ignored. Your map starts as Siebel, Altgeld and
+> Memorial Stadium until you edit the seed.
+>
+> **The drop table does not read the pack.** `src/services/hackstop.service.ts` rolls spins
+> against a literal weight array and pays karma from a literal range; `loot.json` reaches
+> nothing. See the notes in [CONTENT-PACKS.md](CONTENT-PACKS.md).
+>
+> Everything else on this page — content, branding, the campus bake — works from the pack
+> alone.
 
 `content/hackillinois-2027/` is the real HackIllinois pack, and
 `content/example-campus/` is a two-venue minimum that CI **validates** (`content:validate`);
@@ -142,7 +156,10 @@ prints what each monument resolved to and how big it is, and a wrong match is vi
 the model immediately.
 
 **The game layer.** Factions, seed territories, beacons and the loot table are yours to
-balance. The example pack has the minimum that validates, not a good game.
+balance. The example pack has the minimum that validates, not a good game. Note the caveat at
+the top of this page for three of the four: only `factions.json` is read at runtime, so
+balancing territories, beacons and loot means editing `src/seed/seedData.ts` and
+`src/services/hackstop.service.ts` alongside the pack files that describe them.
 
 **Art.** `memorabilia.json` carries 16 x 16 pixel grids and a palette per sticker. The
 fonts named in `branding.fonts` must be families already served from `public/fonts/`,

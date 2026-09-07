@@ -8,14 +8,17 @@
  * The branches are ordered most-specific to least, and each one exists because the
  * generic 500 below was the wrong answer for that case:
  *
- *  1. `ApiError` — errors this codebase raised on purpose, already carrying a status and
+ *  1. `TransactionContentionError` — a transaction that lost every retry it was allowed.
+ *     Ahead of `ApiError` because it is not one, and because the advice it carries ("try
+ *     again, nothing was written") is only correct for this case.
+ *  2. `ApiError` — errors this codebase raised on purpose, already carrying a status and
  *     a machine-readable code. Passed through as-is.
- *  2. Malformed JSON — a client syntax error that used to report as a server fault *and*
+ *  3. Malformed JSON — a client syntax error that used to report as a server fault *and*
  *     log a stack trace per request, making it a log-flooding vector.
- *  3. Duplicate key (E11000) — split by which index tripped, so a repeat registration and
+ *  4. Duplicate key (E11000) — split by which index tripped, so a repeat registration and
  *     a duplicate email do not report the same code.
- *  4. `CastError` / `ValidationError` — Mongoose rejecting input. Client errors, 400.
- *  5. Everything else — a genuine 500.
+ *  5. `CastError` / `ValidationError` — Mongoose rejecting input. Client errors, 400.
+ *  6. Everything else — a genuine 500.
  *
  * The 500 message is deliberately generic. Echoing raw error text back to a caller leaks
  * collection names, index names and driver internals, which is free reconnaissance; the
@@ -27,8 +30,18 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
 /**
- * Global Centralized Error Handler for Express.
- * Formats errors into HackIllinois Adonix-standardized JSON error responses.
+ * The four-argument signature is load-bearing, not decoration: Express decides a handler is
+ * an error handler by counting its parameters, so `_next` cannot be dropped even though
+ * nothing calls it. Dropping it turns this into an ordinary middleware that never runs.
+ *
+ * Every branch answers in the same envelope — `{ success, error, message, statusCode }`, the
+ * Adonix shape the rest of the API uses — so a client parses one thing whether it hit a
+ * validation failure or a driver fault. `ApiError` may add a `details` field; nothing else
+ * here does, and nothing here ever puts the caught error into the response body.
+ *
+ * `err` is `unknown` because it genuinely is: this receives whatever `next()` was handed,
+ * including values that are not `Error` instances at all. Hence the `typeof err === 'object'`
+ * guards on each duck-typed check rather than a chain of `instanceof`.
  */
 export function errorHandler(
   err: unknown,

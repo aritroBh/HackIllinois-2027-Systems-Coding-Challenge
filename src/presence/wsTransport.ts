@@ -7,10 +7,13 @@
  *   3. the CSRF nonce carried as the `nexus.v1.<nonce>` subprotocol.
  * A failure answers 401/403 on the raw socket and never completes the handshake.
  *
- * Per connection: a 5-messages-per-2-seconds token bucket, a 20 s ping with a 30 s
- * terminate, and the shared stream-slot table (close 1013 when the table is full).
- * `bufferedAmount` over 64 KB skips the tick; over 256 KB, or ten consecutive skips,
- * closes the socket.
+ * Per connection: a 5-messages-per-2-seconds token bucket, a 20 s ping with a 30 s terminate,
+ * and a slot from the shared stream-limit table. A table with no slot to give refuses the
+ * upgrade with a 503 written on the raw socket — the handshake never completes, so there is no
+ * close code to send. 1013 is the *replacement* close instead: an account at its two-stream cap
+ * has its oldest WebSocket closed with 1013 to make room, never its SSE leg — and if it holds
+ * no WebSocket to replace, the upgrade is admitted rather than refused. `bufferedAmount` over
+ * 64 KB skips the tick; over 256 KB, or ten consecutive skips, closes the socket, also 1013.
  */
 import http from 'http';
 import { URL } from 'url';
@@ -27,7 +30,15 @@ import type { PresenceClient } from './transport';
 
 export const PRESENCE_PATH = '/ws/presence';
 
-/** The 3-bit faction slots the wire rows use, in order — clients map index → colour. */
+/**
+ * The 3-bit faction slots the wire rows use, in order — clients map index → colour.
+ *
+ * Sent in `hello_ack`, and it has to agree with the table `session.setFactionOrder` installs,
+ * because that is what turns a faction id into the three bits in a row's flag byte. The two are
+ * derived independently from the same `pack.factions`, by the same expression written twice;
+ * they agree today by construction rather than by anything enforcing it, and a client handed a
+ * different order would recolour every player on the map.
+ */
 export const factionOrderIds = (): string[] => ['NEUTRAL', ...pack.factions.map((f) => f.id).filter((f) => f !== 'NEUTRAL')].slice(0, 8);
 const SUBPROTOCOL_PREFIX = 'nexus.v1.';
 const PING_MS = 20_000;
@@ -38,6 +49,19 @@ const SKIP_BYTES = 64 * 1024;
 const CLOSE_BYTES = 256 * 1024;
 const MAX_SKIPS = 10;
 
+/**
+ * The cross-site half of the upgrade check.
+ *
+ * A WebSocket handshake is not subject to the same-origin policy: any page on any site can
+ * open one to this host, and the browser will attach the session cookie to it, so the cookie
+ * on its own proves nothing about who asked. `Origin` is the header the browser sets and a
+ * script cannot, which is what makes it worth reading here.
+ *
+ * A *missing* `Origin` is allowed on purpose, and that is not the hole it looks like: browsers
+ * always send one on a handshake, so the case only arises for non-browser clients — the tests
+ * and the load generator — which have no ambient cookie to be abused with. Those still have to
+ * present a valid session and the CSRF nonce.
+ */
 function originOk(req: http.IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return true; // non-browser client (tests, the load generator): the cookie still gates it
@@ -51,11 +75,28 @@ function originOk(req: http.IncomingMessage): boolean {
   }
 }
 
+/**
+ * Answer a rejected upgrade on the raw socket.
+ *
+ * Nothing has been negotiated at this point — there is no WebSocket yet, so there is no close
+ * frame and no close code to send. Writing a minimal HTTP response is the only way to say why
+ * it was refused — 401 without a session, 403 for a bad origin or a bad nonce, 503 when the
+ * stream-limit table has no slot — and a socket destroyed silently would leave a legitimate
+ * client unable to tell "you are signed out" from "come back later".
+ */
 function refuse(socket: import('stream').Duplex, code: number, text: string): void {
   socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
   socket.destroy();
 }
 
+/**
+ * One authenticated socket, wrapped so the session layer never sees `ws`.
+ *
+ * All the per-connection defence lives here rather than in the session: the inbound token
+ * bucket, the outbound backpressure ladder, and the slot handle that has to be released when
+ * the socket goes. `binary` is not readonly because it is settled by the client's `hello`,
+ * which arrives after construction.
+ */
 class WsPresenceClient implements PresenceClient {
   public binary = false;
   private skips = 0;
@@ -72,7 +113,18 @@ class WsPresenceClient implements PresenceClient {
 
   readonly transport = 'ws' as const;
 
-  /** False when the bucket is empty — the caller closes with 1008. */
+  /**
+   * False when the bucket is empty — the caller closes with 1008.
+   *
+   * A fixed window rather than a sliding one, so five messages at the end of one window and
+   * five at the start of the next do pass ten in quick succession. That is tolerated: the
+   * server reads at most 4 KB per message (`maxPayload`) and a `pos` beyond one every two
+   * seconds is refused by the store's own rate gate anyway, so the bucket is here to stop a
+   * socket burning CPU on parsing, not to enforce the sampling interval.
+   *
+   * A single refusal closes the connection instead of dropping the message, because a client
+   * that has outrun this is either broken or not a browser client at all.
+   */
   takeToken(now = Date.now()): boolean {
     if (now - this.bucketAt >= BUCKET_MS) {
       this.bucket = BUCKET_MSGS;
@@ -83,10 +135,26 @@ class WsPresenceClient implements PresenceClient {
     return true;
   }
 
+  /** Part of the `PresenceClient` contract; `guard` reads `bufferedAmount` itself, and no other caller exists. */
   bufferedBytes(): number {
     return this.ws.bufferedAmount;
   }
 
+  /**
+   * The backpressure ladder, checked before every frame.
+   *
+   * A slow socket is the one failure mode a 1 Hz broadcast cannot ride out: frames arrive
+   * whether or not the last one drained, and an unbounded send queue is the process's memory.
+   * Dropping is the right answer rather than queueing, because a presence frame is superseded
+   * by the next tick a second later — nothing here is worth delivering late.
+   *
+   * Two thresholds, and the gap between them is the point. Over 64 KB the tick is skipped and
+   * the socket is given a chance to catch up, which is what a phone passing through a lift
+   * does. Ten consecutive skips — a handful of seconds, since a tick passes through here more
+   * than once for a binary client — is a socket that is not draining at all, so it is closed
+   * rather than skipped forever; 256 KB buffered closes it at once without waiting out the ten.
+   * The counter resets on any frame that does go out, so a single bad second costs nothing.
+   */
   private guard(): boolean {
     if (this.ws.readyState !== WebSocket.OPEN) return false;
     const buffered = this.ws.bufferedAmount;
@@ -131,6 +199,23 @@ export function wsClientCount(): number {
   return bySlot.size;
 }
 
+/**
+ * Register the presence upgrade handler on the shared HTTP server.
+ *
+ * `upgrade` is a server event rather than a route, so every handler registered here sees every
+ * upgrade on the process. A request for another path returns without touching the socket, which
+ * is what lets something else own its own upgrade path without this one destroying it first.
+ *
+ * The three checks run cheapest-first: the `Origin` header is a string comparison, resolving
+ * the cookie is real work, and the nonce comparison needs the resolved session to check
+ * against. None of them reads the query string — a credential there would survive in access
+ * logs and in a `Referer`, and the browser will attach the cookie without being asked.
+ *
+ * A no-op when `PRESENCE_ENABLED` is off. Presence is a subsystem the event can run without
+ * rather than one that has to be stubbed: with the flag down this is the only `upgrade`
+ * listener the process would have registered, so Node destroys an upgrade it cannot hand to
+ * anyone and no half-live socket is left behind.
+ */
 export function attachPresenceWs(server: http.Server): void {
   if (!env.PRESENCE_ENABLED) return;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
@@ -230,7 +315,26 @@ export function attachPresenceWs(server: http.Server): void {
   });
 }
 
-/** Shared by both transports: hello / pos / resync / bye. */
+/**
+ * The four client messages: hello, pos, resync, bye.
+ *
+ * Written against `PresenceClient` and never touching a socket, so it *could* serve either
+ * transport — but the WebSocket `message` handler above is its only caller. The SSE leg has no
+ * message channel at all: its `pos` is `POST /api/v1/presence`, its `bye` is the `DELETE`
+ * beside it, its hello is implied by the first POST, and it has no `resync` because it cannot
+ * be told to ask for one. Do not read the parameter types as evidence that the fallback shares
+ * this code.
+ *
+ * `hello` decides the row encoding for the life of the connection, and the default is binary:
+ * only an explicit `enc:'json'` opts out. An SSE client cannot reach this, and would be forced
+ * to JSON by the transport test even if it did.
+ *
+ * A rejected `pos` is answered only for `MUTED`, `SPEED_STRIKE` and `OPT_OUT` — the three that
+ * mean the client is publishing nothing at all until it or the clock changes something. The
+ * other four verdicts the store can return (off-campus, inaccurate, too fast, and the 2 s rate
+ * gate) are dropped in silence, so a phone with a poor indoor fix sampling every second is not
+ * sent a rejection every second for it.
+ */
 export async function handleMessage(
   session: import('./session').PresenceSession,
   client: PresenceClient & { binary: boolean },

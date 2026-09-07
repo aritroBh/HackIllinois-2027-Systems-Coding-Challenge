@@ -112,6 +112,16 @@ export class ShiftController {
     }
   }
 
+  /**
+   * Creates a shift from an already-validated body. 201.
+   *
+   * Nothing is read off the session here — the route's role gate is the entire access
+   * decision — and the whole body is handed to the service, which is safe only because
+   * `validate` has already replaced `req.body` with the parsed result and stripped every
+   * unknown key. The bounds in that schema are not cosmetic: capacity at most 500, base karma
+   * 10–2000, manual surge multiplier 1.0–5.0. Creating a shift is creating the karma it will
+   * pay, so an uncapped capacity or base is a farmable reward rather than a large shift.
+   */
   public static async createShift(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const shift = await ShiftService.createShift(req.body);
@@ -121,6 +131,23 @@ export class ShiftController {
     }
   }
 
+  /**
+   * The shift board. Two properties of the response will mislead a client that assumes
+   * otherwise.
+   *
+   * `total` is not the size of the result set. `availableOnly` and `surgeOnly` are applied in
+   * memory *after* the page has been fetched, so `total` counts what survived filtering on
+   * this page and cannot drive a pager across the whole collection.
+   *
+   * The surge figure attached to each shift is computed at read time from the clock and the
+   * current fill level, so two calls a minute apart can report different karma for the same
+   * shift. It is an estimate shown to volunteers, not the amount banked at check-out.
+   *
+   * The `parseInt` calls are belt and braces rather than the defence: `listShiftsQuerySchema`
+   * has already coerced both to bounded integers with defaults, so neither can arrive as
+   * `NaN`. One quirk falls out of the ternaries — an `offset` of 0 is falsy and so reaches the
+   * service as `undefined`, which it reads back as 0. Same answer, different route.
+   */
   public static async listShifts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { category, location, availableOnly, surgeOnly, limit, offset } = req.query;
@@ -138,6 +165,20 @@ export class ShiftController {
     }
   }
 
+  /**
+   * One shift, with its surge figure and — for a proved staff caller only — the name,
+   * certifications, karma and prestige of everyone rostered on it.
+   *
+   * `req.account` is forwarded rather than checked, and that forwarding *is* the access
+   * decision: this route carries no role middleware of its own, so `isProvenKind(viewer,
+   * 'VOLUNTEER')` inside the service is the only thing standing between a caller and the
+   * roster. Anonymous callers, hackers and legacy-claimed identities get ids and statuses
+   * instead of people.
+   *
+   * The whole `AccountContext` goes across for that reason. Reduce it to an id and a role and
+   * the `source` goes with it, which turns a claimed identity back into a staff read — the
+   * exact failure this endpoint has already had once.
+   */
   public static async getShiftById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const shift = await ShiftService.getShiftById(req.params.id as string, req.account);
@@ -147,6 +188,19 @@ export class ShiftController {
     }
   }
 
+  /**
+   * Patches a shift. 200 with the updated document.
+   *
+   * The two guards a PATCH needs and a schema cannot give it are in the service. Time order
+   * is re-checked against the stored bounds, because Zod can only compare two fields that
+   * were both submitted and a single-bound patch can invert an interval on its own. And
+   * capacity may not drop below `filledSlots`, which would otherwise oversell a shift by
+   * shrinking it.
+   *
+   * Known gap, owned by the service's own docblock: raising `capacity` runs no waitlist
+   * cascade, so the seats it frees sit unfilled and the queue sits behind them until some
+   * later registration event happens to trigger a promotion.
+   */
   public static async updateShift(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const shift = await ShiftService.updateShift(req.params.id as string, req.body);
@@ -156,6 +210,15 @@ export class ShiftController {
     }
   }
 
+  /**
+   * Deactivates a shift. Soft: `isActive` is flipped and the document stays, so historical
+   * registrations keep a valid reference and a finished shift is still auditable.
+   *
+   * It is not unconditional, which the word "delete" hides. The service counts CONFIRMED,
+   * CHECKED_IN and WAITLISTED registrations first and answers 409 if it finds any, because a
+   * silent soft-delete strands their holders with no cancellation, no cascade and no notice —
+   * the organiser has to cancel or reassign them first. Only the empty case reaches the flip.
+   */
   public static async deleteShift(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const result = await ShiftService.deleteShift(req.params.id as string);

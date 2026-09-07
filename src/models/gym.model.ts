@@ -47,6 +47,17 @@ export enum Faction {
   NEUTRAL = 'NEUTRAL',           // Unclaimed; must exist, per factions.json
 }
 
+/**
+ * Someone holding a gym for their faction. `volunteerName` is denormalised so the map can
+ * label a control point without a join per gym per frame.
+ *
+ * Worth knowing before building on it: the server writes this array in exactly one place —
+ * the capture branch of `GymService.battleGym` — and always as a fresh one-element array
+ * naming the captor, because the regime changed. Reinforcing does not append. So in practice
+ * the length is 0 for a gym nobody has taken since the seed and 1 for every other, and the
+ * dashboard's "N defending" reads that. A real defender roster means appending on reinforce
+ * and bounding the array; nothing here does either yet.
+ */
 export interface IGymDefender {
   volunteerId: Types.ObjectId;
   volunteerName: string;
@@ -54,6 +65,23 @@ export interface IGymDefender {
   assignedAt: Date;
 }
 
+/**
+ * `controlPoints` against `maxControlPoints` is the whole state of a territory: reinforcing
+ * adds, attacking subtracts, and a strike that meets or exceeds what is left flips the
+ * faction rather than leaving it at zero for the next passer-by.
+ *
+ * `leaderVolunteerId` / `leaderName` are the last person to take or decisively reinforce it,
+ * kept denormalised for the same reason as `volunteerName` above.
+ *
+ * `isShielded` and `shieldExpiresAt` are set together by a power-up in `hackstop.service` and
+ * are never cleared: expiry is decided by comparing `shieldExpiresAt` at the moment somebody
+ * contests the gym, so a lapsed shield stops protecting it immediately and no sweeper job has
+ * to notice. A stale `isShielded: true` on a document whose expiry has passed is therefore
+ * normal, not drift.
+ *
+ * `level` is written by the seed and by nothing else. The dashboard renders it, so it is a
+ * fixed label on each landmark rather than something a gym earns.
+ */
 export interface IGym extends Document {
   name: string;
   locationName: string;
@@ -86,6 +114,13 @@ const GymDefenderSchema = new Schema<IGymDefender>(
 
 const GymSchema = new Schema<IGym>(
   {
+    // Unique, although nothing looks a gym up by name. It is a de-duplication guard: the
+    // fourteen territories come from the seeder's own hard-coded array (`pack.territories`
+    // is validated and then not used) and are inserted, not upserted, so a second
+    // seed against a database that was not cleared, or a hand-inserted territory, would
+    // otherwise produce two documents for one landmark — two pins on the map at the same
+    // coordinates, each capturable independently, with a player's karma spent on whichever
+    // one their client happened to render.
     name: { type: String, required: true, trim: true, unique: true },
     locationName: { type: String, required: true },
     latitude: { type: Number, required: true },
@@ -110,6 +145,17 @@ const GymSchema = new Schema<IGym>(
   { timestamps: true }
 );
 
+/**
+ * A plain compound index on the two coordinate fields, and it is honest to say what that is
+ * and is not. It is **not** a `2dsphere` index, so it cannot answer "which gyms are within
+ * 100 m of here" — that is not a query this index can serve, and no code asks it. Today the
+ * board is read whole (`Gym.find().sort({ name: 1 })`, fourteen documents) and individual
+ * gyms by `_id`, so nothing in the server filters on either field and this index is unused.
+ *
+ * Left in place rather than dropped because the proximity query it gestures at is a plausible
+ * next feature; if that arrives, this wants replacing with a `2dsphere` on a GeoJSON point
+ * rather than extending.
+ */
 GymSchema.index({ latitude: 1, longitude: 1 });
 
 export const Gym = mongoose.model<IGym>('Gym', GymSchema);

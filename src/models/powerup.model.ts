@@ -13,6 +13,15 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/**
+ * The five items, in ascending rarity. The member name is the storage key — it is what
+ * `itemType` holds, what the compound unique index groups a stack by, and what a booth's
+ * `reward.powerUp` names in the content pack — so renaming one orphans every existing stack.
+ * Add members; do not rename them.
+ *
+ * The trailing comments are the flavour, not the rule: the karma each one pays lives in
+ * `POWER_UP_CATALOG` below and the gym effects live in `hackstop.service`.
+ */
 export enum PowerUpType {
   COLD_BREW_ELIXIR = 'COLD_BREW_ELIXIR',             // Uncommon: +35% speed & +50 Karma
   INSOMNIA_COOKIE_SHIELD = 'INSOMNIA_COOKIE_SHIELD', // Rare: Fatigue immunity & priority waitlist pass
@@ -21,6 +30,7 @@ export enum PowerUpType {
   ANKER_GAUNTLET = 'ANKER_GAUNTLET',                 // Mythic: 2x territorial multiplier & +300 Karma
 }
 
+/** The catalogue entry for one item: what it is called, how rare it is, and what it pays. */
 export interface IPowerUpItemMeta {
   type: PowerUpType;
   name: string;
@@ -29,6 +39,21 @@ export interface IPowerUpItemMeta {
   karmaBonus: number;
 }
 
+/**
+ * Item definitions, in code rather than in the content pack — the one part of the game layer
+ * that is not pack-driven.
+ *
+ * There is an argument for that — `karmaBonus` is money, and a pack is public, served to
+ * every browser under `/dashboard/content` — but be honest that it is not a decision anyone
+ * carried through. The pack has a `loot.json` with weights in it, and nothing reads it: the
+ * drop table `HackStopService` actually rolls against is a literal array inside that service,
+ * and `pack.loot` is validated at boot and then used for nothing. So the game's odds and its
+ * prices are both in code, and one of them has a pack file that looks like it is in charge.
+ *
+ * `Record<PowerUpType, …>` is load-bearing: a new member of the enum fails the build here
+ * until it is priced, so an item cannot reach a player's inventory with no definition behind
+ * it.
+ */
 export const POWER_UP_CATALOG: Record<PowerUpType, IPowerUpItemMeta> = {
   [PowerUpType.COLD_BREW_ELIXIR]: {
     type: PowerUpType.COLD_BREW_ELIXIR,
@@ -67,6 +92,15 @@ export const POWER_UP_CATALOG: Record<PowerUpType, IPowerUpItemMeta> = {
   },
 };
 
+/**
+ * One stack. `name` and `rarity` are copied from the catalogue at award time so the inventory
+ * renders without a lookup; the catalogue stays the source of truth, and a row whose copy has
+ * gone stale after a rename is cosmetic rather than a payout error, because `karmaBonus` is
+ * never copied here and is always read from the catalogue when an item is spent.
+ *
+ * `obtainedFrom` records the mechanic that granted it — a beacon spin, a booth — which is the
+ * only trace of provenance an item carries.
+ */
 export interface IPowerUpInventory extends Document {
   volunteerId: Types.ObjectId;
   itemType: PowerUpType;

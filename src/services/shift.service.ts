@@ -25,6 +25,14 @@ import { ErrorCode } from '../common/errors/errorCodes';
 import { SurgePricingEngine, ISurgeResult } from '../common/utils/surgePricing';
 import { eventHub } from '../common/sse/eventHub';
 
+/**
+ * What an organiser supplies to open a shift.
+ *
+ * Times arrive as ISO strings and become `Date`s here. The three counters the reservation
+ * engine owns — `filledSlots`, `waitlistCount`, `version` — are absent on purpose: they are
+ * bookkeeping, not input, and `createShift` sets them itself after spreading this, so a
+ * caller cannot seed a shift that already looks half-full.
+ */
 export interface ICreateShiftDTO {
   title: string;
   description: string;
@@ -38,6 +46,18 @@ export interface ICreateShiftDTO {
   manualSurgeMultiplier?: number;
 }
 
+/**
+ * A partial edit: the caller sends only what changes.
+ *
+ * `isActive` appears here and not in the create DTO, and that asymmetry is load-bearing —
+ * `deleteShift` only ever sets it false, so an update is how a soft-deleted shift is
+ * deliberately brought back. It is not the only way one revives, though: `adonixSync`
+ * upserts each synced event by `title` with `isActive: true` inside its `$set`, so a
+ * soft-deleted shift whose title the feed still carries returns at the next sync.
+ * Note the update path cannot lean on the create schema's
+ * cross-field validation: a PATCH that moves only one bound is checked against the stored
+ * document in `updateShift` instead.
+ */
 export interface IUpdateShiftDTO {
   title?: string;
   description?: string;
@@ -52,13 +72,27 @@ export interface IUpdateShiftDTO {
   isActive?: boolean;
 }
 
+/**
+ * The enriched shape a read is meant to take: the stored document plus its computed surge.
+ *
+ * Documentation rather than enforcement, said plainly — nothing imports this and neither
+ * read below is typed as it. `listShifts` and `getShiftById` both return loosely-typed
+ * objects that carry more than this (`isAvailable`, the two roster arrays), so the compiler
+ * checks none of it.
+ */
 export interface IShiftWithSurge extends IShift {
   surge: ISurgeResult;
 }
 
 export class ShiftService {
   /**
-   * Creates a new shift.
+   * Open a shift.
+   *
+   * The counters and `isActive` are written after the spread, so they win over anything a
+   * caller managed to put in the DTO. There is no `startTime < endTime` check here: that is
+   * `createShiftSchema`'s `.refine()`, which every HTTP caller passes through — which is
+   * also why `updateShift` has to do the same check by hand, since a partial update can
+   * invert the interval against a bound the request never mentions.
    */
   public static async createShift(dto: ICreateShiftDTO): Promise<IShift> {
     const shift = await Shift.create({
@@ -80,7 +114,19 @@ export class ShiftService {
   }
 
   /**
-   * Lists shifts with optional filtering, capacity calculation, and dynamic surge pricing.
+   * The shift board.
+   *
+   * The four filters are not equal citizens, and the difference is visible to a caller.
+   * `category` and `location` go into the Mongo query and therefore narrow *before*
+   * pagination; `availableOnly` and `surgeOnly` depend on values computed per row and are
+   * applied in memory *after* `skip`/`limit`. So a page can come back shorter than the limit
+   * — even empty while later pages still hold matches — and a client has to page on rather
+   * than stop at the first short page.
+   *
+   * `total` reports the size of what is actually returned, not the collection count, for the
+   * same reason: a count that ignores the in-memory filters is a number no paginator can use.
+   * Only ever active shifts, so a soft-deleted one disappears from the board rather than
+   * showing as unavailable.
    */
   public static async listShifts(filters: {
     category?: ShiftCategory;
@@ -136,7 +182,12 @@ export class ShiftService {
   }
 
   /**
-   * Retrieves a single shift by ID with enriched surge calculations and roster.
+   * One shift, with its surge and its roster — where the roster is two different documents
+   * depending on who is asking. See `viewer` below, which carries the reasoning.
+   *
+   * Unlike `listShifts` this does not filter on `isActive`, so a deactivated shift is still
+   * readable by id. That is the point of a soft delete: history stays addressable even
+   * though `reserveShift` will refuse a new claim against it.
    */
   public static async getShiftById(
     id: string,
@@ -207,7 +258,21 @@ export class ShiftService {
   }
 
   /**
-   * Updates shift details.
+   * Edit a shift.
+   *
+   * Both guards below exist because the update path cannot rely on the create schema. The
+   * time-order rule has to hold against the *merge* of stored and submitted bounds, which
+   * Zod cannot see; the capacity rule is a domain fact no schema knows.
+   *
+   * Be honest about the capacity guard: it is read-modify-write. `filledSlots` comes from a
+   * document fetched a moment earlier and the update that follows is unconditional, so a
+   * reservation committing between the two can leave `capacity` below `filledSlots` — the
+   * exact shape of race the reservation path uses `$expr` to avoid, sitting in the same
+   * file. It is a much smaller hazard: an organiser shrinking a shift is a rare,
+   * human-paced action and the result is a shift that refuses new claims until somebody
+   * drops, not an oversell. Moving the comparison into the filter would close it.
+   *
+   * Raising `capacity` runs no waitlist cascade either; that gap is in the file header.
    */
   public static async updateShift(id: string, dto: IUpdateShiftDTO): Promise<IShift> {
     const existing = await Shift.findById(id);

@@ -1,3 +1,14 @@
+/**
+ * The per-volunteer reservation mutex, and the one function that names a lock.
+ *
+ * Two things to know before reading the code. First, the lock is a *document with a unique
+ * `key`*, not a flag on the volunteer: acquiring it is an insert that either succeeds or
+ * fails with a duplicate key, which is a decision the database makes and two racing processes
+ * cannot both win. Second, it is held across a read-then-act sequence rather than around a
+ * single write, which is why it exists at all — the capacity guard needs no lock, but the
+ * rest-buffer and fatigue checks read a volunteer's other shifts and then decide, and that
+ * gap is what one person's two simultaneous requests would otherwise slip through.
+ */
 import mongoose, { Schema, Document } from 'mongoose';
 
 /**

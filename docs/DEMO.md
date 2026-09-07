@@ -32,12 +32,17 @@ Then: **the interesting engineering is contention.** Everything else follows fro
 
 ## 1. Lead with the race, because it is the thing that is actually hard
 
-Open the **Chaos Lab** tab, or run `npm run e2e` and watch section 3.
+Open the **Chaos Lab** tab, or run `npm run e2e` and watch section 3. The tab is behind
+`?chaos` — load `http://localhost:3000/dashboard/?chaos` — because its three buttons are not
+simulations: they create real shifts, real accounts and real swaps, and one of them cancels a
+real volunteer's seat. Add the query string before you go on stage, not during.
 
-Fifty accounts and fifty concurrent `POST /registrations` against a shift with two seats,
-issued as delegated on-behalf registrations under the one signed-in organiser session rather
-than fifty separate logins. The contention being demonstrated is at the database, not at the
-cookie: fifty requests reach the same two seats at the same moment either way.
+Fifty accounts and fifty concurrent `POST /registrations` against a shift with two seats. The
+two paths get there differently and it is worth knowing which you are showing: the Chaos Lab
+issues delegated `onBehalfVolunteerId` registrations under the one signed-in organiser
+session, while `npm run e2e` signs all fifty accounts in for real and waits out the sign-in
+limiter to do it. The contention being demonstrated is at the database, not at the cookie:
+fifty requests reach the same two seats at the same moment either way.
 
 **Exactly two confirmed. Forty-eight waitlisted. Zero oversold. Every time.**
 
@@ -77,7 +82,8 @@ nobody is promoted — so it is never briefly claimable.
 
 ## 3. The three-way ring
 
-`POST /swaps/cycles/resolve`, or the **Resolve 3-way trade** button in the Chaos Lab tab.
+`POST /swaps/cycles/resolve`, or the **Resolve 3-way trade** button in the Chaos Lab tab
+(`?chaos` again).
 
 Alice wants Bob's shift, Bob wants Charlie's, Charlie wants Alice's. The resolver builds the
 directed wants-graph, enumerates elementary cycles of length 2–4 by depth-first search, and
@@ -94,7 +100,9 @@ validation is marked FAILED with the reason, and nobody moves.
 
 ## 4. Attendance that cannot be screenshotted
 
-Mint a token from the Trainer QR panel. Scan it. Scan it again.
+Mint a token from **Me → Check in**. It is minted against the signed-in account, so it lives
+beside that account rather than in the staff-only Trainer tab, which carries only the desk's
+side of the exchange and a link across. Scan it. Scan it again.
 
 - HMAC-SHA256 over `version:volunteerId:shiftId:timeSlice:nonce`, compared with
   `timingSafeEqual`, and the comparison happens *before* the replay check so it is not an
@@ -174,7 +182,7 @@ and lidar is a step you run yourself. The README used to imply the good sources 
 
 ## What to say about how it was built
 
-The suite is 29 files and 306 tests, and the interesting ones are invariants rather than
+The suite is 32 files and 347 tests, and the interesting ones are invariants rather than
 coverage: fifty racing registrations against two seats, ten concurrent bounty reservations
 against a budget for three granting exactly three, twenty phones on one sponsor poster
 producing one winner and nineteen refusals, a lead who cannot spin another player's

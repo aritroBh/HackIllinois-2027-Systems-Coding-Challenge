@@ -7,10 +7,17 @@
  * this schema is what stops it being reachable over HTTP.)
  *
  * `karmaBounty` has a floor of 50 so incidents are worth answering and a ceiling of 500 so a
- * ticket creator cannot mint arbitrary karma; the pack-driven per-urgency caps and per-day
- * budget arrive with M6. Historical note:
- * which means a caller can mint an arbitrarily large reward — cap it before this is
- * exposed to attendees.
+ * ticket creator cannot mint an arbitrary reward. The floor lives here rather than on the
+ * model deliberately: fifty is a judgement about what is worth a responder's walk and it
+ * applies to what somebody *asks for*, whereas a stored zero means no reward is attached at
+ * all — see the validator on `SOSTicket.karmaBounty`, which is why the model permits zero and
+ * this schema does not.
+ *
+ * The 500 here is now the weaker of two ceilings and no longer the interesting one. The
+ * pack's per-urgency `bountyCap` and its `hackerBountyBudgetPerDay` are both live in
+ * `SOSService.create`, and the budget is what the `bountyLedger` row enforces atomically. Note
+ * the shipped pack allows 800 for CRITICAL, so this literal is what actually binds there: a
+ * fork that raises a per-urgency cap above 500 will find the schema refusing it first.
  */
 import { z } from 'zod';
 import { objectId } from './common';
@@ -28,7 +35,9 @@ export const createSOSTicketSchema = z.object({
     description: z.string().min(3, 'Description must be at least 3 characters'),
     urgency: z.nativeEnum(SOSTicketUrgency).default(SOSTicketUrgency.MEDIUM),
     requiredSkill: z.string().optional(),
-    karmaBounty: z.number().int().min(50).max(500).optional(), // ceiling is a stopgap; M6 makes it pack-driven per urgency
+    // Optional: omitting it takes the service's default rather than offering nothing, so a
+    // hacker in trouble does not have to price their own emergency.
+    karmaBounty: z.number().int().min(50).max(500).optional(), // see the header: the pack's per-urgency cap is the other ceiling
   }),
 });
 

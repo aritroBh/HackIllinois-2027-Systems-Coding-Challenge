@@ -126,8 +126,8 @@ erDiagram
         number karmaPoints
         string prestigeTier
         string[] badges
-        number completedShiftsCount
-        number totalVolunteerHours
+        number hoursServed
+        string kind
         Date createdAt
     }
 
@@ -155,22 +155,22 @@ erDiagram
         string status
         number waitlistPosition
         string idempotencyKey UK
-        Date registeredAt
         Date confirmedAt
-        Date waitlistedAt
+        Date cancelledAt
+        Date createdAt
     }
 
     CHECK_IN {
         ObjectId _id PK
         ObjectId shiftId FK
         ObjectId volunteerId FK
-        string scannerId
-        string tokenNonce UK
-        Date checkedInAt
-        Date checkedOutAt
+        ObjectId registrationId FK
+        string verifiedBy
+        string nonce UK
+        Date checkInTime
+        Date checkOutTime
+        number durationMinutes
         number karmaAwarded
-        number hoursLogged
-        boolean geofencePassed
     }
 
     SHIFT_SWAP {
@@ -179,18 +179,20 @@ erDiagram
         ObjectId proposerShiftId FK
         ObjectId targetVolunteerId FK
         ObjectId targetShiftId FK
+        ObjectId[] desiredShiftIds
         string status
-        Date proposedAt
-        Date executedAt
+        boolean isCyclic
+        Date createdAt
     }
 
     SOS_TICKET {
         ObjectId _id PK
         string hackerName
         string tableLocation
-        float latitude
-        float longitude
+        float latitude "nested under coordinates"
+        float longitude "nested under coordinates"
         string category
+        string requiredSkill
         string urgency
         string status
         ObjectId assignedVolunteerId FK
@@ -284,9 +286,9 @@ sequenceDiagram
     WorkerC->>WT: Atomic Increment waitlistCount
     WorkerC->>Reg: Create Registration (status: WAITLISTED, waitlistPosition: N)
 
-    WorkerA->>Hub: Broadcast SHIFT_REGISTRATION_CONFIRMED
-    WorkerB->>Hub: Broadcast SHIFT_REGISTRATION_CONFIRMED
-    WorkerC->>Hub: Broadcast SHIFT_WAITLISTED
+    WorkerA->>Hub: Broadcast SLOT_RESERVED
+    WorkerB->>Hub: Broadcast SLOT_RESERVED
+    WorkerC->>Hub: Broadcast WAITLIST_JOINED
 ```
 
 $$\text{Atomicity Predicate: } \mathcal{P}(S) \equiv \big( S.\text{filledSlots} < S.\text{capacity} \big)$$
@@ -312,15 +314,17 @@ stateDiagram-v2
         CONFIRMED --> CANCELLED : Volunteer Drops Shift
         note right of CANCELLED
             The seat is HELD, not freed:
-            1. Locate waitlist position 1
-            2. Verify 0 conflicts for candidate
-            3. Claim it (CAS on status=WAITLISTED)
+            1. Walk the queue in position order
+            2. Skip a candidate whose schedule
+               conflicts - never cancel them
+            3. Claim the first who does not
+               (CAS on status=WAITLISTED)
             filledSlots only drops if nobody
             is promoted - see note below
         end note
 
         CANCELLED --> CASCADE_PROMOTION : Eligible Candidate Found
-        CANCELLED --> VACANT : Waitlist Empty
+        CANCELLED --> VACANT : Queue Empty or Every Candidate Conflicts
         note right of VACANT
             Only here does filledSlots
             decrement. Freeing it earlier
@@ -363,17 +367,17 @@ Shift B (Rejected 409):            [====================] (Violates Rest Buffer)
 ```
 
 ### 5.2 8-Hour Daily Fatigue Boundary
-Let $\mathcal{S}_u(D)$ be the set of confirmed shifts for volunteer $u$ on calendar date $D$. The scheduler asserts:
+Let $\mathcal{S}_u$ be volunteer $u$'s active shifts — CONFIRMED, CHECKED_IN or SWAP_PENDING — and let $D$ be a calendar date in America/Chicago wall-clock time, which is the zone the rule is written in because the rule is about a person's night and a UTC boundary falls at six in the evening locally. Hours are attributed to $D$ by *overlap*, not by which day a shift starts on, so an overnight shift is weighed against both days it spans:
 
-$$\sum_{s \in \mathcal{S}_u(D)} \text{DurationHours}(s) \le 8.0\text{ hours}$$
+$$\sum_{s \in \mathcal{S}_u} \text{HoursOverlapping}(s, D) \le 8.0\text{ hours}$$
 
-Attempting to book a shift that pushes the cumulative daily duration past 8.0 hours fails with HTTP 409 `DAILY_FATIGUE_EXCEEDED`.
+The assertion is made for every date the shift being booked touches. Attempting to book a shift that pushes any of those days past 8.0 hours fails with HTTP 409 `DAILY_FATIGUE_EXCEEDED`.
 
 ---
 
 ## 6. Multi-Party Shift Swaps & the Directed Cyclic Trade Engine
 
-Direct 1-to-1 trades fail in >90% of hackathon logistics situations due to mismatched volunteer preferences. Nexus Quest constructs a directed preference graph $G = (V, E)$ where edge $(u, v) \in E$ denotes that Volunteer $u$ is willing to surrender their shift in exchange for the shift held by Volunteer $v$.
+Direct 1-to-1 trades fail in >90% of hackathon logistics situations due to mismatched volunteer preferences. Nexus Quest constructs a directed preference graph $G = (V, E)$ whose nodes are *offers* rather than volunteers: a node is the pair `volunteerId::shiftId`, one volunteer together with the one shift they are putting up. An edge $(u, v) \in E$ denotes that the holder of offer $u$ is willing to surrender the shift in $u$ in exchange for the shift in $v$. The distinction is load-bearing — a volunteer with a pending proposal against each of two shifts they hold is two nodes, and collapsing them onto one lost track of which of their shifts was actually on the table for a given ring.
 
 ```mermaid
 flowchart LR
@@ -384,7 +388,7 @@ flowchart LR
     end
 
     subgraph AtomicExecution["ACID Multi-Document Transaction"]
-        TX["Start ClientSession Transaction<br/>ReadConcern: majority<br/>WriteConcern: majority"]
+        TX["Start ClientSession Transaction<br/>session.withTransaction, no explicit concerns<br/>(the deployment defaults apply)"]
         TX --> W1["Shift 1 -> Assigned to Charlie"]
         TX --> W2["Shift 2 -> Assigned to Alice"]
         TX --> W3["Shift 3 -> Assigned to Bob"]
@@ -402,8 +406,8 @@ either. The rings being looked for are two to four people long in a graph of at 
 hundred pending proposals, so the asymptotic win from condensing components first buys
 nothing and the direct search is the whole algorithm.
 
-1. Build the adjacency list $G$ from `PENDING` proposals: an edge $u \rightarrow v$ exists
-   when $u$ wants the shift $v$ currently holds.
+1. Build the adjacency list $G$ from `PENDING` proposals, one node per proposal: an edge
+   $u \rightarrow v$ exists when the offer $u$ names the shift on offer at $v$ as wanted.
 2. From each node in sorted order, walk depth-first with the start node held fixed, bounded
    at $k \in [2, 4]$ and guarded by an on-stack set so a node is never re-entered within a
    walk.
@@ -443,7 +447,7 @@ sequenceDiagram
     else Clock Drift |drift| > 1 Slice (Expired)
         Srv-->>Scanner: 400 Bad Request: TOKEN_EXPIRED
     else Geofence > 75m
-        Srv-->>Scanner: 403 Forbidden: OUTSIDE_GEOFENCE
+        Srv-->>Scanner: 403 Forbidden: FORBIDDEN (distance and limit in the message)
     else Valid Check-In
         Srv->>Cache: Store nonce (TTL: 90s)
         Srv->>Srv: Mark Registration CHECKED_IN
@@ -469,13 +473,13 @@ $$c = 2 \cdot \text{atan2}\left(\sqrt{a_{\text{clamped}}}, \sqrt{1 - a_{\text{cl
                                 [KENNEY GYM]
                                (40.113054, -88.228012)
                                        ▲
-                                       │  Distance: 278m
+                                       │  Distance: 274.7m
                                        │  Geofence: 75m
                                        │  [REJECTED 403]
                                        │
 [ECEB LOBBY] <----------------- [SIEBEL ATRIUM] -----------------> [DCL BRIDGE]
 (40.114828, -88.228056)       (40.113812, -88.224937)       (40.113215, -88.226500)
-    Distance: 284m               [HQ / SCANNER]                 Distance: 153m
+    Distance: 288.3m             [HQ / SCANNER]                 Distance: 148.6m
     [REJECTED 403]               Volunteer (<5m)                [REJECTED 403]
                                  [APPROVED 200]
 ```
@@ -491,14 +495,14 @@ flowchart TD
     C --> D["Trigger Audio Synthesizer: playSosAlarm()"]
     
     B --> E["SOSService.dispatchNearestVolunteer(ticketId)"]
-    E --> F["Filter: Registrations status = CHECKED_IN"]
+    E --> F["On-duty pool, tiered: CHECKED_IN;<br/>only if that tier is empty, CONFIRMED"]
     F --> G{"Does ticket require<br/>skill certification?"}
     G -->|Yes| H["Filter: vol.certifications.includes(skill)"]
-    G -->|No| I["Include all checked-in volunteers"]
+    G -->|No| I["Include the whole on-duty pool"]
     
-    H --> J["Calculate Haversine distance to each candidate"]
+    H --> J["Measure each candidate: a live presence fix<br/>(Euclidean, on the local campus plane)<br/>or the Haversine distance to their shift venue"]
     I --> J
-    J --> K["Select argmin(distanceMeters)"]
+    J --> K["Rank by source first — live presence fix,<br/>then venue estimate, then unknown —<br/>and by argmin(distanceMeters) within a tier"]
     K --> L["Update ticket: status = DISPATCHED<br/>assignedVolunteerId = bestCandidate._id"]
     L --> M["Broadcast SOS_TICKET_DISPATCHED (Telemetry Vector)"]
     M --> N["Volunteer Resolves Ticket<br/>POST /sos/tickets/:id/resolve"]
@@ -555,7 +559,7 @@ const updated = await Gym.findOneAndUpdate(
   { new: true }
 );
 ```
-If another volunteer contests the gym concurrently, `updated` returns `null`, and the algorithm retries with jittered exponential backoff (up to 5 attempts).
+If another volunteer contests the gym concurrently, `updated` returns `null`, and the algorithm retries with jittered backoff (up to 5 attempts; the pause is `Math.random() * 40 * attempt` ms, linear in the attempt rather than exponential).
 
 ---
 
@@ -567,8 +571,8 @@ Physical campus HackStops provide volunteers with supplies and randomized collec
 flowchart TD
     A["Volunteer within 75m of HackStop Beacon"] --> B["POST /pokeshift/hackstops/:beaconId/spin"]
     B --> C{"Check Geofence & Cooldown"}
-    C -->|Distance > 75m| D["403 Forbidden: OUTSIDE_GEOFENCE"]
-    C -->|Elapsed < 300s| E["409 Conflict: COOLING_DOWN"]
+    C -->|Distance > 75m| D["403 Forbidden: FORBIDDEN"]
+    C -->|Elapsed < 300s| E["409 Conflict: SCHEDULE_CONFLICT"]
     C -->|Valid Spin| F["Roll Loot Table (Weighted Probability)"]
 
     subgraph LootTable["Loot Table Distribution"]
@@ -585,7 +589,7 @@ flowchart TD
 
     subgraph Activation["Item Deployment (Atomic CAS)"]
         I["POST /pokeshift/inventory/use"] --> J["PowerUpInventory.findOneAndUpdate(<br/>{ volunteerId, itemType, quantity: { $gte: 1 } },<br/>{ $inc: { quantity: -1 } })"]
-        J -->|Failed / 0 Quantity| K["400 Bad Request: INSUFFICIENT_INVENTORY"]
+        J -->|Failed / 0 Quantity| K["400 Bad Request: BAD_REQUEST"]
         J -->|Success| L["Apply Effect (Shield Gym / Overcharge CP / Karma Bonus)"]
     end
 ```
@@ -612,10 +616,10 @@ sequenceDiagram
     end
 
     par Operational Events
-        Engine->>SSE: broadcast({ type: "CONCURRENCY_BOMB_FIRED", data })
-        SSE->>Browser: event: CONCURRENCY_BOMB_FIRED\ndata: ...\n\n
-        Engine->>SSE: broadcast({ type: "WAITLIST_CASCADE_PROMOTED", data })
-        SSE->>Browser: event: WAITLIST_CASCADE_PROMOTED\ndata: ...\n\n
+        Engine->>SSE: broadcast({ type: "SLOT_RESERVED", data })
+        SSE->>Browser: event: SLOT_RESERVED\ndata: ...\n\n
+        Engine->>SSE: broadcast({ type: "WAITLIST_PROMOTED", data })
+        SSE->>Browser: event: WAITLIST_PROMOTED\ndata: ...\n\n
         Engine->>SSE: broadcast({ type: "SOS_TICKET_DISPATCHED", data })
         SSE->>Browser: event: SOS_TICKET_DISPATCHED\ndata: ...\n\n
         Engine->>SSE: broadcast({ type: "GYM_CAPTURED", data })
@@ -636,7 +640,7 @@ sequenceDiagram
 | **Attendance Screenshot Sharing** | Unattended volunteer checks in remotely | Dynamic HMAC-SHA256 tokens rotating every 30s with single-use nonce cache. |
 | **Proxy Attendance Spoofing** | Volunteer checks in from dorm outside venue | 75m geodesic Haversine distance geofence boundary verification. |
 | **Double-Bounty SOS Exploitation** | Malicious caller spams ticket resolution | Atomic state precondition: `status === DISPATCHED` required for transition to `RESOLVED`. |
-| **Gym Damage Inversion** | Negative power input heals enemy gym | Boundary validation: $P \in [10, 500]$ and integer-only sanitization. |
+| **Gym Damage Inversion** | Negative power input heals enemy gym | Boundary validation: $P \in [10, 500]$, checked twice — by the Zod contract and again in the service. Note it is a bound on the range only; a fractional power passes. |
 | **NoSQL Operator Injection** | Attacker injects `$ne` or `$regex` into query | Contract-first Zod schemas enforcing native TypeScript enums. |
 | **BSON CastError Leaks** | Arbitrary strings crash server and leak topology | Strict 24-char hexadecimal regex matching on all ObjectID parameters. |
 | **DDoS API Flooding** | Resource exhaustion on check-in endpoints | Layered limiters: 300/min per account, 600/min anonymous per IP, a 3,000/min per-IP ceiling, 90/min for mutations and 30/min for credential exchanges. |
@@ -654,29 +658,36 @@ an abstract marker.
 
 `src/app.ts` serves the dashboard under a Content-Security-Policy whose
 `script-src` is `'self'` — no `'unsafe-inline'`. A CDN build of three.js is blocked
-outright, and vendoring a full engine to draw ~900 boxes is disproportionate.
-`public/gl/glx.js` is therefore a ~450-line WebGL2 layer — mat4/vec3, program
-and VAO plumbing, half-float render targets, geometry generators, ear-clipping
-triangulation and a static batcher — and `public/gl/campus3d.js` is the scene.
+outright, and vendoring a full engine to extrude a city of footprints is
+disproportionate. The hand-written layer is about 1,070 lines across two files:
+`public/gl/glx-geometry.js` is the pure, worker-safe half — mat4/vec3, geometry
+generators, ear-clipping triangulation and the static batcher — and
+`public/gl/glx-gl.js` is the WebGL2 plumbing, programs, VAOs and half-float
+render targets. `public/gl/glx.js` is a seven-line barrel that re-exports both
+so older imports keep resolving. `public/gl/campus3d.js` is the scene.
 
 ### 14.2 Data provenance
 
-The city is not hand-authored. `design/build-campus.py` bakes two cached
-OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API and cached
-under `design/osm/`, which `.gitignore` excludes — the committed part is the
-`.overpass` queries and `manifest.json` that let anyone refetch them byte-for-byte) into `content/<pack>/campus/` (tiled; the single-file
-`public/gl/uiuc-campus.json` no longer exists):
+The city is not hand-authored. `design/build-campus.py` bakes four cached
+OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API one sub-box at a
+time and cached under `design/osm/cache/`, which `.gitignore` excludes — the
+committed part is the query templates in `design/pipeline/queries/` and
+`design/osm/manifest.json`, which records a sha256 per response so a refetch can
+be compared against the one this bake used) into `content/<pack>/campus/`
+(tiled; the single-file `public/gl/uiuc-campus.json` no longer exists):
 
 ```text
-  design/osm/buildings.json   2.4 MB   2493 building ways
-  design/osm/extra.json       4.1 MB   parks, stadiums, artwork nodes, highways
+  design/osm/cache/buildings_*.json   16 sub-boxes   9872 building ways
+  design/osm/cache/extra_*.json       parks, stadiums, artwork nodes, highways
+  design/osm/cache/detail_*.json      trees, lamps, water, rail, parking, fountains
+  design/osm/cache/props_*.json       benches, bins, racks, fences, pitches, steps
                     │
                     ▼  build-campus.py
       ┌─────────────────────────────────────────────┐
       │ • project WGS84 → local metric frame        │  origin = Main Quad
       │   (+x east, +z south, 10 m per world unit)  │  40.10746, -88.22713
       │ • Douglas-Peucker simplify at 1.1 m         │
-      │ • height from OSM height= / building:levels │  419 buildings tagged
+      │ • height from OSM height= / building:levels │  1065 buildings tagged
       │ • resolve 14 monuments by name, then by     │
       │   proximity (<55 m, no double-claiming)     │
       └─────────────────────────────────────────────┘
@@ -691,10 +702,12 @@ cross-checked against OSM building centroids while building the map. That audit
 corrected several venue positions — Kenney Gym was ~450 m south of its true
 location — so the geofencing engine and the map now agree on where campus is.
 
-Two monuments are massed from their verified centroid rather than an outline:
-Alma Mater is a `tourism=artwork` node, and neither ECEB nor the Main Library
-carries a `building=*` way in the extract. Each is flagged `src: "synth"` in the
-model so the distinction stays visible rather than being quietly implied.
+One monument is massed from its verified centroid rather than an outline: Alma
+Mater is a `tourism=artwork` node, so the pipeline boxes it from the coordinate
+and flags it `src: "synth"` in the model, so the distinction stays visible
+rather than being quietly implied. Every other landmark, ECEB and the Main
+Library included, resolved to a real `building=*` way once the extract was
+widened to the whole campus, and carries `src: "osm"`.
 
 ### 14.3 Render pipeline
 
@@ -709,7 +722,7 @@ model so the distinction stays visible rather than being quietly implied.
    └───────────────────────┬───────────────────────────────┘
                            ▼  RGBA16F target
    ┌── pass 2: bloom ──────────────────────────────────────┐
-   │  bright pass (soft-knee threshold 0.58) → half res    │
+   │  bright pass (soft-knee threshold 0.62) → half res    │
    │  3 × separable 9-tap Gaussian (H then V)              │
    └───────────────────────┬───────────────────────────────┘
                            ▼
@@ -723,9 +736,13 @@ Two details carry most of the visual weight:
 
 - **Static batching.** 9,188 buildings as 9,188 draw calls stutters on integrated
   GPUs. `mergeStatic()` bakes position, normal, per-vertex colour and emissive
-  into one interleaved buffer, so the ambient city costs a single
-  `drawElements`. Only the 14 monuments are dynamic, because only they change
-  colour when a faction captures them.
+  into one interleaved buffer, and the tile baker runs it once per 500 m tile —
+  so the ambient city costs one solid and one decal `drawElements` per resident
+  tile (a few dozen at campus-wide zoom, not thousands), plus one instanced draw
+  for the greenery. The superseded single-file bake merged the whole core into
+  one buffer and drew it in three calls; that path survives only as the schema 1
+  fallback. Only the 14 monuments are dynamic, because only they change colour
+  when a faction captures them.
 - **Analytic LOD on the window lights** (and, since the fidelity pass, on every procedural material). Facades carry a procedural window grid
   keyed on a per-cell hash. Left unguarded it aliases into sparkling noise once
   a cell falls below a pixel, so the shader measures the cell's screen
@@ -753,14 +770,19 @@ typography.
 A second pass pushed the model from "a city of boxes" toward the actual campus.
 Everything in it is traceable to a source in the repo.
 
-**Surveyed detail (design/osm/detail.overpass → design/osm/detail.json).** A
-third Overpass extract adds the layers OSM maps individually: **2,343
+**Surveyed detail (design/pipeline/queries/detail.overpass.tpl →
+design/osm/cache/detail_*.json).** A third Overpass extract adds the layers OSM
+maps individually. Over the whole-campus bbox it currently returns **6,657
 `natural=tree` nodes** (the elm rows on the Quad are real positions; generated
-rows only fill gaps > 12 m from a surveyed tree), 63 street lamps (+ generated
-fill to 360), 32 water features including Boneyard Creek, the Illinois Central
-rail line, 243 parking pads, 12 fountains, and `roof:shape` where tagged. They
-bake into three static batches — buildings + roof caps, ground decals, and
-greenery — so the whole ambient campus is still three draw calls.
+rows only fill gaps > 12 m from a surveyed tree, which is `merge_trees` in
+`design/pipeline/detail.py`), 113 street lamps, 115 water features including
+Boneyard Creek, the Illinois Central rail line, 839 parking areas, 22 fountains,
+and `roof:shape` where tagged. After the generated fill and the area filters the
+shipped index reports 9,255 trees, 1,042 lamps, 114 water features, 673 parking
+pads and 21 fountains; `content/<pack>/campus/index.json` is the authoritative
+count, and the smaller figures an older draft of this section carried were the
+superseded core-bbox bake. Each tile bakes into a buildings-plus-roof-caps
+batch, a ground-decal batch and instanced greenery.
 
 **Reference photographs (design/refs/).** Ten Wikimedia Commons photographs
 of the monuments were fetched and read; `design/refs/MATERIALS.md` records the
@@ -771,11 +793,14 @@ a white cupola over slate). The official brand palette was verified against
 brand.illinois.edu: Illini Orange `#FF5F05`, Illini Blue `#13294B`, and the
 secondary set (Patina `#007E8E` is, conveniently, the verdigris).
 
-**Procedural materials (public/gl/materials.js).** Twenty-two surfaces —
+**Procedural materials (public/gl/materials.js).** Twenty-eight surfaces —
 brick with mortar courses, grey and buff limestone, verdigris (flat and
 ribbed for domes), slate, terracotta tile, glass curtain wall, ribbed concrete,
 asphalt with centre line, walk, lawn, canopy, water, rail ballast, bronze,
-granite — as pure GLSL functions of world position. No textures: the CSP
+granite, and the six the whole-campus facade classifier
+(`design/pipeline/facade.py`) needs for the ambient blocks: clapboard, precast,
+metal panel, dark glass, roof membrane and standing seam — as pure GLSL
+functions of world position. No textures: the CSP
 forbids them and the patterns are metric anyway (a brick is 0.2 × 0.065 m at
 10 m per world unit). Every `fwidth()` is evaluated at the top of
 `material()` outside any branch, and each pattern fades to its flat albedo once
@@ -808,11 +833,13 @@ monuments, camera distance) and a cinematic mode that hides the chrome
 landmark, sourced from Wikipedia and flagged `approximate` where no article
 exists.
 
-**What is still approximate.** ECEB and the Main Library have no building way
-in OSM and are massed from verified centroids (`src: "synth"`). Alma Mater is
-a low-poly figure group, not a sculpture. The stadium is a tiered ellipse with
-end blocks rather than a true open horseshoe mesh. Only three OSM buildings
-carry `roof:shape`.
+**What is still approximate.** Alma Mater has no building way in OSM — it is a
+`tourism=artwork` node — so it is massed from its verified centroid
+(`src: "synth"`) and drawn as a low-poly figure group rather than a sculpture. The stadium is a tiered ellipse with
+end blocks rather than a true open horseshoe mesh. Only 289 of the 9,872
+building ways in the extract carry `roof:shape`, so the great majority of roofs
+are inferred from type, area and height by `design/pipeline/roofs.py` rather
+than surveyed.
 
 ---
 
@@ -894,7 +921,7 @@ Run `npm test` for the authoritative figure; the numbers above are a snapshot, n
   shifts           catalogue encodings and circadian surge pricing
   content          pack validation and cross-references
   campus           the tiled bake, per-tile hashes, monument ids
-  legacyCompat     the open-demo contract still holdsng
+  legacyCompat     the open-demo contract still holds
 ========================================================================================
 ```
 

@@ -16,6 +16,19 @@ import { Request, Response, NextFunction } from 'express';
 import { AdonixSyncService } from '../services/adonixSync.service';
 
 export class AdonixController {
+  /**
+   * Runs one synchronisation pass and reports how many shifts it touched.
+   *
+   * Takes nothing at all — no body, no query, and not the caller's identity either; the
+   * request is `_req` for that reason. Everything that decides the outcome is upstream, so
+   * the only interesting gate on this endpoint is the one on the route, and the file header
+   * above says why it has to be there.
+   *
+   * A completed pass is always 200, including the offline one: an unreachable or slow Adonix
+   * endpoint is caught inside the service and produces a static fallback set of events rather
+   * than an error. So a 200 here does not mean the live schedule was read. `syncedCount` and
+   * the echoed event titles in `data` are the only way to tell the two apart.
+   */
   public static async syncOfficialEvents(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const result = await AdonixSyncService.syncOfficialEvents();

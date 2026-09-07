@@ -29,6 +29,10 @@ import { PluginAssetEntry, PluginManifestEntry, ServerPlugin } from './types';
 
 /** Where plugin directories live, relative to the repository root. */
 const PLUGIN_DIR_NAME = 'plugins';
+/**
+ * Under `/dashboard`, not under `/api` — see the file header. This prefix is also what the
+ * containment check below measures against, so changing it changes what a plugin can publish.
+ */
 const ASSET_URL_PREFIX = '/dashboard/plugins';
 
 interface ResolvedAsset extends PluginAssetEntry {

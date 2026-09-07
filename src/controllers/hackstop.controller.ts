@@ -22,6 +22,19 @@ import { sameId } from '../common/utils/id';
 import { ApiError } from '../common/errors/apiError';
 
 export class HackStopController {
+  /**
+   * The beacon list answers an unproved caller rather than refusing one: an identity that was
+   * claimed rather than proved, or none at all, gets the beacons with no cooldown fields on
+   * them. That shape only ever occurs in `legacy` mode. In `required` mode this path is not on
+   * `enforceAuthMode`'s allow-list, so an anonymous request is already a 401 and everyone who
+   * reaches here holds a proved session.
+   *
+   * What is handed to the service is the caller's id *and how it was established*, because it
+   * needs both. Passing `req.account.id` on its own would have handed a legacy-claimed
+   * identity the per-caller cooldown, and since account ids are public that is the same
+   * position-history disclosure the whole `lastSpunUsers` map was removed for, rebuilt one
+   * beacon at a time. The service's own comment carries the detail.
+   */
   public static async listBeacons(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // The caller's own cooldown is theirs to see; everybody else's is not, and a *claimed*
@@ -35,6 +48,20 @@ export class HackStopController {
     }
   }
 
+  /**
+   * Spins a beacon for loot. 200 with what was rolled; the roll happens server-side, so
+   * nothing in the request can influence rarity.
+   *
+   * Two refusals mean quite different things to a player and are worth telling apart. 403 is
+   * being out of range, and quotes the measured distance against the beacon's own configured
+   * radius. 409 is the per-volunteer cooldown, and quotes the seconds remaining. The service
+   * checks the cooldown twice — cheaply up front so a double-tap gets a countdown instead of
+   * a wasted roll, and then as a conditional claim, which is the one that actually enforces
+   * it against two concurrent spins.
+   *
+   * `beaconId` is the beacon's own string key rather than an ObjectId, which is why it is the
+   * one path parameter in this file not run through `objectId()`.
+   */
   public static async spinBeacon(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { coordinates } = req.body;
@@ -49,6 +76,15 @@ export class HackStopController {
     }
   }
 
+  /**
+   * Somebody's bag, addressed by id in the path. The ownership check is the reason this is
+   * not a one-liner, and the comment inside it records what the two previous versions of that
+   * check got wrong; do not simplify it back.
+   *
+   * The `req.account!` assertion is load-bearing on the route carrying both `requireSession`
+   * and `requireAccount`. Remount this handler without them and the assertion becomes a lie
+   * that fails open rather than closed, which is precisely how the earlier version broke.
+   */
   public static async getInventory(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const target = req.params.volunteerId as string;
@@ -69,6 +105,18 @@ export class HackStopController {
     }
   }
 
+  /**
+   * Spends one item out of the caller's inventory. Everything that decides whether it may be
+   * spent lives in the service, and the ordering there is the point: the target gym is
+   * resolved, the caller's position is checked against it, and the faction rule is applied,
+   * all before the quantity is decremented. There is no transaction around the two, so a
+   * refusal after the decrement would eat the item and pay nothing for it.
+   *
+   * `coordinates` is optional in the schema and required by the service for the two
+   * gym-targeted items only. That split is deliberate rather than sloppy: an item that is
+   * drunk rather than aimed should not demand a position from a player who never opened the
+   * campus renderer and has none to give.
+   */
   public static async usePowerUp(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { itemType, targetGymId, coordinates } = req.body;

@@ -29,16 +29,24 @@ which meant the string committed to this repository was a live credential on eve
 box, container and self-hosted deployment — and it mints claim codes, and a claim code is a
 session. If you are running an older build, set it explicitly.
 
-Set `PUBLIC_URL` to the https origin the browser sees. It is used for the WebSocket
-`Origin` check, the magic-link URLs and the Adonix redirect, so a wrong value shows up as
-presence refusing to connect.
+Set `PUBLIC_URL` to the https origin the browser sees. It is used for the magic-link URLs,
+the Adonix redirect and the WebSocket `Origin` check, and a wrong value shows up as the
+first two: links that point at the wrong host and an SSO return that lands nowhere. It does
+*not* show up as presence refusing to connect, which is the failure you might expect —
+`originOk` accepts an `Origin` matching the request's own `Host` before it consults
+`PUBLIC_URL` at all, so a browser on the real origin connects whatever this says. Do not
+use presence as the test that this value is right; open a magic link.
 
 ## AUTH_MODE=required
 
 In `required` mode the session cookie is the only identity. A body `volunteerId` naming
 somebody other than your session is a 403, anonymous API calls are 401 except the sign-in
-endpoints, `GET /api/v1/content`, `/health` and `/ready`, and creating accounts is
-organiser-only. [IDENTITY.md](IDENTITY.md) is the full contract.
+endpoints and the handful of reads the login screen itself needs — `GET /api/v1/content`,
+`GET /api/v1/announcements` and the plugin manifest `GET /api/v1/plugins` — and creating
+accounts is organiser-only. `/health` and `/ready` are outside this entirely: they sit at
+the server root, so the gate is never mounted in front of them rather than allow-listing
+them. `ANONYMOUS_ALLOW` in `src/middleware/identity.ts` is the authoritative set and
+[IDENTITY.md](IDENTITY.md) is the full contract.
 
 Production cannot run in `legacy` mode. That mode is the open demo, where a request may
 simply claim to be anyone.
@@ -70,9 +78,11 @@ The free plan holds WebSocket and SSE connections, which is the whole reason a c
 is used here rather than a serverless one — see the note at the top of that file.
 
 The database is the part that is not automatic. Create a free **MongoDB Atlas M0** cluster and
-paste its connection string when Render prompts for `MONGODB_URI`; it is the only value the
-blueprint marks `sync: false`, because a connection string carries a password and must not be
-committed. It has to be Atlas or another replica set: a standalone `mongod` boots and then
+paste its connection string when Render prompts for `MONGODB_URI`; the blueprint marks it
+`sync: false`, because a connection string carries a password and must not be committed.
+Render prompts for `PUBLIC_URL` the same way — it is the second `sync: false` value, and the
+one people forget, because there is nothing to paste into it until the service has been
+created and has a URL. It has to be Atlas or another replica set: a standalone `mongod` boots and then
 fails every transactional path at runtime, as the section above explains. Allow `0.0.0.0/0` in
 the cluster's network access list, since Render's outbound addresses are not fixed on the free
 plan.

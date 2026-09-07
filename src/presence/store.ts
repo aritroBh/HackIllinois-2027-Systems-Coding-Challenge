@@ -16,6 +16,20 @@ import { PresenceMute } from '../models/presenceMute.model';
 
 export type PresenceKind = 'VOLUNTEER' | 'HACKER';
 
+/**
+ * One person's live position, and the most dangerous object in this file.
+ *
+ * It holds the exact fix and the published one side by side, four fields apart, differing only
+ * by a lower-case f. `x`/`z` and `lat`/`lng` are where somebody actually is; `fx`/`fz` are what
+ * the world is allowed to see. Everything that leaves this process to an ordinary viewer must
+ * read the fuzzed pair, and the handful of readers entitled to the exact pair are enumerated in
+ * `docs/PRESENCE.md` and audited by their callers. A field name is the only thing standing
+ * between those two cases, which is worth remembering when adding a fifth reader.
+ *
+ * The entry is also the store's unit of lifetime: it is created by the first accepted sample,
+ * deleted when the account's last socket closes or after `expireAfterMs` of silence, and its
+ * `cell` is a cached index key maintained solely by `reindex`.
+ */
 export interface PresenceEntry {
   id: string;
   name: string;
@@ -56,6 +70,16 @@ export interface Sample {
   spd?: number;
 }
 
+/**
+ * Why a sample was refused, in the vocabulary the transports turn into `nack` frames.
+ *
+ * The two speed outcomes are not synonyms and the distinction is the whole point of the
+ * counter: `TOO_FAST` is one implausible jump, which a phone can produce without anybody
+ * lying, and costs nothing but that sample. `SPEED_STRIKE` is the third in a row, and it is
+ * also the only reply that tells the sender they
+ * have just been muted for a minute. `INACCURATE` never counts towards either — a poor fix is
+ * a bad radio, not a lie.
+ */
 export type UpdateResult =
   | { ok: true; entry: PresenceEntry }
   | { ok: false; reason: 'OPT_OUT' | 'OFF_CAMPUS' | 'INACCURATE' | 'TOO_FAST' | 'MUTED' | 'RATE' | 'SPEED_STRIKE' };
@@ -187,6 +211,25 @@ export interface StoreConfig {
   muteMs: number;
 }
 
+/**
+ * The line between what a fork may tune and what it may not.
+ *
+ * The first seven values come from the content pack, so an event with a different campus can
+ * change its cell size, its interest radius, its fuzz grid and its gates by editing
+ * `event.json` — `content/schema.ts` defaults the six under `presence`, requires
+ * `metersPerUnit` outright, and refuses any of them at zero or below, so a pack cannot start
+ * the server with a cell size of nothing. The last four are written here and nowhere else: the
+ * sample interval
+ * the protocol header advertises as "≥ 2 s apart", the thirty seconds after which a dot is
+ * labelled stale, the two minutes after which an entry is expired outright, and the minute a
+ * speed mute lasts. They are timings of the wire and of the abuse gate rather than facts about
+ * a campus, and a fork changing them would be changing the protocol.
+ *
+ * This is read once at module load, so a pack is not hot-swappable. The constructor accepts a
+ * partial override for a store that needs different numbers, but nothing takes it up today:
+ * every `new PresenceStore()` in `src/`, in the suite and in `scripts/benchmarks/` is built on
+ * the defaults, so any test that wants a different cell size would be the first.
+ */
 export const DEFAULT_CONFIG: StoreConfig = {
   metersPerUnit: pack.event.campus.metersPerUnit,
   cellMeters: pack.event.presence.cellMeters,
@@ -263,25 +306,97 @@ export class PresenceStore {
     this.cfg = { ...DEFAULT_CONFIG, ...cfg };
   }
 
+  /**
+   * The grid key a world position is filed under.
+   *
+   * `cellMeters / metersPerUnit` is the cell edge in world units — five, for the shipped
+   * pack's 50 m cell on a ten-metre unit. `Math.floor`, not a truncation: the pack origin sits
+   * inside the campus rather than at a corner, so coordinates run negative on both axes, and
+   * truncating towards zero would fold the two cells either side of each axis into one
+   * double-width cell straddling it.
+   *
+   * `reindex` feeds this the PUBLISHED position and never the exact one, so every cell-keyed
+   * structure in this file is an index over fuzzed space. That costs nothing for `near` and
+   * `clusters`, whose answers are fuzzed anyway, and it is the whole reason
+   * `nearestVolunteers` — which ranks on the exact position — has to widen its stopping rule
+   * by `maxFuzzDisplacementMetres` before it may conclude that a shell holds nobody nearer.
+   *
+   * `near`, `clusters` and `nearestVolunteers` repeat this arithmetic inline rather than
+   * calling it, because they want the two integers rather than the joined key. The four copies
+   * have to agree; if one of them ever computed a different edge, it would be searching a grid
+   * nothing had been written into and would silently find nobody.
+   */
   private cellOf(x: number, z: number): string {
     const s = this.cfg.cellMeters / this.cfg.metersPerUnit;
     return `${Math.floor(x / s)}:${Math.floor(z / s)}`;
   }
 
+  /**
+   * The published position for an exact one: snap to the fuzz grid, then add the hour's jitter.
+   *
+   * The snap is to the NEAREST lattice point of a `fuzzGridMeters` grid rather than to the
+   * corner of the cell the point falls in, which is what holds its contribution to half a grid
+   * on each axis — the term `maxFuzzDisplacementMetres` is built from. `jitterFor` answers in
+   * metres, so it is divided by `metersPerUnit` on the way into world units; the snap is
+   * already in world units because `g` is.
+   *
+   * The jitter is keyed on the hour of `nowMs`, and this runs on the sample's own clock, so the
+   * offset changes at the top of each hour: a person who has not moved is republished up to
+   * 2 × `JITTER_METRES` away on each axis. That step happens at their first accepted sample
+   * after the boundary, not at the boundary — nothing recomputes a published position for
+   * somebody who is not sending, so a phone that went quiet keeps the previous hour's offset
+   * for as long as its entry survives.
+   *
+   * The result is written to `pendingFx`/`pendingFz` by the only caller, so it reaches the wire
+   * a tick later; the exception is the first sample, which publishes at once.
+   */
   private fuzz(id: string, x: number, z: number, nowMs: number): [number, number] {
     const g = this.cfg.fuzzGridMeters / this.cfg.metersPerUnit;
     const [jx, jz] = jitterFor(id, Math.floor(nowMs / 3_600_000));
     return [Math.round(x / g) * g + jx / this.cfg.metersPerUnit, Math.round(z / g) * g + jz / this.cfg.metersPerUnit];
   }
 
+  /**
+   * How many people are currently tracked. `/health` reports it as `presence.tracked`, and only
+   * inside its proven-lead branch: a live headcount of the building is not an anonymous fact.
+   */
   size(): number {
     return this.entries.size;
   }
 
+  /**
+   * The live entry for one account — the object itself, not a copy, exact `lat`/`lng`/`x`/`z`
+   * included.
+   *
+   * Two kinds of caller, and only one of them is a disclosure. The tick path (`session.ts`
+   * twice, `service.ts` once) always passes the id of the account that owns the session doing
+   * the asking, reads `fx` and `cell`, and tells nobody anything about anybody else. The shift
+   * roster in `controllers/shift.controller.ts` passes other people's ids and reads `x`, `z`
+   * and `t`: that is one of the three audited exact reads named in `docs/PRESENCE.md`, and it
+   * is why the roster handler gates on a proven lead, coarsens what it read into age and
+   * distance buckets before answering, and writes a `PresenceAudit` row per call. This method
+   * enforces none of that — it hands over the exact fix to anyone holding a store reference,
+   * and the gate lives entirely in the caller.
+   *
+   * Because the entry is live, a caller can write through it as well as read. That is not
+   * hypothetical: `scripts/benchmarks/presenceTick.ts` moves every entry by hand between ticks
+   * to construct its worst case.
+   */
   get(id: string): PresenceEntry | undefined {
     return this.entries.get(id);
   }
 
+  /**
+   * Every tracked entry, in insertion order, exact positions and all.
+   *
+   * The one production caller is the lead-only `GET /presence`, which is the second of the
+   * three audited exact reads and the only response anywhere that carries a coordinate out of
+   * this store — dispatch quotes ranges instead, for the reason set out in
+   * `nearestVolunteers`, and the roster quotes buckets. It spreads the iterator into an array
+   * first, which matters: this is the store's own map
+   * iterator, so anything that removed an entry part-way through a lazy pipeline would be
+   * mutating the collection being walked.
+   */
   all(): IterableIterator<PresenceEntry> {
     return this.entries.values();
   }
@@ -294,6 +409,23 @@ export class PresenceStore {
     else this.mutes.delete(id);
   }
 
+  /**
+   * Whether this account is currently silenced by the speed gate.
+   *
+   * The surviving map is asked first and the entry only as a fallback, which is the order that
+   * makes the answer mean anything: an entry is deleted when an account's last socket closes,
+   * so consulting it alone is how the mute used to be escapable by reconnecting.
+   *
+   * Be aware of what this is and is not. Nothing in `src/` calls it — `update` does its own
+   * check inline over a superset of the same state (the entry, the caller's swept copy of
+   * `presenceMutes`, and this map), because it needs the largest expiry as a number to seed a
+   * freshly created entry with rather than a boolean. So this exists as the seam
+   * `tests/presence.test.ts` uses to pin the reconnect-escape fix, and the expired-entry
+   * eviction below is consequently dead in production. `applyMute` is the other path that can
+   * drop a key, but only when handed an expiry already past, and the service's sweep queries
+   * for live rows only — so outside `clear` a lapsed expiry stays in `mutes` for the life of
+   * the process. It is inert rather than wrong: every reader compares it against the clock.
+   */
   isMuted(id: string, nowMs: number = Date.now()): boolean {
     const held = this.mutes.get(id);
     if (held !== undefined) {
@@ -306,7 +438,9 @@ export class PresenceStore {
 
   /**
    * Accept or reject one sample. `who` carries the account facts the transport verified.
-   * Gates (in order): opt-in, bbox, accuracy (dropped, never a strike), rate, mute, speed.
+   * Gates (in order): opt-in, bbox, accuracy (dropped, never a strike), mute, rate, speed —
+   * the mute is tested before the rate limit, so a muted sender hears `MUTED` however fast it
+   * sends, and the rate gate only exists for an account that already has an entry.
    */
   update(
     who: { id: string; name: string; kind: PresenceKind; role: string; faction: string | null; avatarHash: string | null; optIn: boolean; onDuty: boolean; muteUntil?: number },
@@ -368,6 +502,20 @@ export class PresenceStore {
     return { ok: true, entry: e };
   }
 
+  /**
+   * Move an entry to the cell its PUBLISHED position now falls in, if that has changed.
+   *
+   * Called from exactly two places, and both are places where `fx`/`fz` have just been
+   * written: the first-sample fast path in `update`, and the promotion of pending positions in
+   * `tick`. That is what lets everything downstream treat `e.cell` as a cached
+   * `cellOf(e.fx, e.fz)` — `service.ts` keys its per-tick cohort cache on `me.cell` while
+   * `session.ownCohort` derives the same string through `cellKeyFor`, and the two agreeing is
+   * a property of this method being the only writer.
+   *
+   * The early return is not an optimisation detail so much as the common case: a 50 m cell is
+   * most of a building, so somebody walking around inside one costs nothing at all here, and
+   * only a border crossing pays for a set delete and a set insert.
+   */
   private reindex(e: PresenceEntry): void {
     const cell = this.cellOf(e.fx, e.fz);
     if (cell === e.cell) return;
@@ -378,6 +526,23 @@ export class PresenceStore {
     set.add(e.id);
   }
 
+  /**
+   * Forget one person's position entirely — their entry and their cell membership.
+   *
+   * What it deliberately does NOT touch is the mute. `mutes` is a separate map for exactly
+   * this reason (see its declaration): this method runs when an account's last socket closes,
+   * so a mute stored on the entry would be cleared by the disconnect, and reconnecting was
+   * therefore a way out of the speed gate. Removing somebody is not a pardon.
+   *
+   * An emptied cell's `Set` is left in `cells` rather than deleted. The set of keys that can
+   * ever exist is bounded — `update` refuses any sample outside the pack bbox, and a published
+   * position sits within a few tens of metres of an accepted one — so this is a fixed ceiling
+   * on the order of the campus divided by the cell size, not a leak that grows with traffic.
+   * The ring searches pay a map hit and an empty iteration for each such husk.
+   *
+   * The boolean says whether there was anything to remove. Nothing reads it today; every
+   * caller in `src/` and in the suite removes unconditionally.
+   */
   remove(id: string): boolean {
     const e = this.entries.get(id);
     if (!e) return false;
@@ -405,6 +570,23 @@ export class PresenceStore {
     return { moved, expired };
   }
 
+  /**
+   * Whether this entry's last accepted sample is old enough that it should be labelled rather
+   * than trusted.
+   *
+   * Staleness marks; it does not hide. `staleAfterMs` is thirty seconds and `expireAfterMs` is
+   * two minutes, so between the two an entry is still indexed, still sent, and still drawn —
+   * with the `stale` bit set in its wire row and the same flag on the lead's `GET /presence`.
+   * The client turns that into a label rather than a removal. The alternative, dropping
+   * somebody the moment a sample is late, would make every lift, basement and lock-screen look
+   * like a departure on everybody else's map.
+   *
+   * This is not the constant dispatch uses. `sos.service.ts` declares its own
+   * `LIVE_POSITION_MAX_AGE_MS`, which happens to be thirty seconds too but is passed to
+   * `nearestVolunteers` as `maxAgeMs` and is not read from here — moving one does not move the
+   * other, and they answer different questions: this one asks whether to trust a dot on a map,
+   * that one asks whether a fix is fresh enough to send somebody to.
+   */
   isStale(e: PresenceEntry, nowMs: number): boolean {
     return nowMs - e.t > this.cfg.staleAfterMs;
   }
@@ -566,9 +748,10 @@ export class PresenceStore {
    * so dividing by the cell size recovers the integer coordinates the key is built from; the
    * rounding guards against the two-decimal quantisation the triple was emitted with.
    *
-   * Not on the tick path — `Cohort.ownClusterIndex` answers the only question that used to
-   * need it. This remains for tests and for the lead heat map, which reads clusters outside
-   * the tick and can afford a string.
+   * Not on the tick path, and not on any other path either: `Cohort.ownClusterIndex` and
+   * `Cohort.indexOfCell` answer the two questions that used to need this, and nothing in
+   * `src/`, in the suite or in `scripts/` calls it any more. It survives as a public method
+   * with no caller.
    */
   cellKeyForCluster(c: [number, number, number]): string {
     const s = this.cfg.cellMeters / this.cfg.metersPerUnit;

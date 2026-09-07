@@ -97,7 +97,7 @@ npm run bench:presence -- --clients 5000 --devices 2 --seconds 120
 npm run bench:presence -- --clients 5000 --storm 10
 ```
 
-The harness provisions hacker accounts through a desk session, opens real sockets, walks each client, and reports the gate: tick CPU p95 under 200 ms, the longest event-loop block under about 15 ms, the ladder never leaving rung 0, and no 1013 close for an account inside its slot budget. Run it once with the generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without, to exercise both the trusted path and the 3,000-streams-per-IP ceiling.
+The harness provisions hacker accounts through a desk session, opens real sockets, walks each client, and reports the gate: tick CPU p95 under 30 ms, peak outbound under 1 MB/s, no 1013 close for an account inside its slot budget, and the accounts and sockets it was asked for actually provisioned and held. Two things it does not check, both of which an earlier version of this paragraph claimed it did. It samples the server's own tick statistics and nothing else, so the longest event-loop block is measured by the in-process `scripts/benchmarks/presenceTick.ts` above rather than here; and the rung it watches is the server's `clusterMode` flag, which is the bottom rung alone, so a run that spent its whole two minutes on the middle rung would still pass. Run it once with the generator's addresses in `TRUSTED_EGRESS_CIDRS` and once without, to exercise both the trusted path and the 3,000-streams-per-IP ceiling.
 
 Two things learned by running it, both about setup rather than about the gate.
 

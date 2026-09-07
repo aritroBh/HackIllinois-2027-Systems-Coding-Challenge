@@ -11,7 +11,11 @@
  *
  * `enforceAuthMode` is the gate that makes `required` mean something: any anonymous
  * request outside a short allow-list (the credential exchanges, the provider list, the
- * public content endpoint, health) is a 401 before it reaches a router.
+ * public content endpoint, public announcements and the plugin manifest — see
+ * `ANONYMOUS_ALLOW` for the authoritative set) is a 401 before it reaches a router. The
+ * allow-list only ever describes paths *under* `/api/v1`, because that is the only place
+ * this middleware is mounted; `/health` and `/ready` sit at the server root and never pass
+ * through it at all.
  *
  * CSRF: cookie-authenticated mutations must echo the CSRF nonce in `X-CSRF-Token`. The
  * nonce is derived from (account, sessionVersion), so it is recomputed here rather than
@@ -41,7 +45,6 @@ export function __clearAccountCache(): void {
   accountCache.clear();
 }
 
-/** Drop one account from the cache so a revocation on THIS instance is immediate. */
 /**
  * Re-resolve an account's current role, kind and session version.
  *
@@ -58,6 +61,21 @@ export async function refreshAccountContext(
   return loadAccount(accountId, Date.now());
 }
 
+/**
+ * Drop one account from the cache so a revocation on THIS instance is immediate.
+ *
+ * The sixty-second TTL is how long this process may keep believing a stale copy of an account,
+ * and for the three writes that change what a session is allowed to do — logout and
+ * `POST /auth/revoke/:id`, which bump `sessionVersion`, and `PATCH /auth/accounts/:id/role`,
+ * which changes the role — a minute is too long to wait for a change the caller just asked
+ * for. `auth.controller.ts` calls this straight after each of those writes, which closes the
+ * window on the process that served the request. It does nothing for any other replica; there
+ * the TTL is still the bound, and that is the deliberate limit of a per-process cache with no
+ * invalidation channel.
+ *
+ * (This comment previously sat above `refreshAccountContext` instead, where it described
+ * neither that function nor anything else.)
+ */
 export function evictAccountCache(accountId: string): void {
   accountCache.delete(accountId);
 }
@@ -120,6 +138,37 @@ export async function resolveAccountFromCookies(
   };
 }
 
+/**
+ * Establish who is calling, and how well they proved it. Everything downstream reads the
+ * answer off `req.account`; nothing downstream re-reads a cookie.
+ *
+ * It almost never rejects. Three of the four outcomes are "carry on": a good cookie sets
+ * `req.account` with `source: 'session'`, a cookie whose `sv` no longer matches the account's
+ * `sessionVersion` (revoked, or the account is gone) falls through as anonymous, and an
+ * absent cookie in `legacy` mode may still pick up a claimed identity from a
+ * caller-identifying field on the request. Refusing a stale cookie here would be the wrong
+ * layer: `enforceAuthMode` decides whether anonymous is acceptable for this path, and it has
+ * the allow-list to decide that with.
+ *
+ * The one rejection is the impersonation guard, and it is narrower than it looks. In
+ * `required` mode, a request that carries a valid session *and* names a different account in
+ * a caller-identifying field is a 403 rather than being silently reinterpreted — the point is
+ * that a client which still speaks the legacy protocol finds out, instead of quietly acting
+ * as the session while its body says otherwise. Lead-or-above is exempt from the 403, which
+ * is not a delegation grant: `resolveActorId` returns the session's own id regardless of what
+ * the body says, so an exempt lead does not act as the named account either. Real delegation
+ * is `resolveOnBehalf`, which needs its own dedicated field.
+ *
+ * **`csrfVerified` is computed here, and only for mutations.** It is a boolean, not a
+ * rejection: this middleware records whether the nonce matched and `requireCsrf` — mounted
+ * later, so that the rate limiters get their cheap rejection in first — decides what to do
+ * about it. On a read the property is left undefined, which is why nothing may treat
+ * `csrfVerified === false` as "this was a failed CSRF check" without also knowing the method.
+ *
+ * The account read goes through a sixty-second cache, so the common authenticated request
+ * costs a cookie parse, an HMAC verification and a map lookup. That is what makes it
+ * affordable to mount this ahead of the rate limiters on every `/api/v1` request.
+ */
 export async function attachIdentity(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
     const now = Date.now();
@@ -183,6 +232,17 @@ const ANONYMOUS_ALLOW = new Set<string>([
   'GET /plugins',
 ]);
 
+/**
+ * Membership test for `ANONYMOUS_ALLOW`, exact-matched on `METHOD path`.
+ *
+ * Exact, not prefix: a path is either written out above or it is not allowed, so nobody can
+ * widen the hole by mounting a new route under an allowed prefix. The only normalisation is a
+ * trailing slash, because `/content` and `/content/` are the same route to Express and would
+ * otherwise be two different answers here.
+ *
+ * `path` is `req.path`, which excludes the query string — the set is therefore compared
+ * against the route and never against caller-supplied values.
+ */
 export function isAnonymousAllowed(method: string, path: string): boolean {
   // Only CORS preflight is exempt. HEAD is served by GET handlers, so it must be gated like GET.
   if (method === 'OPTIONS') return true;
@@ -216,6 +276,22 @@ export function requireCsrf(req: Request, _res: Response, next: NextFunction): v
   next();
 }
 
+/**
+ * There has to be *somebody* — the weakest gate in this file, and the one most often chosen
+ * by mistake.
+ *
+ * It asks whether `req.account` is set, not how it got set, so in `legacy` mode a
+ * `?volunteerId=<public id>` satisfies it. That is the right question for an action the open
+ * demo is meant to allow anonymously, and the wrong question for anything that reveals data
+ * about the named account: account ids are handed out by the leaderboard, so "any account"
+ * there means "anyone at all, acting as whoever they name". Nine separate sites were fixed
+ * for exactly that across four review rounds — see `isProvenSession` in `common/types/account.ts`
+ * for the rule and `me.routes.ts` for the fixes. If the handler behind this discloses
+ * something, you want `requireSession` instead.
+ *
+ * Routes that use both put `requireSession` first, so the failure a caller sees names the
+ * missing session rather than the missing account.
+ */
 export function requireAccount(req: Request, _res: Response, next: NextFunction): void {
   if (!req.account) {
     next(ApiError.unauthorized('Sign in to use this endpoint.'));

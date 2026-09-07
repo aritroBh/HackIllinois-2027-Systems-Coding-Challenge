@@ -1,8 +1,33 @@
 /**
- * PokéShift routes — `/api/v1/pokeshift`.
+ * PokéShift routes — `/api/v1/pokeshift`. The turf-war half of the game layer: territory gyms
+ * on campus landmarks, supply beacons you have to physically stand next to, and the power-ups
+ * that come out of them.
  *
- * Gym contests, geofenced beacon spins, and power-up inventory. Both mutating gym and
- * beacon routes require GPS coordinates at the schema level.
+ *   GET  /gyms                      no gate      the board
+ *   POST /gyms/:id/battle           no gate      contest or reinforce a gym
+ *   GET  /hackstops                 no gate      the beacon list
+ *   POST /hackstops/:beaconId/spin  no gate      spin a beacon you are standing at
+ *   GET  /inventory/:volunteerId    requireSession, requireAccount
+ *   POST /inventory/use             no gate      spend a power-up
+ *
+ * "No gate" here means no identity middleware on the route, not no authorisation. Four things
+ * are doing that work instead, and a new route needs all four considered:
+ *
+ *  1. `enforceAuthMode` upstream has already refused anonymous callers in `required` mode, so
+ *     the open rows are open only in the `legacy` demo posture.
+ *  2. Every write resolves its actor with `resolveActorId`, which returns the session's id
+ *     when there is one and falls back to a body field only in `legacy`. A body id therefore
+ *     never overrides a session, and none of these controllers reads `volunteerId` directly.
+ *  3. The mutating gym and beacon routes require GPS coordinates at the schema level, so the
+ *     geofence cannot be skipped by omitting a field.
+ *  4. Disclosure is decided per response rather than per route: `listBeacons` is handed the
+ *     caller's `source`, and only a *proved* session gets its own per-beacon cooldown back.
+ *     A claimed identity gets the bare list, because "when did this account last spin" is a
+ *     position history when the account id came out of the query string.
+ *
+ * The inventory read is the exception that proves the rule, and the comment on it explains
+ * why it needed a gate of its own: it names its subject in the path, which is what let the
+ * earlier round of `requireSession` fixes on the `/me` reads miss it entirely.
  */
 import { Router } from 'express';
 import { GymController } from '../../controllers/gym.controller';

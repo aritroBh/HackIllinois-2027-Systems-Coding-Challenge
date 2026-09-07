@@ -6,7 +6,7 @@ scattered comments under interview pressure — and because a list like this is 
 than a README that only describes what works.
 
 Two things this page is **not**: it is not the review log (`docs/REVIEWS.md` records what was
-found and fixed across thirteen rounds), and it is not a roadmap. These are the things a
+found and fixed across seventeen rounds), and it is not a roadmap. These are the things a
 careful reader will find, stated before they find them.
 
 ---
@@ -17,9 +17,9 @@ careful reader will find, stated before they find them.
 
 `RegistrationService.reserveShift` increments `Shift.filledSlots` with a conditional update and
 then inserts the registration row. Those are two documents, and there are no multi-document
-transactions on this path (the swap engine is the exception, and it pays for a replica set to
-get them). A process that dies between the two leaves the counter claiming a seat that no row
-occupies. The seat is lost until someone notices.
+transactions on this path (the swap engine and the SOS bounty debit are the two exceptions,
+and they pay for a replica set to get them). A process that dies between the two leaves the
+counter claiming a seat that no row occupies. The seat is lost until someone notices.
 
 The compensating decrement lives in a `catch`, and a rejected promise cannot prove the write
 did not land — so the compensation is best-effort, not a guarantee. **What is missing is not
@@ -45,17 +45,21 @@ claims: a desk device with its own credential, or a token minted against a readi
 trusts. `POST /attendance/verify` already requires `SHIFT_LEAD`, which limits who can be at
 that desk in `AUTH_MODE=required`; it does not make the coordinate honest.
 
-### Timezone is hard-coded to `America/Chicago`
+### The fatigue cap ignores the pack's timezone
 
 `chicagoDayRange` in `src/services/registration.service.ts` decides what "today" means for the
-8-hour daily fatigue cap, and the ledgers key their `day` field the same way. The value is a
-literal, not a pack setting.
+8-hour daily fatigue cap, and it writes `America/Chicago` as a literal.
 
-Everything else about running this for another event is in a content pack
-(`docs/FORK_GUIDE.md`), so **this is the one thing a fork cannot configure**, and a fork in
-Berlin would compute its day boundaries against Illinois midnight. It belongs in
-`event.json` beside the karma caps. It is called out here because the fork guide currently
-implies packs cover everything.
+The pack already carries the right value. `event.timezone` is required by `src/content/schema.ts`,
+`docs/FORK_GUIDE.md` tells a fork to set it, and the two ledgers honour it: `eventDay` in
+`karmaLedger.model.ts` and `eventDayKey` in `bounty.service.ts` both format against
+`pack.event.timezone`. The fatigue cap is the one rule that reads past it.
+
+That is worse than a missing setting rather than better. A fork in Berlin sets its timezone,
+watches its karma and bounty days land on the right nights, and never learns that the
+daily-hours cap is still cutting its day at Illinois midnight. The fix is an argument, not a
+new pack field — it is unwritten here rather than written untested, like the reconciliation
+above.
 
 ### Multi-document crash windows, accepted as a class
 
@@ -84,21 +88,31 @@ published track instead would close it, at the cost of a sprite that turns in 20
 
 ### Presence entries outlive the event that should end them
 
-Three cases, all bounded by the 120-second store expiry and none of them instant:
+Three cases, none of them instant. The first two are bounded by the store's 120-second expiry;
+the third is bounded by a fifteen-minute grace in the roster read, which is far longer:
 
-- **A handover leaves a ghost.** The client stops without telling the server (deliberately —
-  the cookie already belongs to the new account, and a `DELETE` from there would erase *them*),
-  so the departing account's last fuzzed position lingers until the idle sweep or expiry.
+- **A handover leaves a ghost, but only on the fallback.** The client stops without sending a
+  `DELETE` (deliberately — the cookie already belongs to the new account, and a `DELETE` from
+  there would erase *them*). On the WebSocket path that costs nothing: closing the socket is
+  itself the signal, and the service drops the store entry when an account's last session goes.
+  On the SSE fallback there is no socket whose closing anybody could notice, so the departing
+  account's last fuzzed position lingers until the idle sweep reaps the session, sixty to
+  ninety seconds later.
 - **`DELETE /presence` is not sticky against an open WebSocket.** It removes the entry and drops
   the SSE session, but a socket that keeps publishing recreates the entry, because the
   database's `presenceOptIn` is untouched by that route. Only a client that also closes its
   socket — which the shipped one does — makes it hold. `PATCH /me/presence { optIn: false }` is
   the one that persists.
-- **Going off shift hides you within a tick or two, not immediately.** `onDuty` is refreshed
-  from a 30-second roster read and applied on the account's next sample, so a stationary
-  volunteer whose shift has just ended can remain visible to ordinary viewers briefly.
+- **Going off shift does not hide you for at least a quarter of an hour.** The roster read
+  counts a volunteer as on duty from fifteen minutes before their shift until fifteen minutes
+  after it, and counts a `CHECKED_IN` registration as on duty whatever the clock says. Only
+  once that grace has run out does the 30-second roster refresh drop them, and the new answer
+  reaches the map on their next accepted sample. The grace itself is deliberate — somebody
+  walking off a shift is still on the floor, the same reasoning as `ON_DUTY_GRACE_MS` for
+  dispatch — but it is minutes, not ticks.
 
-`docs/PRESENCE.md` describes all three as immediate. They are eventual, within two minutes.
+`docs/PRESENCE.md` reads as though each of these is immediate. They are eventual: the first two
+within two minutes, the third not until the roster's grace has expired.
 
 ### `store.cells` never deletes an emptied cell
 

@@ -18,6 +18,22 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/**
+ * Only three of these six are ever written today, and the distinction matters to anyone
+ * filtering on them.
+ *
+ * `PENDING` is the initial state and the CAS predicate for every execution; `EXECUTED` and
+ * `FAILED` are the two terminal states `SwapService` writes — the first when the trade
+ * committed, the second with a `failureReason` when a leg turned out to be invalid or the
+ * transaction did not commit.
+ *
+ * `ACCEPTED`, `REJECTED` and `CANCELLED` are declared and nothing in `src/` sets them. A
+ * bilateral acceptance goes straight from PENDING to EXECUTED inside one transaction, so
+ * there is no moment for an ACCEPTED row to exist; a rejection or a withdrawal has no route
+ * at all. They are left here because `listSwapsQuerySchema` accepts the whole enum and a
+ * filter for a state nothing writes should return an empty list rather than a 400 — but do
+ * not read their presence as evidence that a reject or cancel endpoint exists.
+ */
 export enum SwapStatus {
   PENDING = 'PENDING',
   ACCEPTED = 'ACCEPTED',
@@ -27,6 +43,13 @@ export enum SwapStatus {
   FAILED = 'FAILED',
 }
 
+/**
+ * `targetShiftId` is required in both shapes and means different things in each: in a
+ * bilateral proposal it is the specific shift being asked for, and in an open one it is the
+ * proposer's opening ask, with `desiredShiftIds` carrying the full set of edges the cycle
+ * finder may use. `isCyclic` and `cycleParticipants` are written only when a rotation
+ * executes, so they are the record of which ring a proposal ended up in.
+ */
 export interface IShiftSwap extends Document {
   proposerVolunteerId: Types.ObjectId;
   proposerShiftId: Types.ObjectId;

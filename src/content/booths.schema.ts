@@ -20,6 +20,7 @@
  */
 import { z } from 'zod';
 
+/** One sponsor table. `id` is the scan key and the HMAC input, so it is bounded to a URL-safe alphabet at 60 characters. */
 export const boothSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/).max(60),
   sponsor: z.string().min(1).max(60),
@@ -36,6 +37,11 @@ export const boothSchema = z.object({
   }),
 });
 
+/**
+ * The file. Capped at 200 booths — a sponsor row, not a directory — and checked for duplicate
+ * ids, which is the failure worth catching here because it is silent: two booths with one id
+ * share one `boothScan` row per account, so the second is not mislabelled, it is unscannable.
+ */
 export const boothsSchema = z.object({
   _about: z.string().optional(),
   booths: z
@@ -54,5 +60,6 @@ export const boothsSchema = z.object({
     }),
 });
 
+/** Inferred rather than hand-written, so the type and the validator cannot drift. */
 export type Booth = z.infer<typeof boothSchema>;
 export type BoothsFile = z.infer<typeof boothsSchema>;

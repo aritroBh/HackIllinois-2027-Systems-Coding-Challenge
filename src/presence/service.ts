@@ -18,6 +18,17 @@ import { LEAD_ROLES, AccountRole } from '../common/types/account';
 
 const TICK_MS = 1000;
 const SNAPSHOT_EVERY_MS = 15_000;
+/**
+ * The SSE fallback's row cut, against the pack's `maxDetail` (sixty in the shipped pack) for a
+ * WebSocket.
+ *
+ * A JSON row is seven values inside a text frame where a binary row is eight bytes, and the
+ * fallback owns no connection of its own — its frames go out on the account's existing event
+ * stream, alongside everything else that stream carries. The session applies this as its
+ * `detailCap`, and the cohort is built from the same figure through `effectiveCap`, so the
+ * cluster counts a fallback client receives exclude exactly the people it is sent as rows and
+ * nobody falls between the two.
+ */
 const JSON_DETAIL_CAP = 40;
 const ROSTER_REFRESH_MS = 30_000;
 const HELLO_TIMEOUT_MS = 5_000;
@@ -48,6 +59,20 @@ const FACT_TTL_MS = 30_000;
 const FACT_BATCH_MS = 0;
 const MUTE_SWEEP_MS = 5_000;
 
+/**
+ * Everything the tick and the sample gates need to know about an account, assembled from three
+ * sources with three different freshnesses.
+ *
+ * The account document itself is cached for `FACT_TTL_MS`; `onDuty` comes from the roster
+ * sweep and is at most `ROSTER_REFRESH_MS` old; `muteUntil` comes from the mute sweep and is at
+ * most `MUTE_SWEEP_MS` old. `factsFor` overlays the latter two onto a cache hit rather than
+ * returning the copies frozen into it, because both are the kind of fact that has to bite
+ * sooner than half a minute.
+ *
+ * There is no negative caching: an account this returns null for is re-read on the next miss.
+ * A null is treated as opted out everywhere it is consumed, which is the safe direction for a
+ * deleted account and for a database that blinked.
+ */
 export interface AccountFacts {
   id: string;
   name: string;
@@ -134,12 +159,31 @@ export class PresenceService {
     setFactionOrder(pack.factions.map((f) => f.id));
   }
 
+  /**
+   * Start the 1 Hz tick. Idempotent, and a no-op when presence is disabled.
+   *
+   * Both guards matter for the same reason: `createServer` calls this, and a process that
+   * builds a second server must not end up with two timers ticking the same session map.
+   * The interval is `unref`'d so the tick alone never keeps the process alive; a server that
+   * has closed should exit even if `stop` was somehow missed.
+   */
   start(): void {
     if (this.timer || !env.PRESENCE_ENABLED) return;
     this.timer = setInterval(() => this.tick(), TICK_MS);
     if (this.timer.unref) this.timer.unref();
   }
 
+  /**
+   * Stop ticking and hang up on everybody, with 1001 (going away) so a client knows to retry
+   * rather than to treat it as a refusal.
+   *
+   * Process-wide, not per-server: `server.ts` registers this on one server's `close`, and
+   * because the service is a module singleton, closing any server stops presence for all of
+   * them. The sessions are dropped from this map, but each transport keeps bookkeeping of its
+   * own: the WebSocket leg unwinds `bySlot` and releases the stream slot from the socket's own
+   * `close` handler, while the SSE leg's `byAccount` is not touched by a close at all — see
+   * `SsePresenceClient.close`.
+   */
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
@@ -187,6 +231,11 @@ export class PresenceService {
     }
   }
 
+  /**
+   * Every live session for one account — a phone and a laptop are two. Nothing in this tree
+   * calls it; the tick reaches sessions through its own map and the eviction paths work from a
+   * client id.
+   */
   sessionsFor(accountId: string): PresenceSession[] {
     const ids = this.byAccount.get(accountId);
     if (!ids) return [];
@@ -198,7 +247,19 @@ export class PresenceService {
     return out;
   }
 
-  /** Account facts for a sample: opt-in, faction, avatar, and whether the volunteer is on shift. */
+  /**
+   * Account facts for a sample: opt-in, faction, avatar, and whether the volunteer is on shift.
+   *
+   * The two sweeps are kicked from here rather than from a timer of their own, so the roster
+   * and the mute map are refreshed by the traffic that needs them and a quiet server does no
+   * work. Both are self-throttling on their own intervals, so calling them per sample is a
+   * clock comparison in the common case.
+   *
+   * A cache hit is not returned as it was stored: `onDuty` and `muteUntil` are overlaid from
+   * the sweeps, which are fresher than the thirty-second fact. Everything else — name, role,
+   * faction, avatar hash, opt-in — can be up to `FACT_TTL_MS` stale, which is why a demotion
+   * calls `invalidate` rather than waiting for the cache to turn over.
+   */
   async factsFor(accountId: string, nowMs = Date.now()): Promise<AccountFacts | null> {
     await this.refreshRoster(nowMs);
     await this.refreshMutes(nowMs);
@@ -235,6 +296,18 @@ export class PresenceService {
     });
   }
 
+  /**
+   * Run the coalesced batch: one `$in` for everybody who missed the cache in this window.
+   *
+   * `pendingFacts` is swapped for a fresh map before the await, so a miss arriving while the
+   * query is in flight starts the next batch instead of joining one that has already been
+   * sent and would never resolve it.
+   *
+   * An account the query does not return resolves null and is **not** cached as absent. A
+   * deleted or never-existing id therefore costs a read on every miss, which is the price of
+   * never caching a negative for a document that is about to be created — and null is read as
+   * opted out everywhere, so the cost is a query rather than a wrong answer.
+   */
   private async flushFacts(nowMs: number): Promise<void> {
     this.factFlushTimer = null;
     const batch = this.pendingFacts;
@@ -309,7 +382,6 @@ export class PresenceService {
     }
   }
 
-  /** Drop a cached fact (opt-in toggled, avatar changed, faction changed). */
   /**
    * Close any socket whose session has been revoked since it connected.
    *
@@ -324,10 +396,20 @@ export class PresenceService {
    * visible symptom of a demotion was handled while the connection itself survived.
    *
    * `client.account` is the context the upgrade resolved, so its `sessionVersion` is the one
-   * the socket was granted on. A bump anywhere — `revoke`, a role change, a credential reset —
-   * makes the two disagree and the socket goes. Public, and called from the tick, because the
-   * SSE hub's `reauthorise()` is public for the same reason: an invariant this important is
-   * one a test should be able to drive directly.
+   * the socket was granted on. Exactly two things bump that number: `AuthService.revoke`,
+   * behind `POST /auth/revoke/:id`, and `AuthService.logout`, the sign-out-everywhere. A role
+   * change is *not* one of them — `setRole` writes the new role and leaves `sessionVersion`
+   * alone — so a demotion is handled by `invalidate` and the tick's `setLead(false)` rather
+   * than here.
+   *
+   * And only the revoke half of that actually reaches this method today, because the
+   * comparison is against `this.facts`, which nothing refreshes on its own: `revoke` calls
+   * `invalidate`, which drops the cached copy and re-reads it, while `logout` does not. A
+   * watcher that has signed out and never samples again keeps the pre-bump copy cached
+   * indefinitely, the two numbers agree, and its socket survives.
+   *
+   * Public, and called from the tick, because the SSE hub's `reauthorise()` is public for the
+   * same reason: an invariant this important is one a test should be able to drive directly.
    *
    * Returns the number of sessions closed.
    */
@@ -343,6 +425,20 @@ export class PresenceService {
     return closed;
   }
 
+  /**
+   * Drop a cached fact (opt-in toggled, avatar changed, faction changed, role changed).
+   *
+   * Deleting is only half of it, and the half that was once missing is `pendingRevalidate` —
+   * see that field. An account whose facts are gone is treated as unprivileged until they come
+   * back, which is the right direction for the callers this actually has: role changes and
+   * sign-outs, where guessing the other way for a tick is a disclosure.
+   *
+   * Those callers are the auth controller's `revoke` and `setRole` — the two routes that make
+   * an open socket's privileges wrong — the opt-in toggle on `PATCH /me/presence`, and the
+   * avatar service at both ends of an avatar's life: a new hash that would otherwise take half
+   * a minute to reach the wire, and a takedown that would otherwise keep being announced for
+   * just as long.
+   */
   invalidate(accountId: string): void {
     this.facts.delete(accountId);
     this.pendingRevalidate.add(accountId);
@@ -354,6 +450,21 @@ export class PresenceService {
     void this.factsFor(accountId).catch(() => undefined);
   }
 
+  /**
+   * Who is on shift right now, rebuilt whole every thirty seconds.
+   *
+   * This map is the one thing standing between an off-duty volunteer and every player's map,
+   * so read the two ways into it carefully. A CONFIRMED registration counts only inside its
+   * shift's window plus fifteen minutes either side — the arrival and the tidy-up. A
+   * CHECKED_IN one counts with no time test at all: the checkout scan is what moves it to
+   * COMPLETED, so a volunteer who never scans out stays on duty, and visible to players, until
+   * something else moves that registration. That errs generous — right for someone still
+   * working past the end of their shift, wrong for someone who simply went home.
+   *
+   * A failed read leaves the previous map standing rather than emptying it: a database blip
+   * should not clear the campus of every volunteer at once, and thirty seconds later it tries
+   * again.
+   */
   private async refreshRoster(nowMs: number): Promise<void> {
     if (nowMs - this.rosterAt < ROSTER_REFRESH_MS) return;
     this.rosterAt = nowMs;
@@ -376,7 +487,14 @@ export class PresenceService {
     }
   }
 
-  /** Accept one position sample; returns the store's verdict. */
+  /**
+   * Accept one position sample; returns the store's verdict.
+   *
+   * An account the facts read cannot resolve is answered `OPT_OUT` rather than a not-found,
+   * and the store never sees the sample. That covers a deleted account and, because a failed
+   * batch read resolves every waiter as null, a database that blinked as well — presence
+   * fails closed, publishing nobody, rather than open.
+   */
   async submit(accountId: string, sample: Sample, nowMs = Date.now()) {
     const facts = await this.factsFor(accountId, nowMs);
     if (!facts) return { ok: false as const, reason: 'OPT_OUT' as const };

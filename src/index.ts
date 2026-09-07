@@ -6,9 +6,12 @@
  * listener and no port conflicts between parallel suites.
  *
  * Note the guard at the bottom: `bootstrap()` is skipped when `NODE_ENV === 'test'`, so
- * importing this module during tests does not start a server. A side effect worth
- * knowing is that the process therefore never listens under that env, which is why the
- * rate limiter's `NODE_ENV === 'test'` branch cannot be reached by a running server.
+ * importing this module during tests does not start a server. That is narrower than it
+ * sounds, and an earlier version of this comment drew the wrong conclusion from it: the
+ * process does listen under that env, just not from here. Supertest binds an ephemeral port
+ * for every `request(app)`, and `tests/presence.test.ts` calls `createServer` and listens on
+ * one itself — so the rate limiter's raised test-mode ceilings are exercised by a listening
+ * server on every suite run.
  *
  * Shutdown is ordered deliberately on SIGINT/SIGTERM: stop the SSE heartbeat, stop
  * accepting connections, then close the database. Draining in the other order would let

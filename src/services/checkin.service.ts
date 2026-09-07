@@ -88,7 +88,22 @@ const CHECK_IN_GRACE_MS = 30 * 60 * 1000;
 
 export class CheckInService {
   /**
-   * Generates a dynamic 30-second HMAC QR token for a volunteer's shift.
+   * Mints a token for one volunteer and one shift, having first checked that they still hold
+   * a seat on it. The token proves who minted it, for which shift, and when — and nothing
+   * else — which is why the seat is checked again in `verifyAndCheckIn` in case it is given
+   * up in between.
+   *
+   * `expiresInSeconds` is the distance to the next slice boundary rather than a flat thirty:
+   * a token minted at second 29 of its slice honestly reports 1. It is usable at all only
+   * because the verifier accepts a token one slice either side of the current one. What that
+   * tolerance is worth, and what it costs, is argued in `common/utils/crypto`.
+   *
+   * CHECKED_IN counts as holding a seat here, alongside CONFIRMED, so a desk can mint a fresh
+   * token for somebody who is already checked in — the first one having been spent in this
+   * process's nonce cache. A scan of that fresh token lands on the idempotent branch of
+   * `verifyAndCheckIn`. It is not the only way to reach that branch: the nonce cache is
+   * per-process, so the *original* token also verifies again on another replica or after a
+   * restart, which is the case the file header describes.
    */
   public static async generateToken(volunteerId: string, shiftId: string): Promise<{
     token: string;
@@ -116,7 +131,17 @@ export class CheckInService {
   }
 
   /**
-   * Verifies an incoming dynamic QR code and marks attendance with optional geofence verification.
+   * The scan: everything between a QR code arriving and an attendance row existing.
+   *
+   * The five gates, the order they stand in and the attack each one defeats are in the file
+   * header; the ordering decisions are argued at the lines that make them, because each was
+   * paid for by a different bug.
+   *
+   * One correction to make before reading further: an earlier version of this comment
+   * described the geofence as optional. It is not. `userCoordinates` being an optional
+   * *parameter* is the shape of the signature and not the shape of the rule — a scan that
+   * arrives without coordinates is a 400 in every environment, and there is no flag that
+   * turns it off.
    */
   public static async verifyAndCheckIn(
     token: string,
@@ -298,6 +323,14 @@ export class CheckInService {
     // token intact and nothing written. A crash between the claim and the write leaves a
     // CHECKED_IN registration with no attendance row, and the early short-circuit above
     // repairs that on the next scan rather than being stuck behind a unique index.
+    //
+    // The claim is a compare-and-set on the status this transition is leaving, not a
+    // read-modify-save. `reg` was read at the top of this method, several awaits ago. A
+    // cancellation that commits in that window has already released the seat and, if anybody
+    // was waiting, handed it to them — and `reg.save()` would then write CHECKED_IN straight
+    // back over it from the stale in-memory copy, silently undoing a committed cancellation
+    // and putting two people in one seat. The cancel path in `registration.service.ts` is
+    // careful to CAS for exactly this reason; this one was not.
     const claimed = await Registration.findOneAndUpdate(
       { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
       { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } },
@@ -378,14 +411,8 @@ export class CheckInService {
       throw error;
     }
 
-    // Compare-and-set on the status this transition is leaving, not a read-modify-save.
-    //
-    // `reg` was read at the top of this method, several awaits ago. A cancellation that
-    // commits in that window has already released the seat and, if anybody was waiting,
-    // handed it to them — and `reg.save()` would then write CHECKED_IN straight back over
-    // it from the stale in-memory copy, silently undoing a committed cancellation and
-    // putting two people in one seat. The cancel path twenty lines away is careful to CAS
-    // for exactly this reason; this one was not.
+    // Read only for the broadcast's display name; a missing volunteer falls back rather than
+    // failing the scan, because the attendance row is already committed by this point.
     const vol = await Volunteer.findById(volunteerId);
 
     domainEvents.emit('checkin.completed', { accountId: String(volunteerId), shiftId: String(shiftId), at: new Date() });

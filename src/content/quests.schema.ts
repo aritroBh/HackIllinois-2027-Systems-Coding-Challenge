@@ -24,7 +24,9 @@
  */
 import { z } from 'zod';
 
+/** The three ways the server knows how to count. A pack may combine them; it may not add one. */
 export const QUEST_KINDS = ['COUNT', 'STREAK', 'DISTINCT'] as const;
+/** The three window shapes, which become the `windowKey` on a `questProgress` row — `YYYY-MM-DDTHH`, `YYYY-MM-DD`, or the literal `event`. */
 export const QUEST_WINDOWS = ['HOURLY', 'DAILY', 'EVENT'] as const;
 
 export type QuestKind = (typeof QUEST_KINDS)[number];
@@ -63,6 +65,7 @@ export const questSchema = z
     }
   });
 
+/** The file, capped at 200 and rejected on a duplicate id — see the header for why a duplicate is worse than it looks. */
 export const questsSchema = z.object({
   _about: z.string().optional(),
   quests: z

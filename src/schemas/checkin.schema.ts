@@ -14,6 +14,11 @@
 import { z } from 'zod';
 import { objectId } from './common';
 
+/**
+ * Mint a token. Both ids are the *subject* of the token, not the caller: the volunteer it is
+ * for and the shift it is against, and both end up inside the HMAC. Who is allowed to ask is
+ * decided on the route, which is why there is nothing about authority here.
+ */
 export const generateQrTokenSchema = z.object({
   body: z.object({
     shiftId: objectId('Invalid Shift ObjectId'),

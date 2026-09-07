@@ -16,6 +16,22 @@ import { LeaderboardService } from '../services/leaderboard.service';
 import { eventHub } from '../common/sse/eventHub';
 
 export class StatsController {
+  /**
+   * Karma ranking. The clamp on the next line is the whole of the input handling and the file
+   * header explains it; what belongs here is why it has to live in the handler at all.
+   *
+   * This route mounts no `validate()`, unlike every other list in the API, so there is no
+   * schema boundary to coerce and bound `?limit=` before it arrives. The consequence is that
+   * junk, a negative, or an enormous figure is silently turned into 20 or clamped into range
+   * rather than answered with the 400 VALIDATION_ERROR every other list would give it — a
+   * quieter contract than the rest of the surface, and worth knowing before treating a 200 as
+   * proof the parameter was understood.
+   *
+   * The route also carries no role gate, unlike `/stats/operations` beside it: in `legacy`
+   * anyone may read it and in `required` any signed-in account may, hackers included. These
+   * rows are where the account ids that half the disclosure comments in this repository worry
+   * about actually become public.
+   */
   public static async getLeaderboard(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const rawLimit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
@@ -28,6 +44,17 @@ export class StatsController {
     }
   }
 
+  /**
+   * Event-wide vitals for the war room. Nothing is read off the request — the figures are
+   * event-wide rather than per-caller — so `requireVolunteerKind` on the route is the entire
+   * access decision, and it is what makes this different from the leaderboard beside it: fill
+   * rates and no-show telemetry are staff data, and a hacker is refused them even though the
+   * leaderboard is open.
+   *
+   * The service is honest about the cost of the answer: it loads every volunteer document to
+   * sum hours and karma, which is milliseconds at one hackathon's size and the first thing
+   * that should become an aggregation if this ever runs against a season of events.
+   */
   public static async getOperationsStats(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const stats = await LeaderboardService.getOperationsStats();

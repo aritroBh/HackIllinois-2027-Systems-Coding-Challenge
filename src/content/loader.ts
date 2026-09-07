@@ -7,7 +7,7 @@
  * building.
  *
  * `toLocal`/`fromLocal` implement the same equirectangular frame as
- * `design/build-campus.py` (`to_world`) and `public/app.js` (`toWorld`): +x east, +z south,
+ * `design/pipeline/config.py` (`Frame.to_world`) and `public/app.js` (`toWorld`): +x east, +z south,
  * in world units of `metersPerUnit`. All three must agree or a presence dot lands on the
  * wrong lawn; the content test asserts the pack's Alma Mater against the baked model.
  */
@@ -34,6 +34,13 @@ import { boothsSchema } from './booths.schema';
 import { raidsSchema } from './raids.schema';
 import { questsSchema } from './quests.schema';
 
+/**
+ * Carries **every** issue, not the first one. A pack is edited by hand and a fork's first
+ * validation run typically fails a dozen ways at once; reporting one issue per run turns
+ * bringing up a new campus into a dozen boot cycles. The message is pre-rendered in the
+ * constructor so a plain `console.error(err.message)` prints the whole list, and `issues`
+ * stays structured for `content:validate` and the tests.
+ */
 export class ContentPackError extends Error {
   constructor(public readonly issues: PackIssue[]) {
     super(`Content pack invalid:\n${issues.map((i) => `  - ${i.file} ${i.path}: ${i.message}`).join('\n')}`);
@@ -41,6 +48,18 @@ export class ContentPackError extends Error {
   }
 }
 
+/**
+ * Read one file, parse it, and *collect* whatever went wrong instead of throwing.
+ *
+ * Returning `null` on failure is what lets `loadPack` keep going and report the whole pack at
+ * once — a throw here would stop at the first broken file. The three failure kinds are kept
+ * distinct in the issue list (missing, unparseable, schema-invalid) because they need three
+ * different fixes, and "invalid JSON: Unexpected token } at position 412" is the only one of
+ * the three that names a character.
+ *
+ * Zod issues are flattened with their path joined by dots, so a nested failure reads
+ * `monuments.3.venueKey` rather than an array a human has to reassemble.
+ */
 function readJson<T extends ZodTypeAny>(dir: string, file: string, schema: T, issues: PackIssue[]): ReturnType<T['parse']> | null {
   const full = path.join(dir, file);
   if (!fs.existsSync(full)) {
@@ -150,9 +169,20 @@ export function loadPack(dir: string): ContentPack {
   return { ...partial, factionIds: new Set(partial.factions.map((f) => f.id)), files };
 }
 
+/** The directory packs live in, absolute. Also the containment boundary the check below tests against. */
 export const CONTENT_DIR = path.resolve(env.CONTENT_DIR ?? path.join(REPO_ROOT, 'content'));
+
+/** Which pack this process is running. A bare directory name — the env schema's regex enforces that. */
 export const CONTENT_PACK = env.CONTENT_PACK;
 
+/**
+ * Resolve, contain, load, and refuse to boot on anything else.
+ *
+ * The `NODE_ENV === 'test'` branch rethrows instead of exiting, which is not a loophole in the
+ * fail-fast rule: a suite that asserts a bad pack is rejected cannot do so if the assertion
+ * kills the runner. Every other environment exits, because a server running on a pack that did
+ * not validate is a server with a geofence pointing at the wrong building.
+ */
 function loadActivePack(): ContentPack {
   const dir = path.resolve(CONTENT_DIR, CONTENT_PACK);
   // Belt and braces on top of the env regex: the pack directory must sit inside CONTENT_DIR,
@@ -171,24 +201,65 @@ function loadActivePack(): ContentPack {
   }
 }
 
+/**
+ * The active pack, loaded at import.
+ *
+ * Everything downstream imports this as a plain object and reads it synchronously, which is
+ * only safe because it cannot be half-loaded: the module either has a validated pack by the
+ * time anything else imports it, or the process is already gone.
+ */
 export const pack: ContentPack = loadActivePack();
 
 // --- local frame -----------------------------------------------------------------------
+//
+// An equirectangular projection about the campus origin, with the longitude scale frozen at
+// the origin's latitude rather than recomputed per point. That is an approximation, and the
+// property that matters is not its accuracy against the geoid but that all three
+// implementations make the *same* approximation: this file, `design/pipeline/config.py`'s
+// `Frame.to_world`, and `public/app.js`'s `toWorld`. The baked buildings, the presence dots and the
+// server's own distance maths are computed independently, and they only line up because the
+// three agree constant for constant. Change one and a player stands inside a wall.
 const M_PER_DEG_LAT = 111320;
 const M_PER_DEG_LNG = 111320 * Math.cos((pack.event.campus.origin[0] * Math.PI) / 180);
 
+/**
+ * Latitude and longitude to world units: +x east, +z **south**.
+ *
+ * The sign on `z` is the one thing to get right. It is negated because the renderer's ground
+ * plane has +z running south while latitude runs north, so a missing minus does not produce a
+ * small error — it mirrors the whole campus about its origin, which looks like a working map
+ * of a place that does not exist.
+ */
 export function toLocal(latitude: number, longitude: number): { x: number; z: number } {
   const [lat0, lng0] = pack.event.campus.origin;
   const mpu = pack.event.campus.metersPerUnit;
   return { x: ((longitude - lng0) * M_PER_DEG_LNG) / mpu, z: (-(latitude - lat0) * M_PER_DEG_LAT) / mpu };
 }
 
+/**
+ * The inverse, used where a world-space answer has to be handed back as coordinates — the
+ * presence list turns stored world positions back into lat/lng for HTTP clients. Exactly
+ * inverse to `toLocal` by construction, including the sign, so a round trip is lossless apart
+ * from floating point.
+ */
 export function fromLocal(x: number, z: number): { latitude: number; longitude: number } {
   const [lat0, lng0] = pack.event.campus.origin;
   const mpu = pack.event.campus.metersPerUnit;
   return { latitude: lat0 - (z * mpu) / M_PER_DEG_LAT, longitude: lng0 + (x * mpu) / M_PER_DEG_LNG };
 }
 
+/**
+ * Is this point on the campus at all?
+ *
+ * The presence store's first gate on the coordinates themselves — only the opt-in check runs
+ * ahead of it — and it does more than reject nonsense. The spatial index
+ * keys cells by rounded world coordinates and never deletes an emptied cell, so the size of
+ * that map is the size of the coordinate space anything is allowed to occupy. This box is what
+ * keeps that a few thousand cells rather than the whole globe — a single sample from the
+ * middle of the Pacific would otherwise mint a cell that lives for the rest of the process.
+ *
+ * Inclusive on all four edges. A volunteer standing exactly on the boundary is on campus.
+ */
 export function inBbox(latitude: number, longitude: number): boolean {
   const [s, w, n, e] = pack.event.campus.bbox;
   return latitude >= s && latitude <= n && longitude >= w && longitude <= e;

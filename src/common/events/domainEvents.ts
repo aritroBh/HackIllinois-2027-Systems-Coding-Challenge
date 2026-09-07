@@ -57,6 +57,8 @@ class DomainEventBus {
     return () => this.off(name, listener);
   }
 
+  /** Seldom called directly: `on` already returns this bound to its own listener, which is the
+   *  form that cannot accidentally unsubscribe the wrong closure. */
   public off<E extends DomainEventName>(name: E, listener: DomainListener<E>): void {
     const set = this.listeners.get(name);
     if (!set) return;
@@ -87,6 +89,11 @@ class DomainEventBus {
     });
   }
 
+  /**
+   * The only read-only view of the bus, and nothing under `src/` or `tests/` calls it today —
+   * do not read a passing suite as evidence that it works. It answers "did the wiring run",
+   * which is otherwise unobservable: `on` hands back an unsubscribe rather than a handle.
+   */
   public listenerCount(name: DomainEventName): number {
     return this.listeners.get(name)?.size ?? 0;
   }
@@ -101,4 +108,12 @@ class DomainEventBus {
   }
 }
 
+/**
+ * One bus per process. Subscribers are registered at boot — `wireEconomy` in
+ * `src/economy/wiring.ts`, the plugin registry, and the raid service — and nothing subscribes
+ * lazily in response to an event. An event emitted before that wiring runs has no listeners
+ * and is dropped where `emit` returns early, with nothing logged. That is the best-effort
+ * contract the header states rather than an oversight: what must not be lost belongs in the
+ * database write, not in a listener.
+ */
 export const domainEvents = new DomainEventBus();

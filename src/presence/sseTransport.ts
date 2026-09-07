@@ -5,16 +5,43 @@
  * the price of the fallback; everything else — interest, clusters, expiry, idx scoping — is
  * the same session code the WebSocket uses.
  *
- * A session is created on the first POST and lives until `DELETE /api/v1/presence`, the
- * client stops posting (the store expires the entry), or the SSE stream itself goes away.
+ * A session is created on the first POST and ends three ways from the client's side: `DELETE
+ * /api/v1/presence`, opting out through `PATCH /me/presence`, or the idle sweep below once
+ * the client stops posting. The service can also end one from its own side — shutdown, and
+ * the revoked-session eviction — which is the case that leaves the client cached here with no
+ * session behind it; see `SsePresenceClient.close`.
+ *
+ * Losing the event stream itself does **not** end it — the hub has no hook back into
+ * presence, so frames for an account with no open stream are simply dropped where they are
+ * written and the session lingers until the sweep reaps it.
  */
 import { eventHub } from '../common/sse/eventHub';
 import type { AccountContext } from '../common/types/account';
 import { presenceService } from './service';
 import type { PresenceClient } from './transport';
 
+/**
+ * How long a session survives without a POST.
+ *
+ * Measured against the last request rather than against a socket, because there is no socket
+ * here whose closing anybody could notice. The sweep runs every thirty seconds, so a client
+ * that stops posting is reaped between sixty and ninety seconds later — inside the store's own
+ * 120 s `expireAfterMs`, so the session goes before the position it was publishing does.
+ */
 const IDLE_MS = 60_000;
 
+/**
+ * A `PresenceClient` with no connection of its own.
+ *
+ * Frames are handed to the SSE hub addressed at the account, so this leg inherits the hub's
+ * delivery wholesale, backpressure included. An account with no open event stream — or one
+ * that never subscribed the `presence` channel — is written nothing and nobody is told; that
+ * is why `send` reports success unconditionally, since it has no way to know whether anyone
+ * was there.
+ *
+ * One client per account rather than one per connection, so two devices reading the map on the
+ * same account share a single session, a single slot table and therefore identical frames.
+ */
 class SsePresenceClient implements PresenceClient {
   public readonly transport = 'sse' as const;
   public readonly binary = false;
@@ -36,6 +63,16 @@ class SsePresenceClient implements PresenceClient {
     return 0; // the hub owns SSE backpressure
   }
 
+  /**
+   * Unregister the session. There is no connection to hang up, so this is the whole of it.
+   *
+   * It does not remove the client from `byAccount` — only `dropSseSession` and the sweep do
+   * that. A close arriving from the service side therefore leaves this object cached under its
+   * account: `presenceService.stop()` at shutdown and the revoked-session eviction in
+   * `evictRevoked` both call this directly rather than going through `dropSseSession`, and the
+   * next `ensureSseSession` then hands the cached client back without registering a session
+   * for it.
+   */
   close(): void {
     presenceService.remove(this.id);
   }
@@ -43,7 +80,16 @@ class SsePresenceClient implements PresenceClient {
 
 const byAccount = new Map<string, SsePresenceClient>();
 
-/** Get or create this account's SSE presence session. */
+/**
+ * Get or create this account's SSE presence session.
+ *
+ * `helloAt` is stamped at creation because this leg has no hello message to stamp it: the
+ * service closes any session that has not said hello within five seconds, and an SSE client —
+ * which never can — would otherwise be dropped a moment after its first POST.
+ *
+ * Called on every `POST /api/v1/presence`, so refreshing `lastPostAt` here is also what keeps
+ * the idle sweep away from a client that is still publishing.
+ */
 export function ensureSseSession(account: AccountContext): SsePresenceClient {
   const existing = byAccount.get(account.id);
   if (existing) {
@@ -56,6 +102,14 @@ export function ensureSseSession(account: AccountContext): SsePresenceClient {
   return client;
 }
 
+/**
+ * End this account's session and forget the client, from `DELETE /api/v1/presence` and from
+ * opting out through `PATCH /me/presence`.
+ *
+ * Both of those routes require a real session rather than a claimed identity, because taking a
+ * named person off the map is as much of an act against them as putting them on it; the route
+ * comments record the shape that had. False when the account had no session to drop.
+ */
 export function dropSseSession(accountId: string): boolean {
   const client = byAccount.get(accountId);
   if (!client) return false;
@@ -64,7 +118,12 @@ export function dropSseSession(accountId: string): boolean {
   return true;
 }
 
-/** Reap sessions whose client stopped posting; called from the sweep. */
+/**
+ * Reap sessions whose client stopped posting; called from the scheduler every thirty seconds.
+ *
+ * The WebSocket leg hears about a departure from the socket. This one has only the absence of
+ * requests to go on, so silence is the entire signal. Returns how many were dropped.
+ */
 export function sweepSseSessions(now = Date.now()): number {
   let dropped = 0;
   for (const [id, client] of byAccount) {
@@ -77,6 +136,7 @@ export function sweepSseSessions(now = Date.now()): number {
   return dropped;
 }
 
+/** Live SSE presence sessions. Nothing in this tree calls it; it is a hook for ops and tests. */
 export function sseSessionCount(): number {
   return byAccount.size;
 }

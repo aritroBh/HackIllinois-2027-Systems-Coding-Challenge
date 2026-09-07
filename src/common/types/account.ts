@@ -39,12 +39,28 @@ export interface AccountContext {
 
 /** Roles that satisfy a "lead or above" check. ORGANIZER and ADMIN satisfy every check. */
 export const LEAD_ROLES: ReadonlySet<AccountRole> = new Set(['SHIFT_LEAD', 'ORGANIZER', 'ADMIN']);
+/** The narrower ring: minting claim codes, changing a role, anything that creates authority rather than exercising it. */
 export const ORGANIZER_ROLES: ReadonlySet<AccountRole> = new Set(['ORGANIZER', 'ADMIN']);
 
+/**
+ * "Does this caller *say* they are a lead?"
+ *
+ * The right question for an action and the wrong one for a disclosure — in `AUTH_MODE=legacy`
+ * the role behind this comes from a `?volunteerId=` the caller chose, and account ids are
+ * public. Use `isProvenLead` below for anything that reveals data. This one stays because the
+ * open-demo contract is that a claimed id may act, and because in `AUTH_MODE=required` there
+ * is no other kind of identity.
+ *
+ * Undefined is false: an anonymous caller is not a lead. Written as a set membership rather
+ * than a comparison ladder so that adding a role above SHIFT_LEAD is one edit rather than a
+ * search for every `role === 'ORGANIZER' || role === 'ADMIN'` in the tree — which is how the
+ * nine sites in the note below came to disagree with each other.
+ */
 export function isLeadOrAbove(account: AccountContext | undefined): boolean {
   return !!account && LEAD_ROLES.has(account.role);
 }
 
+/** The same claimed-identity caveat applies. Organiser or admin; SHIFT_LEAD is deliberately not enough. */
 export function isOrganizerOrAbove(account: AccountContext | undefined): boolean {
   return !!account && ORGANIZER_ROLES.has(account.role);
 }

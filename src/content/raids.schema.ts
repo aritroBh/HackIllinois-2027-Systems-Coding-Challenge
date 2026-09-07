@@ -43,6 +43,7 @@ export const raidSchema = z
     }
   });
 
+/** The file. The `.superRefine()` on the array catches duplicate ids; the one on each raid catches a window that ends before it starts. */
 export const raidsSchema = z.object({
   _about: z.string().optional(),
   raids: z

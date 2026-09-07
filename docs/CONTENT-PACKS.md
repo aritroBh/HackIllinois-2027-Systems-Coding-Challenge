@@ -2,10 +2,14 @@
 
 A pack is a directory of JSON files describing one event on one campus. The server reads
 `${CONTENT_DIR}/${CONTENT_PACK}` once at import, validates it, and exports a typed `pack`
-object; almost nothing in `src/` hardcodes a building, a faction or a colour — the exception is
-the venue gazetteer in `src/common/utils/geo.ts`, which check-in geofencing still reads
-instead of the pack (see docs/FORK_GUIDE.md). `CONTENT_DIR`
-defaults to `<repo>/content` and `CONTENT_PACK` to `hackillinois-2027`.
+object; most of `src/` hardcodes no building, faction or colour. There are three exceptions,
+and a fork meets all three: the venue gazetteer in `src/common/utils/geo.ts`, which check-in
+geofencing reads instead of the pack (see docs/FORK_GUIDE.md); `src/seed/seedData.ts`, which
+seeds the territory gyms and the HackStop beacons from its own inline lists rather than from
+`territories.json` and `beacons.json`; and `src/services/hackstop.service.ts`, which rolls
+spins against a literal drop table rather than `loot.json`. Each is flagged again beside the
+file it shadows. `CONTENT_DIR` defaults to `<repo>/content` and `CONTENT_PACK` to
+`hackillinois-2027`.
 
 The contract is `src/content/schema.ts`. This page explains it. Where the two disagree, the
 schema is right.
@@ -33,8 +37,11 @@ npm run content:validate -- content/my-event  # one pack
 renders them into the DOM. `campus.json` and `campus/` are built by the pipeline, not
 written by hand.
 
-Every `.json` file in the pack directory is served to browsers under
-`/dashboard/content/`. Do not keep drafts, notes or anything unpublished in there.
+The whole pack directory is served to browsers under `/dashboard/content/` — `src/app.ts`
+mounts `express.static(pack.dir)` over it, so a `.md` note or a spreadsheet is as public as
+the JSON. Only the `.json` files are *announced*, in the descriptor the client boots from,
+which is not the same as being private. Do not keep drafts, notes or anything unpublished in
+there.
 
 ## event.json
 
@@ -59,9 +66,12 @@ work in it:
   (footways, lamps) is baked. Both are optional; `detailBbox` defaults to `coreBbox`.
 * `metersPerUnit` is the world scale. `10` is what the renderer is tuned for.
 * `vscale` exaggerates height (default `2.6`).
-* `geofenceMeters` is the default capture radius (default `75`). **Declared but not yet
-  read:** the check-in geofence (`checkin.service.ts`) and gym capture (`gym.service.ts`)
-  both use a hard-coded `75`. Setting this today changes nothing.
+* `geofenceMeters` is the default capture radius (default `75`). **Declared but not
+  enforced:** the check-in geofence (`checkin.service.ts`) and gym capture (`gym.service.ts`)
+  both use a hard-coded `75`. The one thing that does read it is the dashboard, which prints
+  it as the campus geofence figure, so setting it to anything but `75` today changes the
+  number on the screen and not the distance the server enforces — which is worse than being
+  ignored.
 
 `branding.palette` is a map of names to `#rrggbb`. Five keys reach the UI: `orange`,
 `blue`, `patina`, `harvest` and `prairie`; `orangeDk` is derived from `orange` unless you
@@ -120,22 +130,37 @@ and `hqVenue` is optional but must exist when present.
 
 ## territories.json
 
-`{ "territories": [ … ] }`, the seed state of the map. Each entry names a `venue`, a
+`{ "territories": [ … ] }`, what the map is *meant* to start as. Each entry names a `venue`, a
 `monument` and the `faction` that starts holding it, plus `cp` (current control points),
 `max` and `level`. `cp` may not exceed `max`.
 
+**Nothing seeds from this file.** `src/seed/seedData.ts` builds the gyms from an inline
+`TERRITORIES` array against the hard-coded gazetteer in `src/common/utils/geo.ts`, and never
+imports the pack. The shipped pack and the seed agree only because both were written by hand
+and kept in step; a fork that edits this file gets a validated pack and the HackIllinois gyms.
+Editing the seed is the second half of the job.
+
 ## beacons.json
 
-`{ "beacons": [ … ] }`, the geofenced HackStops people spin. `id` is
-`SCREAMING_SNAKE_CASE` and must be unique across the file, `venue` must exist, and
-`radiusMeters` is declared here too and is **not yet read**; seeded HackStops carry a
-hard-coded 75 m radius on the document, which is what `hackstop.service.ts` checks.
+`{ "beacons": [ … ] }`, the HackStops people spin. `id` is `SCREAMING_SNAKE_CASE` and must be
+unique across the file, `venue` must exist, and `radiusMeters` is declared here too and is
+**not read at all**; seeded HackStops carry a hard-coded 75 m radius on the document, which is
+what `hackstop.service.ts` checks. The same caveat as `territories.json` applies to the list
+itself: `seedData.ts` has its own `BEACONS` array, so this file is validated and then unused.
 
 ## loot.json
 
-The spin table. `karmaMin` and `karmaMax` bound the karma a spin pays, uniformly, and
-`karmaMin` may not exceed `karmaMax`. `items` is at least one `{type, weight}`, where the
-weights are relative and the types must match the power-up enum the server knows.
+The spin table the server does not roll against. `karmaMin` and `karmaMax` are checked for
+`karmaMin <= karmaMax`, `items` must hold at least one `{type, weight}`, and `type` is checked
+for shape only — nothing compares it with the power-up enum, so a misspelt item is a clean
+boot.
+
+**Declared and read by nobody.** `HackStopService.spinBeacon` rolls against a literal weight
+array in `src/services/hackstop.service.ts` and pays `25–49` karma plus the item's own bonus,
+both written in code; `pack.loot` reaches only the `content:validate` summary line.
+`src/models/powerup.model.ts` says the same thing beside the catalog it belongs to. The
+shipped `loot.json` carries exactly the numbers the code uses, which is why the gap is
+invisible until a fork changes one.
 
 ## memorabilia.json
 
@@ -190,6 +215,10 @@ Zod checks each file on its own. `crossValidate()` then checks the references Zo
 see, and any one of these stops the boot:
 
 * `event.hqVenue` is not a venue key.
+* `event.karmaCaps` leaves any karma source unpriced. This is the one on the list a fork
+  hits first, because `karmaCaps` defaults to `{}` and an absent cap means *uncapped*, not
+  *unconfigured*: `KarmaService.capFor` returns null for a source it has no entry for and
+  null mints without limit. The boot names every missing source, so the fix is mechanical.
 * No faction has the id `NEUTRAL`.
 * A faction's `hqVenue` is not a venue key.
 * A monument's `venueKey` is not a venue key.

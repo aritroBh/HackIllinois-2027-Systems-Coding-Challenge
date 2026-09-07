@@ -42,6 +42,15 @@
 import crypto from 'crypto';
 import { env } from '../../config/env';
 
+/**
+ * The five fields inside a token, in the order they are colon-joined before signing.
+ *
+ * Documentation only: nothing constructs or receives one of these. `generateToken` builds the
+ * string directly and `verifyToken` destructures the split segments, so this type is a
+ * description of the wire format rather than a shape any code passes around. Kept because the
+ * format is otherwise only visible as a template literal, and deleted-and-regretted is worse
+ * than unused; do not read its presence as evidence of a parser.
+ */
 export interface ITokenPayload {
   version: number;
   volunteerId: string;
@@ -50,6 +59,16 @@ export interface ITokenPayload {
   nonce: string;
 }
 
+/**
+ * Deliberately not an exception: a failed verification is an ordinary outcome at a check-in
+ * desk, and `reason` is what the service turns into the right status code — `EXPIRED` and
+ * `INVALID_SIGNATURE` are 401s, `REPLAY_ATTACK` is the 409 the desk actually sees on a double
+ * scan.
+ *
+ * `volunteerId` and `shiftId` are populated only on success, and that is the point: they come
+ * out of the signed payload, so reading them anywhere else would be reading unauthenticated
+ * input.
+ */
 export interface IVerificationResult {
   valid: boolean;
   reason?: 'EXPIRED' | 'INVALID_SIGNATURE' | 'REPLAY_ATTACK' | 'MALFORMED';
@@ -67,6 +86,11 @@ export interface IVerificationResult {
  * Dynamic QR Code Cryptographic Engine.
  * Generates and validates time-windowed HMAC-SHA256 tokens that rotate every 30 seconds
  * to prevent screenshot sharing fraud at hackathon check-in desks.
+ *
+ * Everything here is static, including the nonce cache, which makes the cache
+ * process-global — that is what lets a double scan be rejected without a database round
+ * trip, and equally why it is not the guarantee: another replica has its own empty copy.
+ * `clearNonceCache` exists because static state persists between tests in one process.
  */
 export class DynamicQrTokenEngine {
   public static readonly TIME_STEP_SECONDS = 30;
@@ -80,7 +104,21 @@ export class DynamicQrTokenEngine {
   private static readonly CLEAN_INTERVAL_MS = 30000;
 
   /**
-   * Generates a 30-second rotating cryptographic token.
+   * Mint one token for one volunteer and one shift.
+   *
+   * Both ids go inside the signature, so a token is not merely proof that *someone* was issued
+   * one — it names who and for what. `verifyAndCheckIn` then looks the registration up *from
+   * the signed ids*, never from anything the scanner sent alongside the token, so a desk
+   * cannot point a valid token at a different shift or a different person. Editing either
+   * field breaks the HMAC.
+   *
+   * Minting does **not** reserve the nonce. Nothing is spent until a scan verifies, so a
+   * volunteer whose phone re-renders the QR a dozen times has not burned a dozen tokens; the
+   * cache only ever holds nonces that were actually presented.
+   *
+   * `timestampMs` and `secret` are parameters rather than reads so tests can mint a token for
+   * a chosen slice, and so a rotation could sign with an old key. Ordinary callers pass
+   * neither.
    */
   public static generateToken(
     volunteerId: string,
@@ -229,7 +267,13 @@ export class DynamicQrTokenEngine {
   }
 
   /**
-   * Cleans expired nonces from memory cache.
+   * Drop every nonce whose replay window has passed.
+   *
+   * A full scan of the map, which is why `verifyToken` throttles it to once per 30 s (or
+   * immediately when the map is oversized) rather than running it per verification: an
+   * attacker who can make the server do an O(n) sweep on every request has turned the replay
+   * defence into the outage. Deleting during iteration is safe here — a `Map` iterator
+   * tolerates removal of the entry it has already yielded.
    */
   public static cleanExpiredNonces(now: number = Date.now()): void {
     for (const [nonce, expiry] of this.consumedNonces.entries()) {

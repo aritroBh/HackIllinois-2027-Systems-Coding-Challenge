@@ -1,7 +1,8 @@
 /**
  * Volunteer contracts.
  *
- * The create schema accepts only `{ name, email, phone, role, certifications }`, and the
+ * The create schema accepts only `{ name, email, phone, kind, certifications }` — `role` is
+ * deliberately not among them, so the ladder cannot be climbed at signup — and the
  * controller narrows further by constructing the document explicitly rather than
  * spreading the request body — so `karmaPoints`, `prestigeTier` and `badges` cannot be
  * set by a client. Those are earned server-side or not at all.

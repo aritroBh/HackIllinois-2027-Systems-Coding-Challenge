@@ -14,6 +14,16 @@
  */
 import mongoose, { Schema, Document } from 'mongoose';
 
+/**
+ * The authorisation ladder, read by every lead-or-above gate.
+ *
+ * Not client-settable: `createVolunteerSchema` does not accept `role`, and the controller
+ * builds the document field by field rather than spreading the body, so the only ways to hold
+ * anything above VOLUNTEER are the seed and the organiser-gated `PATCH /auth/accounts/:id/role`.
+ * Signing in through Adonix is not one of them, despite the ladder in `mapAdonixRoles`:
+ * `AuthService.adonixLogin` discards that mapping's result and always creates a HACKER, so an
+ * upstream ADMIN claim mints nothing here.
+ */
 export enum VolunteerRole {
   VOLUNTEER = 'VOLUNTEER',
   SHIFT_LEAD = 'SHIFT_LEAD',
@@ -34,8 +44,19 @@ export enum AccountKind {
   HACKER = 'HACKER',
 }
 
+/**
+ * The three ways in. Adding a fourth is a new member here, an adapter in `src/auth/`, an entry
+ * in `AuthService.providers()` and a route — the enum in the schema below has to grow with it,
+ * which is the point of it being an enum rather than a free string.
+ */
 export type IdentityProvider = 'claim' | 'email' | 'adonix';
 
+/**
+ * One linked login. An account may carry several — a hacker who claimed a badge and later
+ * signed in through Adonix has both — and the sparse unique index on
+ * `(identities.provider, identities.subject)` is what stops two accounts claiming the same
+ * external identity, which would otherwise silently fork one person's karma across two rows.
+ */
 export interface IIdentity {
   provider: IdentityProvider;
   /** Provider-scoped subject: the claim code id, the lowercased email, or the Adonix user id. */
@@ -43,6 +64,11 @@ export interface IIdentity {
   linkedAt: Date;
 }
 
+/**
+ * Standing, as a label over `karmaPoints`. The ranges below are the bands
+ * `computePrestigeTier` applies at the bottom of this file — that function is where they are
+ * enforced, and these comments are a reader's convenience, not a second source of truth.
+ */
 export enum PrestigeTier {
   NEOPHYTE_PLANKTON = 'NEOPHYTE_PLANKTON', // 0 - 199
   CURRENT_RIDER = 'CURRENT_RIDER',         // 200 - 499
@@ -162,7 +188,33 @@ VolunteerSchema.pre('validate', function (next) {
 });
 
 /**
- * Calculates current prestige tier from karma points.
+ * The karma-to-tier projection, and the only place the bands are stated.
+ *
+ * `Volunteer.prestigeTier` is a cache of this answer, not an independent field: `KarmaService`
+ * recomputes it after every award and writes it back only when it disagrees, and `SOSService`
+ * does the same after a bounty payout. The cache exists so the leaderboard is an indexed sort
+ * rather than a scan with a per-row computation, which is the trade `docs/DATA-MODEL.md`
+ * describes for every denormalised counter here.
+ *
+ * The bands are written down twice, because `public/views/me.js` needs both edges to draw
+ * "1,500 karma to Leviathan Prime" and the card endpoint sends only the tier. A copy of a
+ * server rule is the bug this repository grows most often, so `tests/prestige.test.ts` parses
+ * the thresholds back out of this function's source and asserts the client's table equals
+ * them — and asserts on the count it parsed first, so a parser that matches nothing fails
+ * rather than agreeing with everything. **That parser reads the text below**: it slices from
+ * this function's declaration to the end of the file and matches each `points >= N` guard.
+ * Restructuring this into a table or a loop breaks it, which is why it is a ladder of `if`s
+ * and should stay one.
+ *
+ * Descending order is the whole logic — each guard is an unbounded-above test, so the first
+ * one that passes is the highest band the balance reaches, and the unguarded return is the
+ * floor. That is also why negative karma answers NEOPHYTE_PLANKTON rather than falling
+ * through to nothing; `karmaPoints` has `min: 0` on the schema, but this function is called
+ * with figures assembled elsewhere and a tier is not optional.
+ *
+ * The six thresholds are a game-design judgement, not a measurement — the event has not run.
+ * They are spaced so early progress is visible (the first promotion arrives at 200, about two
+ * shifts) and the top band is not reachable in a weekend by accident.
  */
 export function computePrestigeTier(points: number): PrestigeTier {
   if (points >= 3500) return PrestigeTier.LEVIATHAN_PRIME;
