@@ -38,6 +38,11 @@ import { domainEvents } from '../common/events/domainEvents';
 /** Minimum gap between karma-paying battles per volunteer (anti-farm). */
 const GYM_KARMA_COOLDOWN_MS = 60000;
 
+/**
+ * The outcome of one strike. `karmaAwarded` is what actually landed, not what the strike was
+ * priced at: zero while this volunteer's minute-long payout cooldown is running, and clamped
+ * again by the pack's daily `GYM` ceiling.
+ */
 export interface IBattleResult {
   gymId: string;
   action: 'CONTRIBUTED' | 'ATTACKED' | 'CAPTURED';
@@ -49,19 +54,132 @@ export interface IBattleResult {
   message: string;
 }
 
+/**
+ * A gym as the map layer is allowed to see it.
+ *
+ * `GET /pokeshift/gyms` carries no session requirement, so in `legacy` — the shipped default
+ * `AUTH_MODE` — an anonymous caller reached it. It returned whole Mongoose documents, and a gym
+ * document holds `leaderVolunteerId`, `leaderName`, `lastBattledAt` and a `defenders` array
+ * whose entries carry `volunteerName`, `contributedPower` and `assignedAt`.
+ *
+ * A gym is a named campus building, and contesting one requires standing within 75 m of it. So
+ * those fields together said that a named person was at a named place at a stated time, to
+ * anybody who asked, with no credential behind the request and no audit row behind the read.
+ * That is the same disclosure that had already been taken off the beacon listing when
+ * `lastSpunUsers` was removed from it, and it is the fourth or fifth appearance in this
+ * repository of the same class: a projection nobody wrote, on a route nobody gated, in the auth
+ * mode that admits everyone.
+ *
+ * The redaction costs the interface nothing, which is the part worth checking rather than
+ * assuming. The client reads exactly one thing off the sensitive half — `(g.defenders || []).length`,
+ * at `public/app.js:788` and `:1951`, rendered as "N defending". No view reads `leaderName`,
+ * `leaderVolunteerId`, `lastBattledAt`, or any field of a defender.
+ */
+export interface PublicGym {
+  _id: unknown;
+  name: string;
+  locationName: string;
+  latitude: number;
+  longitude: number;
+  controllingFaction: Faction;
+  controlPoints: number;
+  maxControlPoints: number;
+  level: number;
+  isShielded: boolean;
+  /** How many hold it. The honest replacement for counting the array. */
+  defenderCount: number;
+  /**
+   * Length-preserving and empty.
+   *
+   * A compatibility shim, kept deliberately rather than dropped: the two client call sites
+   * above count this array, and removing the field would have made every gym read "0 defending"
+   * in the window between this change and a matching client change owned by someone else.
+   * Entries are `{}` because every field of `IGymDefender` is either the person or their
+   * contribution, so there is nothing in one that survives redaction.
+   *
+   * Remove it once `public/app.js` counts `defenderCount` instead.
+   */
+  defenders: Record<string, never>[];
+}
+
 export class GymService {
   /**
-   * Retrieves all campus gyms with real-time control points.
+   * Every gym, name-ordered, redacted for an audience that may be anonymous.
+   *
+   * See `PublicGym` for what is removed and why. `.lean()` because nothing here needs a
+   * hydrated document and the projection discards most of it anyway.
+   */
+  public static async listGymsPublic(): Promise<PublicGym[]> {
+    const gyms = await Gym.find()
+      .select('name locationName latitude longitude controllingFaction controlPoints maxControlPoints level isShielded defenders')
+      .sort({ name: 1 })
+      .lean();
+    return gyms.map((gym) => ({
+      _id: gym._id,
+      name: gym.name,
+      locationName: gym.locationName,
+      latitude: gym.latitude,
+      longitude: gym.longitude,
+      controllingFaction: gym.controllingFaction,
+      controlPoints: gym.controlPoints,
+      maxControlPoints: gym.maxControlPoints,
+      level: gym.level,
+      isShielded: gym.isShielded,
+      defenderCount: (gym.defenders ?? []).length,
+      defenders: (gym.defenders ?? []).map(() => ({}) as Record<string, never>),
+    }));
+  }
+
+  /**
+   * Every gym, unredacted, name-ordered. A gym carries no active flag, so this really is the
+   * whole board.
+   *
+   * **Not reachable from HTTP.** `GET /pokeshift/gyms` answers from `listGymsPublic` above.
+   * This one exists for server-side callers that need the full document — and for a future
+   * organiser view, which would need its own role gate and its own audit row before it could
+   * use this.
    */
   public static async listGyms(): Promise<IGym[]> {
     return Gym.find().sort({ name: 1 });
   }
 
   /**
-   * Atomic CAS Battle / Fortification Engine.
-   * - If volunteer is in the controlling faction (or gym is NEUTRAL): reinforce points up to max.
-   * - If volunteer is in an opposing faction: attack and reduce points.
-   * - If control points reach 0: Gym is captured, flips faction, attacker becomes new Gym Leader!
+   * One strike against a gym: reinforce it, damage it, or take it.
+   *
+   * Which of the three happens is decided by who holds the gym, not by the caller — there is
+   * no "attack" or "reinforce" parameter to lie about, only a faction and a power. A gym held
+   * by your own faction, or by nobody, is reinforced; anything else is attacked. A strike
+   * whose power meets or exceeds the remaining control points captures outright rather than
+   * reducing them to zero, so a gym is never left standing at nought waiting for somebody to
+   * send one more request.
+   *
+   * **Reinforcing neutral ground claims it.** The ally branch writes `controllingFaction`
+   * unconditionally, and `isAlly` counts NEUTRAL as an ally, so the first person to reinforce
+   * an unclaimed gym flies their flag over it. That is a capture in everything but the wire
+   * format: it broadcasts `GYM_REINFORCED` and emits no `gym.captured` domain event, so the
+   * quests, raids and plugins that count captures do not count walking up to an empty
+   * building. Only taking a gym off a rival counts.
+   *
+   * **Leadership can change without the gym changing hands.** A friendly strike above 150
+   * power replaces the leader, so a stronghold's name is the last person to commit
+   * meaningfully to it rather than whoever happened to touch it first.
+   *
+   * The placement of the checks is what makes them mean anything. The `NEUTRAL` refusal and
+   * the faction lock sit outside the retry loop, because they are facts about the account and
+   * cannot change while it is being contended for. The geofence and the shield sit inside it,
+   * re-evaluated against the gym as it was read on this attempt: a shield dropped by somebody
+   * else's power-up while this request was losing a compare-and-swap has to stop the retry,
+   * and it does, because the read that feeds the check is inside the loop rather than above
+   * it. The 75 m radius is a literal here rather than the beacon-style per-document field
+   * HackStops use; the number is the same one, but a gym cannot widen it.
+   *
+   * Karma is paid after the CAS has won and nothing compensates it if the award throws: the
+   * strike stands and the payout is lost. That is the survivable direction — the alternative
+   * is a second write undoing a document that other players are already contending for.
+   *
+   * Five attempts, jittered, then a 409 that asks the caller to try again. A bounded loop
+   * that gives up is the honest answer to contention this cannot resolve; spinning would only
+   * move the queue into the database.
    */
   public static async battleOrContribute(
     gymId: string,

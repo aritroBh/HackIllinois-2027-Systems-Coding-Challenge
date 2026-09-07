@@ -12,8 +12,10 @@
  *    operation. `tests/concurrency.test.ts` races 50 requests at a 2-seat shift and
  *    asserts 2 confirmed, 48 waitlisted, 0 oversold.
  *  - **I2, one active registration per volunteer per shift.** A partial unique index over
- *    the four index-active states. Enforced by the database, so it holds no matter which
- *    code path or which replica does the insert.
+ *    the five index-active states — every status except CANCELLED, so a volunteer who
+ *    dropped out may sign up again and one who already worked the shift may not. Enforced
+ *    by the database, so it holds no matter which code path or which replica does the
+ *    insert.
  *  - **I4, the waitlist is FIFO.** Positions are handed out from a counter, and a
  *    cancellation promotes the lowest outstanding position.
  *
@@ -57,6 +59,19 @@ import { eventHub } from "../common/sse/eventHub";
 import { sameId } from "../common/utils/id";
 import { domainEvents } from '../common/events/domainEvents';
 
+/**
+ * The reservation mutex's own lifetime, and how long a contender waits for it.
+ *
+ * Thirty seconds is a crash backstop rather than an expected hold — a healthy reservation
+ * holds this for a handful of milliseconds — and it is deliberately longer than the
+ * document's TTL sweeper is prompt, which is why `acquireVolunteerLock` also steals an
+ * expired lock explicitly instead of waiting for the sweeper.
+ *
+ * Six attempts sleeping 60 ms between them is roughly a third of a second of patience
+ * before the caller is told to retry: long enough to absorb a double-tapped button or a
+ * client's own retry, short enough that somebody genuinely queued behind another request
+ * gets an answer rather than a hanging connection.
+ */
 const VOLUNTEER_LOCK_TTL_MS = 30000;
 const VOLUNTEER_LOCK_RETRIES = 6;
 const VOLUNTEER_LOCK_WAIT_MS = 60;
@@ -128,6 +143,18 @@ function chicagoDayRange(date: Date): { dayStart: Date; dayEnd: Date } {
   return { dayStart, dayEnd };
 }
 
+/**
+ * One reservation request.
+ *
+ * `idempotencyKey` is the client's; when it is absent a unique one is minted per call, which
+ * means an omitted key gives no replay protection at all rather than a weaker kind — two
+ * retries without a key are two different requests as far as this service is concerned.
+ *
+ * `allowWaitlist` defaults to true and is part of the idempotency fingerprint, because it
+ * changes the answer: the same key sent once willing to queue and once not is two different
+ * requests, and replaying the first as the answer to the second would hand a queue place to
+ * a caller who explicitly asked to be refused instead.
+ */
 export interface IReserveShiftParams {
   shiftId: string;
   volunteerId: string;
@@ -135,6 +162,15 @@ export interface IReserveShiftParams {
   allowWaitlist?: boolean;
 }
 
+/**
+ * The answer to a reservation, and the thing stored in the idempotency record so a replay
+ * can be answered without re-executing.
+ *
+ * `waitlistPosition` is null on the confirmed path and 1-based on the queued one. `cached`
+ * is the only field that differs between the original response and its replay: it is false
+ * on the write that actually happened and true when this came back out of a COMMITTED
+ * idempotency record, so a client can tell "you are booked" from "you were already booked".
+ */
 export interface IReserveResult {
   registration: IRegistration;
   status: RegistrationStatus;
@@ -144,9 +180,29 @@ export interface IReserveResult {
 
 export class RegistrationService {
   /**
-   * High-concurrency atomic shift reservation engine.
-   * Guarantees zero overbooking via atomic conditional updates ($expr), enforces rest buffers,
-   * checks skill prerequisites, and overflows into an ordered FIFO waitlist if capacity is full.
+   * Claim a seat, or a queue place when the seat is gone.
+   *
+   * The nine numbered steps below are in the order they are for a reason worth stating once.
+   * The idempotency claim is first, so a retry is recognised before any work is repeated.
+   * The per-volunteer lock is second, so every read-then-act check that follows — the I2
+   * lookup, the skill test, the rest buffer, the fatigue cap — cannot interleave with
+   * another reservation by the same person. The seat claim is last, because it is the only
+   * step that is safe to lose.
+   *
+   * What the losing racer sees is the whole design. Fifty callers reach step 6 together and
+   * each issues the same conditional update; the storage engine applies filter and increment
+   * atomically on one document, so as many of them as there are free seats come back with a
+   * shift and the rest come back `null`. A `null` is not an error — it is the answer "this
+   * shift was full at the instant of your write" — and it falls straight through to a
+   * waitlist place. Only a caller who passed `allowWaitlist: false` turns it into a 409
+   * `SHIFT_FULL`. Nobody is ever told to retry because of contention on the seat itself.
+   *
+   * The two counters move on different paths and never both. A confirmed seat increments
+   * `filledSlots`; a queue place increments `waitlistCount` and takes its position from the
+   * post-increment value, so positions are handed out in the order the increments landed
+   * rather than in the order the requests arrived. Whichever counter moved is compensated at
+   * step 7 if the registration row then fails to write — including on the duplicate-key
+   * error from the I2 index, which is the durable version of the step-3 courtesy check.
    */
   public static async reserveShift(
     params: IReserveShiftParams,
@@ -480,10 +536,11 @@ export class RegistrationService {
     } catch (error) {
       // Mark this attempt's idempotency record FAILED — fenced, like its two siblings.
       //
-      // The claim at step 3 and the commit at step 8 are both predicated on
-      // `ownerToken: attemptToken`, each with a comment explaining that an unfenced write lets
-      // a stalled predecessor corrupt the record a later attempt now owns. This write was the
-      // one that did not carry the fence, and it is the most damaging place to omit it: a
+      // The release on the lock-failure path at step 1b and the commit at step 8 are both
+      // predicated on `ownerToken: attemptToken`, each with a comment explaining that an
+      // unfenced write lets a stalled predecessor corrupt the record a later attempt now
+      // owns. This write was the one that did not carry the fence, and it is the most
+      // damaging place to omit it: a
       // predecessor that stalled past the steal window and then threw would mark the
       // *stealer's* record FAILED. The stealer's client, replaying its own key, would be told
       // its reservation failed when the row exists — and a client that believes that retries,
@@ -579,9 +636,28 @@ export class RegistrationService {
   }
 
   /**
-   * Autonomous FIFO Waitlist Cascade Engine.
-   * Cancels an existing registration and, if confirmed, automatically promotes
-   * the head of the waitlist without manual organizer intervention.
+   * Cancel a registration and, when it held a seat, hand that seat to the queue.
+   *
+   * The ordering here is the opposite of the obvious one and it is the point of the method.
+   * The row is marked CANCELLED first, the seat is *held* across the whole cascade, and
+   * `filledSlots` is only decremented at the very end if nobody took it. A promotion is
+   * therefore a transfer rather than a release followed by a re-acquire, so the seat is
+   * never briefly claimable by a concurrent `reserveShift`. The long comments inside name
+   * each of the lost-update races that shape closes; they are worth reading before changing
+   * the order of anything.
+   *
+   * Three different races run through this method and each has its own guard. Two callers
+   * cancelling the *same* registration are separated by the CAS at step 1, whose filter
+   * names the status that was read (and the queue position too, when the row had one) — the
+   * loser matches nothing and gets a 409, because two cascades from one seat is an
+   * oversell. Two callers cancelling
+   * *different* confirmed rows on the same shift do run side by side and both read the same
+   * head of queue; they are separated further down, where the promotion is itself conditional
+   * on the candidate still being WAITLISTED, and the loser simply moves to the next
+   * candidate. And a reservation racing the cascade is separated by the held seat.
+   *
+   * Ownership is proved rather than assumed, and COMPLETED is refused outright. Only
+   * CONFIRMED and CHECKED_IN rows release a seat; a WAITLISTED row only shortens the queue.
    */
   public static async cancelRegistration(
     registrationId: string,
@@ -840,6 +916,30 @@ export class RegistrationService {
       },
     });
 
+    // …and the inward-facing half, which had been declared and never fired.
+    //
+    // `registration.cancelled` has been in `DomainEventMap` since the bus was written, with a
+    // full payload type, and nothing emitted it. Every other one of the eight events has
+    // exactly one emitter. The consequence was not that a feature was missing — it was that
+    // the bus published a contract with a hole in it: a reward rule, or a plugin author
+    // reading the map as the list of what they may react to, could write a listener for this
+    // and get silence. `emit` returns early when a name has no listeners, so nothing anywhere
+    // would have said so.
+    //
+    // Emitted here rather than at the CAS above for the same reason `registration.created` is
+    // emitted after its write: a listener does its own reads, and by this point the cascade
+    // has settled, so a listener that goes and looks at the shift sees the promotion too. The
+    // bus dispatches on `setImmediate`, so this costs the caller nothing.
+    //
+    // `reason` is deliberately absent rather than guessed at. This method does not take one —
+    // an organiser cancelling on someone's behalf and a volunteer cancelling their own seat
+    // arrive here identically — and inventing a value would make the field a lie the first
+    // time somebody trusted it.
+    domainEvents.emit("registration.cancelled", {
+      accountId: String(registration.volunteerId),
+      shiftId: String(shiftId),
+    });
+
     if (promotedRegistration) {
       const promotedVolunteer = await Volunteer.findById(
         promotedRegistration.volunteerId,
@@ -864,7 +964,17 @@ export class RegistrationService {
   }
 
   /**
-   * Re-indexes waitlist positions to maintain contiguity Invariant I4.
+   * Renumber a shift's queue to 1..n after somebody leaves it.
+   *
+   * Contiguity is not cosmetic. The cascade orders candidates by `waitlistPosition` and
+   * promotes the first that survives its conflict check, so these numbers *are* the queue:
+   * a gap or a duplicate left behind by a cancellation is FIFO quietly turning into
+   * something else. `createdAt` is the tie-break, which is what keeps the order sane while a
+   * renumbering is only partly applied.
+   *
+   * A row is written only when its position actually changes, so an already-contiguous queue
+   * costs one read and no writes at all — which matters because every cancellation on a
+   * shift calls this.
    */
   private static async reindexWaitlist(shiftId: string): Promise<void> {
     const remaining = await Registration.find({
@@ -900,8 +1010,33 @@ export class RegistrationService {
   }
 
   /**
-   * Asserts no schedule collision, enforces 30-minute rest buffer,
-   * and enforces 8-hour max daily fatigue limit.
+   * Three scheduling rules in one pass: no overlap, thirty minutes of rest either side, and
+   * at most eight hours in a calendar day.
+   *
+   * Only the three schedule-occupying states are counted — CONFIRMED, CHECKED_IN and
+   * SWAP_PENDING. WAITLISTED is absent deliberately: a queue place is not an assignment, so
+   * a volunteer may sit on any number of overlapping waitlists, and the question is deferred
+   * until a promotion actually tries to give them one of those shifts. That deferral is why
+   * the cancellation cascade calls this again for every candidate it considers.
+   *
+   * `excludeShiftId` exists for the swap paths. A volunteer receiving a shift is usually
+   * giving one up in the same breath, and the shift they surrender is still CONFIRMED to
+   * them at the moment of the check — without excluding it, a straight trade of two
+   * overlapping shifts would refuse itself. The cascade passes it too, though there it is
+   * belt-and-braces: the candidate's row on that shift is WAITLISTED and so outside the
+   * query anyway.
+   *
+   * This is read-then-act and holds no lock of its own. The lock is `reserveShift`'s, taken
+   * before this is called; called directly and concurrently for one volunteer, it can pass
+   * twice for two bookings that together break the rule, which is exactly the TOCTOU window
+   * the reservation lock exists to close. The `session` parameter is plumbed through for a
+   * transactional caller, and no caller passes one today.
+   *
+   * All three failures are 409s and each names its reason — `SCHEDULE_CONFLICT` for a
+   * genuine overlap, `SCHEDULE_BUFFER_CONFLICT` for a gap shorter than the buffer, and
+   * `DAILY_FATIGUE_EXCEEDED` for the daily cap. The cascade's probe filters on the status
+   * code alone, so all three read to it as "this candidate is busy" while anything that is
+   * not a 409 — a stepdown, a timeout — is rethrown rather than mistaken for one.
    */
   public static async assertNoScheduleConflicts(
     volunteerId: string,

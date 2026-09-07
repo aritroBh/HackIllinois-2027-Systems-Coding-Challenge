@@ -45,6 +45,18 @@ import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { sameId } from '../common/utils/id';
 
+/**
+ * A swap proposal.
+ *
+ * `targetVolunteerId` is what makes a proposal *directed*: name somebody and only they may
+ * accept it, omit it and any eligible holder of `targetShiftId` may. Both shapes are
+ * legitimate, and the acceptance guard is written to skip only when nobody was named.
+ *
+ * `desiredShiftIds` is the wants-list the cycle finder builds its graph from, and it
+ * defaults to `[targetShiftId]`. That default is what makes an ordinary bilateral proposal
+ * a node in the trade graph without the proposer doing anything special — which is how a
+ * proposal nobody accepts head-on can still clear as one leg of a three-way rotation.
+ */
 export interface ICreateSwapDTO {
   proposerVolunteerId: string;
   proposerShiftId: string;
@@ -55,7 +67,20 @@ export interface ICreateSwapDTO {
 
 export class SwapService {
   /**
-   * Creates a shift swap proposal.
+   * Record a proposal. Nothing moves yet.
+   *
+   * The holdings are checked here — the proposer must actually hold a CONFIRMED
+   * registration for the shift they are putting up, and a named target must hold one for
+   * the shift being asked for — so an impossible proposal never reaches the graph. They are
+   * checked again at execution time regardless, because either can lapse in between: this
+   * row can sit PENDING for hours and a cancellation in that window is ordinary.
+   *
+   * The duplicate guard is keyed on proposer, offered shift and wanted shift rather than on
+   * the whole DTO. Two proposals agreeing on those three are the same offer however their
+   * `desiredShiftIds` differ, and both sitting PENDING would feed two entries for one offer
+   * node into `buildAdjacencyList`, where the second's wants-list silently overwrites the
+   * first's — half the proposer's stated wants disappearing from the graph with nothing to
+   * show for it.
    */
   public static async createSwapRequest(dto: ICreateSwapDTO): Promise<IShiftSwap> {
     // ponytail: contract guards — self-swaps, same-shift swaps, and duplicate PENDING spam rejected up front.
@@ -116,7 +141,26 @@ export class SwapService {
   }
 
   /**
-   * Accepts and executes a bilateral 1-to-1 shift swap atomically.
+   * Execute a two-party trade.
+   *
+   * A swap moves the *registration*, not the volunteer. Both rows keep their `_id` and their
+   * `confirmedAt`; only `volunteerId` is rewritten. That is why neither shift's
+   * `filledSlots` moves — occupancy is unchanged, only who is sitting in the seats — and why
+   * a swap needs no capacity claim at all and cannot oversell anything.
+   *
+   * Everything that can refuse the trade is settled before the transaction opens: both
+   * registrations still CONFIRMED, each volunteer certified for the shift they are
+   * *receiving* (the proposer for the target's, the target for the proposer's), and neither
+   * colliding with it once the shift they are giving up is excluded from their schedule.
+   *
+   * Inside the transaction all three writes are match-guarded on what was read — the two
+   * registrations on the volunteer who held them and their CONFIRMED status, the swap row on
+   * its PENDING status — and that is what makes two people accepting the same open proposal
+   * safe.
+   * The loser's filter matches zero documents, so it throws `SWAP_CONFLICT` and the
+   * transaction aborts — every leg rolls back rather than the second writer landing on top
+   * of the first. The loser sees a 409; what it must never see is a success that quietly
+   * undid somebody else's trade.
    */
   public static async acceptBilateralSwap(swapId: string, targetVolunteerId: string): Promise<IShiftSwap> {
     const swap = await ShiftSwap.findById(swapId);
@@ -236,7 +280,54 @@ export class SwapService {
   }
 
   /**
-   * Discovers and resolves multi-party cyclic trades (e.g. A -> B -> C -> A).
+   * The multi-party trade engine: find rings of proposals that clear each other, and rotate
+   * them.
+   *
+   * A wants B's shift, B wants C's, C wants A's. No two of them can trade bilaterally but
+   * all three can rotate at once, and finding those rings is elementary cycle discovery over
+   * a directed graph of who wants what.
+   *
+   * The single most important fact about that graph is what its nodes are: **an offer,
+   * `volunteerId::shiftId`, not a volunteer.** A volunteer holding two shifts with a pending
+   * proposal against each has two separate things to trade, and collapsing them onto one
+   * node was a real bug rather than a hypothetical one — the edge that formed the ring came
+   * from one proposal while the shift that got rotated was resolved from the other, so
+   * somebody could be moved out of a shift they had only ever offered against something
+   * else. `cycleFinder.ts` carries the full account. Here, `volunteerOf` and `shiftOf` read
+   * the two halves back off a node, which is what guarantees the person and the shift on the
+   * table come from the same proposal.
+   *
+   * An edge u -> v means u wants the shift on offer at v, so the ring is rotated along its
+   * edges: `cycle[i]` receives the shift `cycle[i + 1]` is giving up, and the last wraps to
+   * the first.
+   *
+   * Rings are found against one snapshot and can overlap, so three rules keep a pass sane.
+   * A ring whose members include anyone already rotated in this pass is skipped. Rings are
+   * tried shortest-first, so a volunteer who appears in both a two-way and a three-way is
+   * spent on the two-way. And a ring with a repeated volunteer is skipped outright, because
+   * the per-leg validation excludes "the shift they surrender", singular, and somebody
+   * appearing twice has two.
+   *
+   * Every leg is validated before any transaction opens — the receiver must hold the
+   * incoming shift's certifications and must not collide with it. One bad leg fails the
+   * *whole* ring: every proposal in it is marked FAILED and every member consumed for this
+   * pass. That is blunt on purpose. The ring is the unit that clears, and a proposal that
+   * might have worked in some other ring is better re-proposed by its owner than silently
+   * retried into a different trade than the one they asked for.
+   *
+   * The rotation and the marking of its proposals are one transaction, and each leg is
+   * match-guarded on the giver still holding that registration as CONFIRMED. So a bilateral
+   * accept that commits mid-rotation makes one leg match nothing, the transaction aborts,
+   * and every leg rolls back — there is no half-applied ring leaving one volunteer with two
+   * shifts and another with none. That abort is caught, logged and skipped rather than
+   * raised, and note what is *not* done on that path: the ring's members are never added to
+   * `consumedVolunteers`, so a later ring in the same pass may still use them. The pass ends
+   * with a smaller `executedCount`, not an error.
+   *
+   * The two halves of the return value are in different alphabets, which is easy to trip
+   * over. `discoveredCycles` is what the finder produced — arrays of `volunteerId::shiftId`
+   * node keys, including every ring that was then skipped or failed — while `executedCount`
+   * counts only rings that actually rotated. The SSE frame carries plain volunteer ids.
    */
   public static async discoverAndResolveCycles(): Promise<{
     discoveredCycles: string[][];
@@ -281,7 +372,22 @@ export class SwapService {
         for (const offer of offerCycle) {
           shiftMap.set(volunteerOf(offer), new Types.ObjectId(shiftOf(offer)));
         }
-        if (shiftMap.size !== n) continue; // incomplete mapping — skip rather than half-rotate
+        // There is deliberately no `if (shiftMap.size !== n) continue` here any more.
+        //
+        // There used to be, described as "incomplete mapping — skip rather than half-rotate",
+        // and it could never fire. `shiftMap` is keyed by `volunteerOf(offer)` over the same
+        // `offerCycle` the distinctness check five lines above has already run on: that check
+        // is `new Set(cycle).size !== n` over `cycle = offerCycle.map(volunteerOf)`, which is
+        // exactly the key set of this map. Once the n volunteers are known distinct, n
+        // `Map.set` calls leave exactly n entries, always. Deleting the guard changes no
+        // behaviour and reds no test, which is the definition of the problem: a reader met a
+        // named failure mode ("half-rotate") that the code could not reach and took it as
+        // evidence the case had been thought about here, when it had been thought about above.
+        //
+        // This is the fifth check found in this repository that reads a value which cannot take
+        // its failing state. The class is worth naming once more: a guard is only a guard if you
+        // can say what makes it fire. If the answer is "nothing, because an earlier line already
+        // settled it", the earlier line is the guard and this one is a comment wearing an `if`.
 
         // Validate every leg BEFORE touching the transaction: the receiver
         // must carry the incoming shift's certifications and must not collide
@@ -293,6 +399,11 @@ export class SwapService {
           const receiverId = cycle[i];
           const giverId = cycle[(i + 1) % n];
           const targetShiftId = shiftMap.get(giverId);
+          // Type narrowing, not a runtime guard — `Map.get` is `T | undefined` and `giverId` is
+          // an element of `cycle`, which is precisely this map's key set. Kept because the
+          // compiler needs it and because it is the right thing to do if the key set and the
+          // map ever stop being built from the same array; it is not a case that can arise
+          // today, and the message would be a lie about the data rather than about the code.
           if (!targetShiftId) {
             legInvalidReason = `missing shift mapping for cycle leg ${giverId}`;
             break;

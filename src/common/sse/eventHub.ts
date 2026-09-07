@@ -11,7 +11,7 @@
  * **Channels.** Every event lives on exactly one of `ops | sos | game | presence |
  * presence:exact | announce | me`. The ~20 existing `broadcast({type, data})` call sites
  * name no channel; `CHANNEL_OF_TYPE` infers it from the type prefix so they stay untouched.
- * Clients subscribe with `?channels=a,b` (default `ops,sos,game,announce`).
+ * Clients subscribe with `?channels=a,b` (default `ops,sos,game,announce,me`).
  *
  * **Authorisation is per channel and enforced here**, because the route is mounted before
  * the API limiter and the identity middleware only *attaches* `req.account` — it does not
@@ -92,6 +92,8 @@ const LAG_EVICT_BYTES = 512 * 1024;
 const LAG_EVICT_MS = 10_000;
 const HEARTBEAT_MS = 15_000;
 
+/** A published event. Omit `channel` and `channelOfType` picks one from the type; omit
+ *  `timestamp` and the publish clock is used. */
 export interface ISSEMessage {
   type: string;
   channel?: string;
@@ -132,6 +134,16 @@ export const CHANNEL_OF_TYPE: ReadonlyArray<readonly [prefix: string, channel: C
   ['PRESENCE_', 'presence'],
 ];
 
+/**
+ * Which channel an event belongs on when the publisher did not say.
+ *
+ * Most call sites predate channels and name only a type and a payload, so the mapping has to
+ * be derivable from the type string alone. The fallback is the part worth stating: a type
+ * matching no exact entry and no prefix lands on `ops`, which every default subscription
+ * carries, so an event type added without touching the table above shows up in the war room
+ * rather than being addressed to nobody. A fallback of `presence` or `me` would have made the
+ * same omission invisible, and it would have looked like a broken publisher.
+ */
 export function channelOfType(type: string): Channel {
   const exact = EXACT_CHANNEL_OF_TYPE[type];
   if (exact) return exact;
@@ -253,6 +265,15 @@ class Frames {
     private readonly data: unknown
   ) {}
 
+  /**
+   * The frame for one (version, redaction) pair, built on first use and kept.
+   *
+   * An event has at most four wire forms — two protocol versions, redacted or not — and a
+   * fan-out asks for one of them per subscriber. Formatting per client would put a
+   * `JSON.stringify` of the payload on the event loop once for every open stream; this bounds
+   * it at four, however many people are watching. The cache belongs to the one publish and is
+   * dropped with it, so nothing is retained between events.
+   */
   public for(version: 1 | 2, redacted: boolean): string {
     const key = `${version}:${redacted ? 'r' : 'f'}`;
     let frame = this.cache.get(key);
@@ -265,6 +286,20 @@ class Frames {
   }
 }
 
+/**
+ * The wire, both versions.
+ *
+ * v1 is what shipped before channels existed — an `event:` line and a `data:` line, nothing
+ * else — and stays byte-identical for clients that never ask for v2. The consequence to know
+ * is that a v1 frame carries no `id:`, so a browser's `EventSource` never learns a
+ * Last-Event-ID for this stream and never sends one back on reconnect: resume is a v2 feature
+ * in practice, and a v1 client that wants it has to pass `?lastEventId=` itself.
+ *
+ * v2 keeps the type on the `event:` line so client-side dispatch is unchanged, adds `id:` so
+ * the browser tracks the position for free, and wraps the payload in `{v, ts, ch, data}` —
+ * the channel has to travel with the event because one connection carries several and the
+ * type prefix is not something a client should have to re-parse to tell them apart.
+ */
 function formatFrame(version: 1 | 2, seq: number, ts: number, type: string, channel: Channel, data: unknown): string {
   if (version === 1) {
     return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -318,6 +353,30 @@ class SSEBroadcastHub {
   // Connection lifecycle
   // -------------------------------------------------------------------------
 
+  /**
+   * Turn a request into a subscribed client, or refuse it.
+   *
+   * Four decisions, and their order is the part to preserve. The requested channels are parsed
+   * first, and an explicit `?channels=` naming nothing valid is a 400 rather than a silent
+   * fall back to the defaults, which would hand a client a stream it did not ask for and no
+   * way to notice. Then the caller's own authorisation removes channels it may not join, and
+   * only a caller left with none of them gets a 403. Only then is a stream slot taken — so a
+   * caller who may join nothing cannot occupy capacity by asking — and a connection this one
+   * replaces is closed before these headers go out, rather than after.
+   *
+   * Everything above `flushHeaders()` can still answer with an ordinary JSON error body, which
+   * is why the refusals live there. Once the headers are committed the socket is an event
+   * stream and every later refusal — a revoked session, a client that stopped reading — has to
+   * be an `EVICTED` frame instead.
+   *
+   * `channels` and `fullSos` are decided here from the account as it is at connect, and an SSE
+   * stream can outlive that by hours. `reauthorise` re-derives both on every heartbeat; the two
+   * sites must stay in step, and the note on `fullSos` below and the one in `reauthorise`
+   * describe the same bug found twice.
+   *
+   * The `CONNECTED` frame is written before any replay, so a client always learns its id and
+   * the channels it was actually granted before the events it missed start arriving.
+   */
   public registerClient(req: Request, res: Response): void {
     const account = req.account;
     const mode = authMode();
@@ -436,6 +495,18 @@ class SSEBroadcastHub {
     if (lastEventId !== null) this.replay(client, lastEventId);
   }
 
+  /**
+   * The per-channel gate, asked twice in a connection's life: once per requested channel at
+   * connect, and again for every channel a client still holds on each heartbeat. Both callers
+   * pass the mode and the account as they are *now*, which is what lets a demotion take a
+   * channel away from a stream that is already open.
+   *
+   * In `legacy` the answer is yes to everything except `presence:exact` — that is the
+   * open-demo contract this repository ships with, and it is why the redaction inside
+   * `publish`, not this gate, is what protects SOS payloads there. In `required`, `announce`
+   * is the only channel an anonymous caller may hold, which is exactly why an announcement's
+   * audience has to be filtered on the way out rather than trusted to the client.
+   */
   private mayJoin(channel: Channel, account: AccountContext | undefined, mode: AuthMode): boolean {
     // `presence:exact` is decided before the legacy blanket, and on a *proved* lead.
     //
@@ -454,6 +525,17 @@ class SSEBroadcastHub {
     return true;
   }
 
+  /**
+   * Where a reconnecting client says it got to: the standard `Last-Event-ID` header, or a
+   * `?lastEventId=` query parameter. The query form is not redundant — the browser sends the
+   * header only on its own automatic reconnect, and a client that reopens the stream itself
+   * (a fresh page load, a manual retry) cannot set headers on an `EventSource` at all.
+   *
+   * Anything that is not a non-negative integer becomes null, which means "no replay" rather
+   * than "bad request": a stale or mangled id should still open a working stream that starts
+   * from now. The case that genuinely cannot be served — an id whose events are gone — is
+   * answered by `replay` with a `RESYNC` frame, on an open stream, where a client can act on it.
+   */
   private parseLastEventId(req: Request): number | null {
     const header = req.headers['last-event-id'];
     const raw =
@@ -479,8 +561,10 @@ class SSEBroadcastHub {
    * effect immediately, including on an open stream — and the presence WebSocket honours it
    * by re-reading its facts each tick. This is the other half.
    *
-   * Reads go through the identity module's sixty-second cache, so the steady-state cost is a
-   * map lookup per client per heartbeat.
+   * Reads go through the identity module's sixty-second cache while this loop runs every
+   * fifteen, so three heartbeats in four are a map lookup and the fourth is a `findById` per
+   * client. At the slot ceiling that is one database read per open stream per minute — the
+   * standing cost of checking revocation on a connection that makes no further requests.
    */
   public async reauthorise(): Promise<void> {
     const mode = authMode();
@@ -536,6 +620,19 @@ class SSEBroadcastHub {
     }
   }
 
+  /**
+   * Unwind one client from all four indexes and give its slot back.
+   *
+   * The `clients.delete` result is the idempotency guard, and it earns its keep: the same
+   * client can be removed by its `close` handler, by a write that threw, by the heartbeat
+   * sweep and by an eviction, and nothing stops two of those reaching the same client.
+   * `streamLimits.release` is independently idempotent for the same reason, so a double
+   * removal is a no-op rather than a slot returned twice.
+   *
+   * `byAccount` is cleaned by client identity, not by account id, so removing a
+   * claimed-identity stream — which `registerClient` never filed there — cannot take the
+   * proved session that holds the same account id out of the map with it.
+   */
   private removeClient(client: IClient): void {
     if (!this.clients.delete(client.id)) return;
     streamLimits.release(client.slot);
@@ -555,7 +652,15 @@ class SSEBroadcastHub {
     }
   }
 
-  /** End a client's stream with a final `EVICTED` frame so the browser knows not to auto-reconnect blindly. */
+  /**
+   * End a client's stream with a final `EVICTED` frame so the browser knows not to
+   * auto-reconnect blindly.
+   *
+   * The removal happens before the write, and the write goes straight to `res` rather than
+   * through `write()`: `write()` is a caller of this method (it evicts past the buffer
+   * ceiling), and routing the farewell frame back through it would recurse on exactly the
+   * client that is already too full to take another frame.
+   */
   private evict(client: IClient, reason: string): void {
     this.removeClient(client);
     try {
@@ -568,6 +673,9 @@ class SSEBroadcastHub {
     }
   }
 
+  /** The slot table hands back a handle when it replaces a connection; it has no idea what a
+   *  socket is. This turns that handle into the client to close, through the `bySlot` index
+   *  described above rather than the linear scan it used to be. */
   private evictBySlot(slot: SlotHandle, reason: string): void {
     const client = this.bySlot.get(slot.id);
     if (client) this.evict(client, reason);
@@ -577,17 +685,41 @@ class SSEBroadcastHub {
   // Publishing
   // -------------------------------------------------------------------------
 
+  /**
+   * The compatibility entry point, and where most events enter the hub: a type, a payload, and
+   * nothing said about channels. An explicit `channel` on the message wins when it names a
+   * real one; anything else — including a misspelled channel — falls through to
+   * `channelOfType`, so the event goes wherever its type implies rather than being dropped for
+   * a typo in a field most callers do not set.
+   */
   public broadcast(message: ISSEMessage): void {
     const channel =
       message.channel !== undefined && isChannel(message.channel) ? message.channel : channelOfType(message.type);
     this.publish(channel, message);
   }
 
+  /**
+   * For a publisher that knows the channel because it shaped the payload for it. The SOS
+   * escalation is the clearest case and uses both in one breath: a summary with a resolved
+   * venue key on `announce`, which anybody may read, and then the whole ticket as
+   * `SOS_ESCALATED_FULL` on `sos`, where per-client redaction decides who sees the
+   * coordinates. Two publishes rather than one because the two audiences need different
+   * payloads, not because the channels are two.
+   */
   public broadcastChannel(channel: Channel, message: ISSEMessage): void {
     this.publish(channel, message);
   }
 
-  /** Targeted delivery over `me` to every stream the account holds. Never buffered, never redacted. */
+  /**
+   * Targeted delivery over `me` to every stream the account holds. Never buffered, never
+   * redacted.
+   *
+   * "Never redacted" is safe only because of what `byAccount` holds: `registerClient` files a
+   * client there for a **proved** session and never for a claimed identity, so the whole SOS
+   * document this carries to a ticket's own parties cannot be addressed to somebody who merely
+   * typed their account id. That invariant lives at the other end of the file; breaking it
+   * would break this method silently.
+   */
   public sendToAccount(accountId: string, message: ISSEMessage): void {
     const targets = this.byAccount.get(accountId);
     if (!targets || targets.size === 0) return;
@@ -612,7 +744,14 @@ class SSEBroadcastHub {
     }
   }
 
-  /** Account ids with at least one stream on `channel` (deduplicated). */
+  /**
+   * Account ids with at least one stream on `channel` (deduplicated).
+   *
+   * Nothing calls this — not `src/`, not `tests/`, not the plugins. It reads as the natural
+   * companion to `sendToAccountOn` for a publisher that wants to know who is listening before
+   * building per-account payloads, but it is untested and unproven, and the scan is O(all
+   * accounts × their streams) rather than a lookup on `byChannel`. Treat it as a sketch.
+   */
   public accountsOn(channel: Channel): string[] {
     const out: string[] = [];
     for (const [id, set] of this.byAccount) {
@@ -621,6 +760,23 @@ class SSEBroadcastHub {
     return out;
   }
 
+  /**
+   * The live send, and one of the two places that decide who sees what. The other is `replay`,
+   * and the two have to agree — a filter added here and forgotten there is a hole that opens
+   * for the length of the replay buffer every time somebody reconnects.
+   *
+   * Three filters, in this order: a lagging client gets no presence frame at all; an
+   * announcement carrying an `audience` reaches only accounts inside it; an `sos` payload is
+   * redacted for every client without `fullSos`. Redaction is applied per client while framing
+   * rather than once at publish, which is what lets one event go out full to a lead and
+   * redacted to everyone else on the same channel in the same loop.
+   *
+   * Sequence numbers come from one counter shared by every channel and by the targeted sends
+   * above, so a `seq` is a position in this process's whole event history rather than in one
+   * channel. That is what makes a single `Last-Event-ID` meaningful for a client subscribed to
+   * several of them at once — and what makes an id from a previous process detectable, since
+   * the counter starts again at zero on boot.
+   */
   private publish(channel: Channel, message: ISSEMessage): void {
     const seq = ++this.seq;
     const ts = message.timestamp ?? Date.now();
@@ -655,6 +811,17 @@ class SSEBroadcastHub {
     }
   }
 
+  /**
+   * A frame addressed to one connection rather than published to a channel: `CONNECTED`,
+   * `RESYNC`, `EVICTED`.
+   *
+   * Two details worth knowing. These are labelled channel `me` in the v2 envelope whether or not
+   * the client subscribed to `me`, because they describe the connection rather than the event
+   * stream. And they reuse the current sequence number instead of consuming one: they are not
+   * events, they are never buffered, and reusing the last published id means a v2 client that
+   * stores the id it just saw resumes from exactly where it was rather than skipping the next
+   * real event.
+   */
   private writeControl(client: IClient, type: string, data: unknown): void {
     this.write(client, formatFrame(client.version, this.seq, Date.now(), type, 'me', data));
   }
@@ -675,23 +842,50 @@ class SSEBroadcastHub {
         return;
       }
       const flushed = res.write(frame);
-      if (!flushed && !client.lagging) {
-        client.lagging = true;
-        client.lagSince = Date.now();
-        res.once('drain', () => {
-          client.lagging = false;
-          client.lagSince = 0;
-        });
-      }
+      if (!flushed) this.markLagging(client, Date.now());
     } catch {
       this.removeClient(client);
     }
+  }
+
+  /**
+   * Mark a client as behind, and arrange for the mark to be cleared when it catches up.
+   *
+   * The two halves belong together, and this method exists because they had come apart.
+   * `write()` set the flag and attached a `drain` listener to clear it; `sweep()` set the flag
+   * from a heartbeat that did not flush and attached nothing, under a comment claiming "same
+   * backpressure bookkeeping as write()". It was not the same, and the difference was the whole
+   * of it.
+   *
+   * What followed from a sweep-set flag was not a stuck boolean. `lagging` gates two things: a
+   * lagging client is sent no presence frames at all, and the next sweep evicts it once
+   * `lagSince` is `LAG_EVICT_MS` old. Nothing could clear it, because `write()` only attaches
+   * the listener when the flag is *not* already set. So a socket that filled for a moment and
+   * recovered a millisecond later had its live map frozen and was then disconnected ten seconds
+   * afterwards as unreachable — while perfectly healthy. The population this happens to is
+   * phones on a congested campus network, which is the population this whole system is for.
+   *
+   * The `!client.lagging` early return keeps `lagSince` at the moment the client *first* fell
+   * behind, so the eviction clock measures how long it has been behind rather than restarting on
+   * every failed write.
+   */
+  private markLagging(client: IClient, at: number): void {
+    if (client.lagging) return;
+    client.lagging = true;
+    client.lagSince = at;
+    // `once`, so repeated fill/drain cycles do not accumulate listeners on the response.
+    client.res.once('drain', () => {
+      client.lagging = false;
+      client.lagSince = 0;
+    });
   }
 
   // -------------------------------------------------------------------------
   // Replay buffer
   // -------------------------------------------------------------------------
 
+  /** Buffer an event for replay. `publish` has already decided the channel qualifies; the
+   *  missing-buffer branch is what makes this a no-op for the channels that do not. */
   private remember(event: BufferedEvent): void {
     const buffer = this.buffers.get(event.channel);
     if (!buffer) return;
@@ -699,6 +893,20 @@ class SSEBroadcastHub {
     this.prune(event.channel, event.ts);
   }
 
+  /**
+   * Drop from the head of a channel's buffer until both bounds hold — at most 200 events, none
+   * older than 60 s — and record the highest sequence number dropped.
+   *
+   * That high-water mark is the point of the exercise. Without it, a client reconnecting with
+   * an id that has fallen off the front of the buffer would be handed whatever happened to
+   * remain and told nothing: a resume that looks successful and is silently missing events.
+   * With it, `replay` can tell "you missed nothing" from "you missed something I no longer
+   * have" and say so.
+   *
+   * Pruning is driven by writes and by `replay`, never by a timer, so a channel that has gone
+   * quiet keeps events past their 60 s until something touches it. Nothing stale is delivered
+   * from that state, because `replay` prunes every channel it is about to read.
+   */
   private prune(channel: Channel, now: number): void {
     const buffer = this.buffers.get(channel);
     if (!buffer) return;
@@ -714,6 +922,27 @@ class SSEBroadcastHub {
     }
   }
 
+  /**
+   * Send a reconnecting client what it missed, or tell it that it cannot be told.
+   *
+   * This is the hub's second delivery path and it has to be exactly as narrow as the first. It
+   * re-applies both of `publish`'s content filters — the announcement audience and the `sos`
+   * redaction — against the *reconnecting* client's account and its current `fullSos`, never
+   * against whatever the original recipients were allowed. The audience half was missing here
+   * once, and because `announce` is the channel that needs no session at all, that made a
+   * minute of staff-only announcements readable by anyone willing to reconnect with a
+   * `Last-Event-ID`.
+   *
+   * The two resync cases mean the same thing to a client and are worth telling apart when
+   * reading a log. An id *ahead* of the counter cannot have come from this process at all —
+   * sequence numbers are per-process and start again at zero on boot — so it is a client that
+   * outlived a restart, or one inventing numbers. An id *behind* a subscribed channel's drop
+   * mark is a gap this process genuinely had and threw away.
+   *
+   * Missed events are merged across the client's replayable channels and re-sorted by sequence,
+   * so a client on `ops` and `game` sees them interleaved in publication order rather than one
+   * channel's history and then the other's.
+   */
   private replay(client: IClient, lastEventId: number): void {
     const now = Date.now();
     const channels = [...client.channels].filter((ch) => REPLAY_CHANNELS.has(ch));
@@ -768,30 +997,53 @@ class SSEBroadcastHub {
         continue;
       }
       try {
-        // Same backpressure bookkeeping as write(): a heartbeat that does not flush is the
-        // first sign of a half-open socket, and without marking `lagging` here a dead tab
-        // would never hit the 10 s eviction.
+        // Same backpressure bookkeeping as write(), and now literally the same code: a
+        // heartbeat that does not flush is the first sign of a half-open socket, and without
+        // marking `lagging` here a dead tab would never hit the 10 s eviction. Going through
+        // `markLagging` is what makes the claim in this comment true — it used to set the flag
+        // without the `drain` listener that clears it, so a client marked here could never be
+        // unmarked and was evicted on the next sweep regardless of whether it had recovered.
         const flushed = res.write(':heartbeat\n\n');
-        if (!flushed && !client.lagging) {
-          client.lagging = true;
-          client.lagSince = now;
-        }
+        if (!flushed) this.markLagging(client, now);
       } catch {
         this.removeClient(client);
       }
     }
   }
 
+  /**
+   * Per-channel subscriber counts and the slot table's own view, for the branch of
+   * `GET /health` that only a proved lead reaches — how many people are connected and from
+   * where describes the crowd, not the process.
+   *
+   * Counted from `byChannel` rather than by walking every client, which is the second reason
+   * that index exists.
+   */
   public stats(): { clients: number; byChannel: Record<Channel, number>; slots: ReturnType<typeof streamLimits.stats> } {
     const byChannel = {} as Record<Channel, number>;
     for (const ch of CHANNELS) byChannel[ch] = this.byChannel.get(ch)?.size ?? 0;
     return { clients: this.clients.size, byChannel, slots: streamLimits.stats() };
   }
 
+  /** Open streams, whatever they subscribed to. */
   public getConnectedCount(): number {
     return this.clients.size;
   }
 
+  /**
+   * Shutdown, from the signal handlers in `src/index.ts`.
+   *
+   * It stops the heartbeat, returns every slot to the limit table and forgets every index. It
+   * does not end the responses — `server.closeAllConnections()` immediately after the call
+   * does that, and the comment there records what happened before it existed: `server.close()`
+   * waits for sockets to drain and an open war room holds its stream forever, so Ctrl-C hung
+   * for as long as anyone had the dashboard open.
+   *
+   * So this is not a standalone "stop serving": called without closing the server it leaves
+   * live sockets attached to a hub that no longer knows about them, which will never write to
+   * them again. The replay buffers and the sequence counter are left alone; nothing restarts a
+   * hub inside one process, and a new process starts from zero anyway.
+   */
   public teardown(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
