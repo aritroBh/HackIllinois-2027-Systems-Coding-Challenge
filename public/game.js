@@ -36,10 +36,17 @@
    * server uses when a pack says nothing, so the two agree before the descriptor lands as
    * well as after.
    *
-   * **Campus-level only.** Per-venue `radiusMeters` is resolved server-side but is not in the
-   * client descriptor, so a pack that widens one venue and not the campus still gates that
-   * venue at the campus number here. That is under-permissive — the server is the authority
-   * and will accept the spin — but the button will say "walk closer" when it need not.
+   * **This is the campus default, not the only radius.** Each HackStop carries its own
+   * resolved `geofenceRadiusMeters`, and each venue in the content descriptor carries a
+   * resolved `geofenceMeters`; where a caller knows which stop or venue it is talking about
+   * it reads that number instead of this one. This value is for the cases with no specific
+   * subject — the proximity index and the nearest-HackStop readout.
+   *
+   * Read the resolved field and do no arithmetic. The precedence (venue, then campus, then
+   * 75) is written down once, server-side, in `geofenceMetersFor`. Recomputing it here from
+   * the raw fields would put the ordering in two languages, which is the shape that produced
+   * the duplicated gazetteer and the duplicated loot table this repository has just finished
+   * deleting — both of which agreed by coincidence until somebody checked.
    */
   let PROX_RADIUS = 75;
 
@@ -503,8 +510,10 @@
    * Enable or disable each Spin button by great-circle distance from a lat/lng.
    *
    * The 3D path measures in world units through the renderer's spatial index; this measures
-   * straight from a device fix, which is what lite mode has. Both end at the same 75 m
-   * geofence, and the server measures it again — this only decides what the button says.
+   * straight from a device fix, which is what lite mode has. Each button carries the radius
+   * the server resolved for that stop, so both paths gate on the stop's own geofence rather
+   * than a single campus number — and the server measures it again regardless; this only
+   * decides what the button says.
    */
   function gateSpinsFrom(at) {
     const R = 6371000, rad = Math.PI / 180;
@@ -518,11 +527,12 @@
       const x = (lon - at.longitude) * rad * Math.cos(((at.latitude + lat) / 2) * rad);
       const y = (lat - at.latitude) * rad;
       const d = Math.round(Math.sqrt(x * x + y * y) * R);
-      const ok = d <= PROX_RADIUS;
+      const radius = Number(btn.dataset.radius) || PROX_RADIUS;
+      const ok = d <= radius;
       if (btn.disabled !== !ok) btn.disabled = !ok;
       const label = ok ? 'Spin' : `${d} m`;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${PROX_RADIUS} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${radius} m to spin`;
     });
   }
 
@@ -562,12 +572,22 @@
       const id = btn.dataset.beacon;
       let d = byId.get(id)?.distanceMeters;
       if (!Number.isFinite(d)) d = measure(btn);
-      const ok = nearIds.has(id) || (Number.isFinite(d) && d <= PROX_RADIUS);
+      const radius = Number(btn.dataset.radius) || PROX_RADIUS;
+      // A measured distance wins over the proximity index, and the index is only consulted
+      // when there is no distance to compare.
+      //
+      // This read `nearIds.has(id) || d <= radius`, and the index is built at the *campus*
+      // radius — so for a stop whose own fence is tighter than the campus default, membership
+      // of that set short-circuited past the comparison and left the button enabled from
+      // outside its geofence. The server refuses that spin, which makes it the enabled button
+      // that always fails. Caught by testing a narrowed radius as well as a widened one; only
+      // the widening direction worked.
+      const ok = Number.isFinite(d) ? d <= radius : nearIds.has(id);
       const label = ok ? 'Spin' : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
       // Only touch the DOM on change: this runs on a tick while the player walks.
       if (btn.disabled !== !ok) btn.disabled = !ok;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${PROX_RADIUS} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${radius} m to spin`;
     });
   }
 

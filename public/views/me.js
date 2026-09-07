@@ -51,15 +51,21 @@
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /**
-   * The geofence the desk scanner will actually apply, from the pack.
+   * The geofence the desk scanner will actually apply to *this* shift's venue.
    *
-   * This sentence quoted a literal 75 while the server resolved the number from
-   * `campus.geofenceMeters`. A pack that widens or narrows the fence would have left this
-   * panel telling a volunteer to stand somewhere the scanner does not agree with — and the
-   * copy is the only place the rule is stated to the person it applies to.
+   * The copy quoted a literal 75 while the server resolved the number from the pack. It is
+   * the only place the rule is stated to the person it applies to, so a pack that widens or
+   * narrows the fence would have had this panel telling a volunteer to stand somewhere the
+   * scanner disagrees with.
+   *
+   * The venue's own resolved `geofenceMeters` wins, because a shift happens at one place and
+   * that place may override. `resolveVenue` already returns the whole venue object, so this
+   * is a field read rather than a second copy of the precedence rule — the ordering lives
+   * once, in `geofenceMetersFor` on the server, and both fields arrive already resolved.
    */
-  const geofenceMetres = () => {
-    const m = Number(N.content?.event?.campus?.geofenceMeters);
+  const geofenceMetres = (location) => {
+    const venue = location ? resolveVenue(location) : null;
+    const m = Number(venue?.geofenceMeters ?? N.content?.event?.campus?.geofenceMeters);
     return Number.isFinite(m) && m > 0 ? m : 75;
   };
 
@@ -352,7 +358,7 @@
           <div>
             <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
             <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
-            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres()} m of the venue, so mint it once you are there.</p>
+            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres(state.next?.location || state.next?.locationName)} m of the venue, so mint it once you are there.</p>
             ${state.tokenError ? `<div class="ob-status is-err">${esc(state.tokenError)}</div>` : ''}
           </div>
         </div>

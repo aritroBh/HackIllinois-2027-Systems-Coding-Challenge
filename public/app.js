@@ -831,7 +831,7 @@ function renderHackStopsList() {
             <div class="where">${esc(stop.locationName)}</div>
           </div>
           <span class="dist" data-dist>${Number(stop.geofenceRadiusMeters) || 75} m</span>
-          <button class="pb pb-ghost pb-sm" data-action="spin" data-beacon="${esc(stop.beaconId)}" data-lat="${Number(stop.latitude)}" data-lon="${Number(stop.longitude)}" disabled title="Walk to within 75 m to spin">Spin</button>
+          <button class="pb pb-ghost pb-sm" data-action="spin" data-beacon="${esc(stop.beaconId)}" data-lat="${Number(stop.latitude)}" data-lon="${Number(stop.longitude)}" data-radius="${Number(stop.geofenceRadiusMeters) || ''}" disabled title="Walk closer to spin">Spin</button>
         </div>`).join('');
 
   // The beacon list appears on both the campus and turf-wars tabs.

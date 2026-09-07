@@ -78,7 +78,9 @@
   // `v27`: the defenders array is gone from the wire, so the fallback that read it is gone too.
   // `v28`: the spin geofence comes from the pack now that the server resolves it, instead of
   //        a client-side literal 75 that could disagree with the server in either direction.
-  const VERSION = 'v29';
+  // `v30`: each Spin button and the token hint use the radius the server resolved for that
+  //        stop or venue, instead of one campus number for everything.
+  const VERSION = 'v31';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
