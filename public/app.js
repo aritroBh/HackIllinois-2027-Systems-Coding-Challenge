@@ -85,21 +85,11 @@ function esc(value) {
  * (labels, map colours, the gym list) sees the pack's values.
  */
 const FACTION_DEFAULTS = {
-  TEAM_KERNEL: { label: 'Team Kernel', short: 'Kernel', color: '#22d3ee', cls: 'c-cyan' },
-  TEAM_TENSOR: { label: 'Team Tensor', short: 'Tensor', color: '#a78bfa', cls: 'c-violet' },
-  TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24', cls: 'c-amber' },
-  NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa', cls: 'c-dim' },
+  TEAM_KERNEL: { label: 'Team Kernel', short: 'Kernel', color: '#22d3ee' },
+  TEAM_TENSOR: { label: 'Team Tensor', short: 'Tensor', color: '#a78bfa' },
+  TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24' },
+  NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa' },
 };
-/**
- * Legacy CSS classes for the shipped pack's three teams.
- *
- * Only a lookup for ids this repository happens to ship. A fork's factions are not in it, so
- * `FACTION_CLS[f.id] || 'c-dim'` gave every one of them the *unclaimed* class — a Team Red
- * that carries its own colour in `--c` and then wears the grey of a stronghold nobody holds.
- * `c-dim` is now the fallback only for NEUTRAL itself; anything else falls back to no class
- * and is drawn from the pack's `color`, which every consumer already reads.
- */
-const FACTION_CLS = { TEAM_KERNEL: 'c-cyan', TEAM_TENSOR: 'c-violet', TEAM_SILICON: 'c-amber', NEUTRAL: 'c-dim' };
 const FACTION = Object.fromEntries(Object.entries(FACTION_DEFAULTS).map(([k, v]) => [k, { ...v }]));
 
 /** Rebuilds `FACTION` (and the faction picker) from the pack's list. Returns false when the list is unusable. */
@@ -113,7 +103,6 @@ function applyFactions(list) {
       label: f.label || dflt.label,
       short: f.short || f.label || dflt.short,
       color: typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : dflt.color,
-      cls: FACTION_CLS[f.id] || (f.id === 'NEUTRAL' ? 'c-dim' : ''),
       hqVenue: f.hqVenue || null,
       theme: f.theme || null,
     };
@@ -200,6 +189,22 @@ function applyBranding(content) {
 const MAP_NEUTRAL = '#5d7096';
 
 const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
+
+/**
+ * A refusal the player can actually see.
+ *
+ * Every server "no" on this screen used to go to `logChaosTerminal` alone. That panel is a
+ * scrolling log on one tab; a player who taps Spin on the map and gets nothing back reads
+ * the silence as a dropped tap and taps again. These are the three refusals the economy
+ * turns on — the battle, the spin, the item — and they now surface the same way the
+ * position and quest-claim refusals do, in the toast, while still leaving the full text in
+ * the log for anyone reading it.
+ */
+function refuse(what, message) {
+  const text = String(message || 'That did not go through.');
+  logChaosTerminal(`[ERROR] ${what} refused: ${text}`);
+  window.game?.toast?.(text);
+}
 
 /**
  * The player's position as lat/lng, for proof-of-presence on spins and gym battles.
@@ -694,14 +699,17 @@ async function fetchLeaderboard() {
  * It fetched the shift and wrote one line to `logChaosTerminal` — the console panel on the
  * War Room tab. A person pressing "Details" on the Quests board therefore saw **nothing at
  * all**, and the information they asked for was rendered on a tab they were not looking at,
- * for a role that may not even be able to open it. That is the fourth control this session to
- * send its only output somewhere the presser cannot see, after `Nexus.toast`, the quest-claim
- * refusals and `requirePlayerCoords`.
+ * for a role that may not even be able to open it. It is one of several controls this session
+ * that sent their only output somewhere the presser cannot see; the spin, battle and item
+ * refusals were three more, and they now go through `refuse`.
  *
- * The panel is built here rather than shipped in `index.html` because it exists only while it
- * is open, and `scripts/checkShell.mjs` gates that file's contents — a permanently-hidden
- * element there is one more thing for the gate to be wrong about. `Nexus.dialog` supplies the
- * focus trap, Escape and return-focus, the same as the encounter stage.
+ * The panel is built here rather than shipped in `index.html` simply because it exists only
+ * while it is open. (An earlier note here justified that with `scripts/checkShell.mjs` gating
+ * hidden elements in that file. It does not: the script scans for `registerTab` calls and
+ * hashes the shell. The reason was invented to dress up a choice that needed no defending.)
+ * `Nexus.dialog` supplies the focus trap and Escape; `returnFocus` and `onClose` are passed
+ * below, as the encounter stage does — without them the dialog closed and dropped focus to
+ * the document, stranding anyone on a keyboard at the top of the page.
  *
  * The field names are `baseKarma`, `surge.karmaAward` and `requiredSkills`, taken from the
  * live payload rather than from memory. The first draft guessed `karmaValue`/`karma` and
@@ -710,6 +718,9 @@ async function fetchLeaderboard() {
  * field name in a template is indistinguishable from a real zero.
  */
 async function viewShiftDetails(shiftId) {
+  // Captured before the fetch: by the time the panel opens, focus may have moved, and the
+  // control that opened it is the place a keyboard user expects to be returned to.
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   let shift;
   try {
     shift = await apiGet(`/api/v1/shifts/${encodeURIComponent(shiftId)}`);
@@ -756,8 +767,13 @@ async function viewShiftDetails(shiftId) {
         <button class="pb pb-sm" type="button" data-action="shift-details-close">Close</button>
       </div>
     </div>`;
-  if (Nexus.dialog) Nexus.dialog.open(host, { initialFocus: host.querySelector('button') });
-  else host.classList.add('open');
+  if (Nexus.dialog) {
+    Nexus.dialog.open(host, {
+      returnFocus: opener,
+      initialFocus: host.querySelector('button'),
+      onClose: () => { host.remove(); },
+    });
+  } else host.classList.add('open');
 }
 
 /** ALL_CAPS certification ids read badly in a sentence. */
@@ -1856,16 +1872,25 @@ async function battleOrFortifyGym(gymId, btn) {
       fetchStats();
       return json.data;
     }
-    logChaosTerminal(`[ERROR] Gym battle failed: ${json.message}`);
+    refuse('Battle', json.message);
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Battle', err.message);
   }
   return null;
 }
 
 async function loadHackStopsData() {
+  // Whose cooldowns these are. See `handoverGeneration`.
+  //
+  // `yourNextSpinAt` on this payload is per-caller, so the list is not public data the way the
+  // gym list is: a response for A that lands after the browser has changed hands seeds A's
+  // spin ledger into B's map, and B's Spin buttons sit disabled counting down a cooldown that
+  // belongs to somebody else. Same window `loadMyRegistrations` closes, same endpoint shape.
+  const mine = handoverGeneration;
   try {
-    hackStopsCache = await apiGet('/api/v1/pokeshift/hackstops');
+    const rows = await apiGet('/api/v1/pokeshift/hackstops');
+    if (mine !== handoverGeneration) return;
+    hackStopsCache = rows;
     // The per-caller cooldowns ride along on this payload; take them every time rather than
     // trying to keep a local model in step with a ledger the server already sends.
     seedSpinCooldowns(hackStopsCache);
@@ -1954,10 +1979,10 @@ async function spinHackStop(beaconId, lat, lon, btn) {
       // messages do not share a shape — one quotes seconds, the other says "try again
       // shortly" and carries no number.
       if (/cooling down/i.test(json.message || '')) void loadHackStopsData();
-      logChaosTerminal(`[ERROR] HackStop spin failed: ${json.message}`);
+      refuse('Spin', json.message);
     }
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Spin', err.message);
   }
 }
 
@@ -2089,10 +2114,10 @@ async function deployPowerUp(itemType, btn) {
       loadGymsData();
       fetchStats();
     } else {
-      logChaosTerminal(`[ERROR] Could not use item: ${json.message}`);
+      refuse('Item', json.message);
     }
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Item', err.message);
   }
 }
 
@@ -2124,6 +2149,17 @@ async function bootCampus() {
   const canvas = document.getElementById('campus-3d-canvas');
   if (!canvas) { campusBooting = false; return; }
 
+  // `bootCampus` runs again on every return to the tab, and both failure notices below are
+  // appended to the viewport rather than owning an element in the markup. Appending is what
+  // stacked a second copy of the message under the first. Replace the previous one instead.
+  const showCampusNotice = (html) => {
+    const host = document.getElementById('campus-viewport');
+    if (!host) return;
+    host.querySelector('.campus-notice')?.remove();
+    host.insertAdjacentHTML('beforeend',
+      `<div class="empty-state campus-notice" style="position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px">${html}</div>`);
+  };
+
   try {
     const { createCampusRenderer } = await import('/dashboard/gl/campus3d.js');
     const renderer = createCampusRenderer(canvas, {
@@ -2134,9 +2170,7 @@ async function bootCampus() {
 
     if (!renderer) {
       setGlStatus('WebGL2 unavailable', 'c-amber');
-      document.getElementById('campus-viewport')?.insertAdjacentHTML('beforeend',
-        '<div class="empty-state" style="position:absolute;inset:0;display:grid;place-items:center;">' +
-        'This browser has no WebGL2. The campus map needs it; every other panel still works.</div>');
+      showCampusNotice('This browser has no WebGL2. The campus map needs it; every other panel still works.');
       campusBooting = false;
       return;
     }
@@ -2179,6 +2213,8 @@ async function bootCampus() {
     window.toWorld = toWorld;
 
     setGlStatus('WebGL2 · live', 'c-mint');
+    // A boot that succeeds clears whatever the last failed one left on screen.
+    document.getElementById('campus-viewport')?.querySelector('.campus-notice')?.remove();
     // The bake time is a boot fact; the counts live in the telemetry strip.
     const stats = document.getElementById('gl-stats');
     if (stats) stats.innerText = `baked in ${ms}ms`;
@@ -2194,8 +2230,24 @@ async function bootCampus() {
     window.game?.onCampusReady();
   } catch (err) {
     console.error('Campus renderer failed:', err);
-    setGlStatus('Renderer failed', 'c-hazard');
-    logSosTerminal(`[ERROR] Campus renderer: ${err.message}`);
+    // A missing model is the one failure that is a *setup* problem rather than a bug, and it
+    // is the one that looked exactly like the campus having been deleted: an empty grid, no
+    // buildings, no monuments, and a status chip reading "Renderer failed" — which names the
+    // renderer, the one part that was working. A pack only has a campus once `npm run campus`
+    // has baked one, and a pack that ships without it (example-campus does) hits this on
+    // every load. Say which pack, and say what to run.
+    const missingModel = /campus model 40\d/.test(err.message || '');
+    if (missingModel) {
+      const pack = window.Nexus?.content?.event?.id || 'this pack';
+      setGlStatus('No campus model', 'c-amber');
+      logSosTerminal(`[ERROR] Content pack "${pack}" has no baked campus model. Run: CONTENT_PACK=${pack} npm run campus`);
+      showCampusNotice(
+        `The content pack <b>${esc(pack)}</b> has no baked campus model yet, so there is nothing to draw. ` +
+        `Build one with <code>CONTENT_PACK=${esc(pack)} npm run campus</code>. Every other panel still works.`);
+    } else {
+      setGlStatus('Renderer failed', 'c-hazard');
+      logSosTerminal(`[ERROR] Campus renderer: ${err.message}`);
+    }
   } finally {
     campusBooting = false;
   }
@@ -2690,6 +2742,15 @@ async function init() {
     // they happen to navigate to a tab that refetches. `me.js` and `quests.js` both reload
     // here for the same reason; this handler was the one that only cleared.
     void loadUserInventory();
+
+    // And the map's own per-account ledger.
+    //
+    // Clearing `spinCooldowns` above only empties it; nothing refilled it, because no handover
+    // path called this loader. The incoming account's stops then showed no cooldown at all —
+    // every Spin button live — until something else happened to refetch the list, and a spin
+    // the server was always going to refuse looked available. Under the new generation, so a
+    // response for the departing account cannot land in it.
+    void loadHackStopsData();
 
     // The distress queue too, and this one matters more than the bag.
     //

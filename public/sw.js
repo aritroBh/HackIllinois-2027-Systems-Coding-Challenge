@@ -115,9 +115,18 @@
   //        console on a tab you are not looking at.
   // `v50`: the client stopped hardcoding this repository's three factions — Turf Wars threw
   //        and rendered nothing under any other content pack.
+  // `v49`, `v51`: lock rewrites for changes described in their commits rather than here —
+  //        the same convention as `v21`/`v22`/`v23`/`v29`/`v31` above. Named because the note
+  //        above claims this sequence has no silent gaps, and until now it had two.
   // `v52`: the OSM attribution named three UIUC buildings a fork does not have, directly
   //        under a legal credit, with nothing rewriting it.
-  const VERSION = 'v52';
+  // `v53`: a content pack with no baked campus model said "Renderer failed" over an empty
+  //        grid — indistinguishable from the campus having been deleted. It now names the
+  //        pack and the command that builds one. Also: Spin, Contest and Deploy refusals are
+  //        spoken where you are instead of only in the War Room console.
+  // `v54`: the missing-model notice stacked a second copy on every return to the tab, and a
+  //        later successful boot left the old one on screen.
+  const VERSION = 'v54';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

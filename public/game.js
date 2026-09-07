@@ -741,6 +741,11 @@
       // into NEUTRAL, which is its own lie: every stronghold reported unclaimed.
       const tally = {};
       for (const id of Object.keys(factionTable())) tally[id] = 0;
+      // Unclaimed is a state a gym can be in, not a faction a pack has to declare. A pack that
+      // lists only its own teams left no `NEUTRAL` bucket, so every unheld gym fell to the
+      // fallback key, `undefined++` produced `NaN`, and the strip drew `width: NaN%` — no bars
+      // at all — for the one case the fallback exists to handle.
+      if (tally.NEUTRAL == null) tally.NEUTRAL = 0;
       for (const g of gyms) tally[tally[g.controllingFaction] != null ? g.controllingFaction : 'NEUTRAL']++;
       const total = Math.max(1, gyms.length);
       ctrl.innerHTML = `<div class="hud-label">CAMPUS CONTROL</div><div class="ctrl-meter">${Object.entries(tally).map(([k, n]) => `<i style="width:${(n / total) * 100}%;background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>`).join('')}</div><div class="ctrl-legend">${Object.entries(tally).map(([k, n]) => `<span><i style="background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>${n}</span>`).join('')}</div>`;
@@ -880,18 +885,26 @@
   const inFlight = new Set();
 
   /**
-   * The pack's faction ids, via the only handle this file has on them.
+   * The pack's faction ids.
    *
-   * `app.js` owns `FACTION` and rebuilds it from the pack; `factionOf` is the accessor it
-   * exposes. There is no exported map, so the ids come from the content descriptor with the
-   * shipped three as the pre-pack fallback — the same order `applyFactions` would produce.
+   * The content descriptor first, because it is the thing the pack actually ships. The
+   * fallback is `FACTION` itself: app.js declares it as a top-level `const` and both files are
+   * classic scripts, so they share one script scope and the name resolves here — an earlier
+   * comment here claimed no such handle existed and copied this repository's three ids
+   * instead, which is the hardcoding this function was written to remove. app.js is the later
+   * `<script>`, so the binding is initialised by the time anything renders but not at parse
+   * time; the guarded read is for that window, not for the normal case.
    */
   function factionTable() {
     const list = window.Nexus?.content?.factions;
     if (Array.isArray(list) && list.length) {
       return Object.fromEntries(list.map((f) => [f.id, true]));
     }
-    return { TEAM_KERNEL: true, TEAM_TENSOR: true, TEAM_SILICON: true, NEUTRAL: true };
+    try {
+      return Object.fromEntries(Object.keys(FACTION).map((k) => [k, true]));
+    } catch {
+      return { NEUTRAL: true };
+    }
   }
 
   const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1157,7 +1170,18 @@
   async function init() {
     await window.Sprites?.ready;
     applyGeofence(window.Nexus?.content);
-    window.Nexus?.onEvent?.('content', applyGeofence);
+    window.Nexus?.onEvent?.('content', (content) => {
+      applyGeofence(content);
+      // The jacket is painted into the sprite sheet at build time, and `factionColour` reads
+      // the pack's palette. A pack that settles *after* the sheet was built therefore left a
+      // fork's trainer wearing this repository's default cyan — the one team colour a fork is
+      // guaranteed not to have chosen. `onFactionChange` rebuilds the sheet and repaints; it
+      // is the same path a faction pick already takes, so the colour has one source either way.
+      // Called through the export because it is a method on `window.game`, not a binding in
+      // this scope — a bare call here threw `ReferenceError` and took the geofence update
+      // above down with it.
+      window.game?.onFactionChange?.();
+    });
     try {
       const A = await avatar();
       const saved = await A.loadAvatar();
