@@ -1,11 +1,16 @@
 /**
  * The one place a periodic job lives (plan §A6/§A7).
  *
- * Everything that has to happen on a clock — the SOS no-acknowledgement escalation today,
- * quest windows and raid timers from M6 — registers here rather than starting its own
+ * Everything that has to happen on a clock registers here rather than starting its own
  * `setInterval` somewhere in a service. That matters for two reasons: a single timer is
  * easy to stop in tests and on shutdown, and one file makes it obvious how much *scheduled*
  * work the process is doing.
+ *
+ * Three jobs today: the SOS no-acknowledgement escalation, the SSE presence sweep, and raid
+ * windows. **Quest windows are not among them** and never were, although this header listed
+ * them: a quest's window is derived on read from a date-bucket key (`windowKey` in
+ * `quest.service.ts`), so there is nothing to tick. An administrator looking here for a missing
+ * quest-window job would be looking for something that should not exist.
  *
  * Scheduled work, not all of it. Three timers deliberately live outside this file, so the
  * table below is not an inventory of everything ticking: the 1 Hz presence tick

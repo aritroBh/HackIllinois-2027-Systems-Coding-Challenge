@@ -62,7 +62,8 @@ export interface ITokenPayload {
 /**
  * Deliberately not an exception: a failed verification is an ordinary outcome at a check-in
  * desk, and `reason` is what the service turns into the right status code — `EXPIRED` and
- * `INVALID_SIGNATURE` are 401s, `REPLAY_ATTACK` is the 409 the desk actually sees on a double
+ * `INVALID_SIGNATURE` are **400s** — `ApiError.badRequest`, carrying `TOKEN_EXPIRED` and
+ * `MALFORMED_TOKEN` — and `REPLAY_ATTACK` is the 409 the desk actually sees on a double
  * scan.
  *
  * `volunteerId` and `shiftId` are populated only on success, and that is the point: they come

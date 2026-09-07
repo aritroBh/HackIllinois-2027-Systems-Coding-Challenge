@@ -7,8 +7,11 @@
  *    read `id`/`userId`, `email`, `roles`, `exp` from the payload. No network on the hot path.
  *  - otherwise → treat the token as opaque and exchange it: `GET ${ADONIX_URL}/user/` and
  *    `GET ${ADONIX_URL}/auth/roles/` with the token in `Authorization`, each bounded by a
- *    4 s timeout. Adonix down → the provider reports itself disabled and claim codes carry
- *    the event.
+ *    4 s timeout. Adonix down → this exchange fails and answers `503` telling the caller to use
+ *    a badge claim code, which keeps working. It does **not** report itself as a disabled
+ *    provider: `adonixEnabled()` reads `env.ADONIX_ENABLED` and never probes upstream, so
+ *    `providers()` goes on offering the button. An earlier version of this comment said
+ *    otherwise.
  *
  * `ADONIX_URL` comes from the environment only — never from a content pack — so a fork
  * cannot turn this server into an SSRF proxy by editing JSON.

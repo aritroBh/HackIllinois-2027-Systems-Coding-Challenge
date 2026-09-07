@@ -201,8 +201,14 @@ not enable it.
 
 ## 4. An identity adapter
 
-A fourth way to sign in is one file in `src/auth/` plus three small edits: a login method on
-`AuthService`, an entry in `providers()`, and a route. All three ways in — badge claim code,
+A fourth way to sign in is one file in `src/auth/` plus four small edits: a login method on
+`AuthService`, an entry in `providers()`, a route, **and a new member of `IdentityProvider` in
+`src/models/volunteer.model.ts`** — the union and the Mongoose `enum` beside it.
+
+That fourth one is easy to miss and fails late: the adapter works, the session mints, and the
+linked identity is rejected by schema validation when it is written, so the new login path cannot
+persist. This page said "three" until a reviewer counted; `README.md` and the model's own guide
+have both said four. All three ways in — badge claim code,
 magic link, HackIllinois SSO — mint the same signed session, carried only in an HttpOnly cookie
 with a CSRF nonce echoed on every mutation.
 

@@ -2,7 +2,15 @@
  * How far from a place counts as being at it.
  *
  * One question, asked from four places — attendance check-in, a gym battle, a beacon spin, and a
- * power-up deploy — and until now every one of them answered it with its own literal `75`. The
+ * power-up deploy — and every one of them used to answer it with its own literal `75`.
+ *
+ * **Two of the four call this**: check-in, with a venue key, and the gym battle, with none. The
+ * beacon spin reads `geofenceRadiusMeters` off its own HackStop document, which the seed resolves
+ * from the pack, so it follows without going through here. The power-up deploy still holds a
+ * literal `GEOFENCE_RADIUS_METERS = 75` in `hackstop.service.ts`: it names a gym rather than a
+ * venue, so the campus value is the best it could use, and that is a change worth making
+ * deliberately rather than sliding in. An earlier version of this paragraph read as though all
+ * four had moved. The
  * pack had two fields for it, `venues.<KEY>.radiusMeters` and `event.campus.geofenceMeters`, both
  * parsed, both documented as overrides, and neither read by anything. Two external reviewers
  * found that independently in the same round.

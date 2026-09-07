@@ -63,7 +63,7 @@ export enum Faction {
  * label a control point without a join per gym per frame.
  *
  * Worth knowing before building on it: the server writes this array in exactly one place —
- * the capture branch of `GymService.battleGym` — and always as a fresh one-element array
+ * the capture branch of `GymService.battleOrContribute` — and always as a fresh one-element array
  * naming the captor, because the regime changed. Reinforcing does not append. So in practice
  * the length is 0 for a gym nobody has taken since the seed and 1 for every other, and the
  * dashboard's "N defending" reads that. A real defender roster means appending on reinforce

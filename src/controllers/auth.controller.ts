@@ -45,8 +45,12 @@ export class AuthController {
    * same wording, so a caller cannot tell which of the three happened; only a code of the
    * wrong length is distinguishable, and that tells an attacker nothing they did not send.
    * The hard bound on guessing is `authExchangeLimiter` on the route. The service also counts
-   * failures process-wide and shouts on the announce channel, which is an alarm for a lead to
-   * look at rather than a second bound.
+   * failures process-wide and shouts on the **ops** channel, which is an alarm for a lead to look
+   * at rather than a second bound. Ops and not announce, deliberately and by the routing table in
+   * `eventHub` (`CLAIM_BRUTE_FORCE: 'ops'`): `announce` is readable without a session, so telling
+   * the floor that somebody is guessing badge codes would tell the guesser too. This comment said
+   * `announce`, which would have sent an operator to watch the one channel the alarm never
+   * reaches.
    */
   public static async claim(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

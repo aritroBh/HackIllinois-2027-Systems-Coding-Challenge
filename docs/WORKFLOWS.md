@@ -37,7 +37,14 @@ A badge, an email, or HackIllinois SSO. All three end in the same place.
    `Sec-WebSocket-Protocol`. There is no bearer token anywhere and no token in any response
    body, and a test asserts that.
 
-**When it fails:** Adonix down is reported as a disabled provider, and badge codes still work.
+**When it fails:** the button stays offered and the exchange fails about four seconds later with
+`503 Adonix is unreachable; use a badge claim code instead.` Badge codes keep working throughout.
+
+`adonixEnabled()` returns `env.ADONIX_ENABLED` and never probes upstream, so an outage cannot
+report itself as a disabled provider — this said it did, and `docs/DRILLS.md` has described the
+real behaviour all along. Steering a user to badge codes before the four-second wait would need a
+health probe behind `providers()`, which is a change worth making deliberately rather than
+implying in a sentence.
 SMTP down is the same. The event has never depended on one way in.
 
 **Revocation** is a version number on the account, checked against a sixty-second cache. A

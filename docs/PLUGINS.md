@@ -70,7 +70,7 @@ They cannot veto anything. This is the whole list:
 | `onGymCaptured` | a territory changes faction |
 | `onSpin` | a HackStop spin pays out |
 
-A hook receives the resulting document and returns a promise. If you need to react to
+A hook receives a small event object and returns a promise. **Not the document** — the payloads in `src/plugins/types.ts` carry ids as strings and times as epoch milliseconds, never a Mongoose document, because by the time a hook runs the record may have moved on and because an id survives being forwarded as JSON. Do your own read if you need the current state. If you need to react to
 something not on this list, add a hook to the bus in a reviewed change rather than reaching
 into a service from a plugin.
 

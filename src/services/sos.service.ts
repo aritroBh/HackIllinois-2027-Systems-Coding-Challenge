@@ -482,9 +482,11 @@ export class SOSService {
 
     // An unresolvable location is null, never the fallback venue.
     //
-    // `resolveVenue` answers with SIEBEL_ATRIUM and `matched: false` when it recognises
-    // nothing, which is the right default for a geofence — somewhere is better than nowhere
-    // when you are deciding whether a check-in is plausible. It is the wrong answer on a
+    // `resolveVenue` answers with the pack's `event.hqVenue` and `matched: false` when it
+    // recognises nothing. (It named SIEBEL_ATRIUM until the gazetteer became pack-driven, and
+    // that literal was the one branch a fork could never reach.) Note the fallback is a
+    // *coordinate of last resort*, not a permission: check-in reads `matched` and refuses an
+    // unrecognised location outright rather than measuring against it. It is the wrong answer on a
     // dispatch frame, where it reads as a fact: a ticket whose location the table cannot
     // parse was broadcast as being in Siebel Atrium, and a responder acting on that walks to
     // the wrong building while somebody waits somewhere else.
