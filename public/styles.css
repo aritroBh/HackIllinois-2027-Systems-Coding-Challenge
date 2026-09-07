@@ -500,6 +500,11 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .enc-stage .enc-art.you { grid-column: 1; grid-row: 2; display: grid; place-items: end center; padding-bottom: 8px; }
 .enc-stage .jrpg.you { grid-column: 2; grid-row: 3; }
 
+/* A locked pixel dropdown. The native `disabled` is mirrored onto the button by pxselect.js;
+   this is what makes it look unavailable rather than merely behave that way. */
+.pxsel.is-disabled .pxsel-btn { cursor: not-allowed; filter: none; }
+.pxsel.is-disabled .pxsel-caret { opacity: 0.35; }
+
 /* The "a new version is ready" bar. Bottom-centre, above the ambient canvas and below the
    encounter dialog, so it never covers a command the user is reaching for. */
 .sw-update {

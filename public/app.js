@@ -1374,12 +1374,60 @@ async function triggerAdonixSync() {
  * PokéShift
  * ------------------------------------------------------------------ */
 
-function changeUserFaction(faction) {
-  currentVolunteerFaction = faction;
+/**
+ * Show the picker as what it is: a one-time choice, then a statement of fact.
+ *
+ * Allegiance binds on the first side you take and `GymService` has always enforced that —
+ * the client names a faction on every battle request, so without a lock one account could
+ * reinforce a stronghold as an ally and attack it as a rival in the same minute.
+ * `PATCH /me/faction` shares that rule rather than restating it, and answers 409 for a
+ * change. A picker left live against that rule is a control that always fails, which is
+ * worse than no control.
+ */
+function paintFactionPicker(faction, locked) {
   const sel = document.getElementById('user-faction-selector');
-  if (sel) sel.style.borderColor = factionOf(faction).color;
+  if (!sel) return;
+  if (faction && [...sel.options].some((o) => o.value === faction)) sel.value = faction;
+  sel.style.borderColor = factionOf(faction || currentVolunteerFaction).color;
+  sel.disabled = !!locked;
+  sel.title = locked
+    ? `Locked to ${factionOf(faction).label}. Allegiance is chosen once and cannot be changed.`
+    : 'Choose once. Allegiance cannot be changed afterwards.';
+  const label = sel.closest('.actions')?.querySelector('.hud-label');
+  if (label) label.textContent = locked ? 'Your faction · locked' : 'Your faction · choose once';
+}
+
+/**
+ * Take a side, and make the server the one that decides.
+ *
+ * The picker wrote a module variable and nothing else: the HUD, the gym list and every
+ * battle request used the chosen side while `GET /me/card` still said NEUTRAL, so the two
+ * halves of the app disagreed about which team the player was on. The write is optimistic so
+ * the HUD does not lag a round trip behind the click, and rolled back on refusal — the only
+ * refusal that matters, 409, means the server knows a side this browser did not.
+ */
+async function changeUserFaction(faction) {
+  const previous = currentVolunteerFaction;
+  currentVolunteerFaction = faction;
+  paintFactionPicker(faction, false);
   renderGymsList();
   window.game?.onFactionChange();
+  try {
+    const res = await Nexus.api('/api/v1/me/faction', { method: 'PATCH', body: { faction } });
+    // `bound: false` is a success, not a refusal: re-sending the side you already hold
+    // answers 200 so a retry after a dropped response is not an error.
+    paintFactionPicker(res?.data?.faction || faction, true);
+    logChaosTerminal(`[FACTION] ${factionOf(faction).label}${res?.data?.bound ? ' — allegiance bound.' : ''}`);
+  } catch (err) {
+    currentVolunteerFaction = previous;
+    paintFactionPicker(previous, err.status === 409);
+    renderGymsList();
+    window.game?.onFactionChange();
+    // The server's own words: a 409 names the side they are actually on, which is the one
+    // thing the reader needs and the one thing a canned message could not know.
+    logChaosTerminal(`[ERROR] ${err.message}`);
+    window.game?.toast?.(err.message);
+  }
 }
 
 /**
@@ -2107,10 +2155,13 @@ async function loadMonumentInfo() {
 
 /** Sign-in / sign-out at runtime: re-point everything that keys on "me". */
 function onSessionChange(user) {
-  if (user?.faction && user.faction !== currentVolunteerFaction) {
+  if (user?.faction && user.faction !== 'NEUTRAL') {
     currentVolunteerFaction = user.faction;
-    const sel = document.getElementById('user-faction-selector');
-    if (sel && [...sel.options].some((o) => o.value === user.faction)) sel.value = user.faction;
+    paintFactionPicker(user.faction, true);
+  } else if (user) {
+    // A different account signed in on this device and has not taken a side. The previous
+    // account's lock must not carry over to them.
+    paintFactionPicker(currentVolunteerFaction, false);
   }
   if (user) {
     loadUserInventory();
@@ -2135,10 +2186,15 @@ async function init() {
   // One round trip to /me (plus dev-login in the demo) before the first
   // fetch, so inventory and the trainer card belong to the right account.
   const me = await Nexus.session.ready;
-  if (me?.faction) {
+  // A bound side is restored *and* locked. NEUTRAL and null both mean unbound — the seeded
+  // accounts ship that way — and are deliberately not restored, because `applyFactions` has
+  // already put a playable side in `currentVolunteerFaction` so the map has colours to draw
+  // with. That default is a display choice, not an allegiance, and the picker says so.
+  if (me?.faction && me.faction !== 'NEUTRAL') {
     currentVolunteerFaction = me.faction;
-    const sel = document.getElementById('user-faction-selector');
-    if (sel && [...sel.options].some((o) => o.value === me.faction)) sel.value = me.faction;
+    paintFactionPicker(me.faction, true);
+  } else {
+    paintFactionPicker(currentVolunteerFaction, false);
   }
   // The boot session has already been emitted by the time this listener is attached — the
   // `await` above is what waits for it — so the account signed in at page load never reaches

@@ -119,6 +119,18 @@
       });
       value.textContent = select.selectedOptions[0]?.textContent ?? '';
       active = select.selectedIndex;
+      // The native `disabled` has to reach the control the user can actually press.
+      //
+      // The `<select>` is hidden behind this button, so disabling it alone changes nothing a
+      // pointer or a keyboard can reach: the button still opens, the listbox still takes a
+      // choice, and `choose()` still fires `change` on a control the page believes is off.
+      // The faction picker locks itself once allegiance is bound, and without this it would
+      // have looked live and thrown a 409 on every use — a labelled control that always
+      // fails, which is the shape this dashboard has been clearing out all round.
+      button.disabled = select.disabled;
+      root.classList.toggle('is-disabled', select.disabled);
+      if (select.disabled) close(false);
+      if (select.title) button.title = select.title;
     }
 
     function paintActive() {
@@ -257,7 +269,11 @@
 
     // The owning view repainted its `<option>`s — `lead.js` does this for the shift picker every
     // poll — so re-read them. Without this the list would keep showing the shifts from boot.
-    new MutationObserver(() => { if (!isOpen(root)) sync(); }).observe(select, { childList: true, subtree: true });
+    // `attributes` as well as `childList`: `lead.js` repaints the shift picker's options, and
+    // `app.js` toggles `disabled` on the faction picker. Watching only children would have
+    // seen the first and missed the second.
+    new MutationObserver(() => { if (!isOpen(root)) sync(); })
+      .observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'title'] });
 
     sync();
   }

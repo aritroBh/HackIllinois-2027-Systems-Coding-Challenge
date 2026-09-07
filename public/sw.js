@@ -71,7 +71,9 @@
   //        moderation queue and other trainers' faces stop being unreachable code.
   // `v24`: round-eighteen review — the battle no longer plays its animation in front of the
   //        write, the encounter guards check identity, and the face follows the map switch.
-  const VERSION = 'v24';
+  // `v25`: the faction picker writes to the server and locks once allegiance is bound, and
+  //        the pixel dropdown honours `disabled` so a locked control looks locked.
+  const VERSION = 'v25';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
