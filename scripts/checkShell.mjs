@@ -249,7 +249,18 @@ if (!fs.existsSync(lockPath)) {
           const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
           if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
         }
-        if (!id) continue;
+        if (!id) {
+          // Not `continue`. The id patterns accept a single-quoted literal or a module
+          // constant; a double-quoted one, or a computed id, matched neither and was skipped
+          // in silence — invisible to every per-tab check while `coreTabs` stayed at the
+          // expected number, so the `!==` gate stayed green over a tab nothing had examined.
+          // A scanner that cannot read something must say so, not pass.
+          problems.push(
+            `checkShell found a registerTab({...}) in ${rel} whose id it could not read. `
+            + "Ids must be a single-quoted literal or a module constant assigned one.",
+          );
+          continue;
+        }
         const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? null;
         // Last write wins in a Map, and the plugin files are scanned last. A plugin reusing a
         // core tab's id would therefore flip that entry to non-core and silently drop the

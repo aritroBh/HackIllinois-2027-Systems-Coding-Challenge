@@ -82,7 +82,8 @@
   //        stop or venue, instead of one campus number for everything.
   // `v32`: round-nineteen review — a 409 no longer locks the picker to the stale side, and a
   //        handover no longer wipes the incoming account's faction.
-  const VERSION = 'v32';
+  // `v33`: round twenty — the nearest-stop readout uses that stop's fence, not the campus one.
+  const VERSION = 'v33';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

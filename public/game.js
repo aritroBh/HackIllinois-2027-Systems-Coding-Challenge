@@ -483,7 +483,8 @@
     }
     if (has('setProximityRadius')) window.campus.setProximityRadius(PROX_RADIUS);
     gateSpins(); // the player now exists, so measure instead of the demo fallback
-    // Proximity events fire on the 75 m edge; the tick keeps the distance labels
+    // Proximity events fire on the pack's campus edge — 75 m only when the pack says so, and
+    // `applyGeofence` moves it; the tick keeps the distance labels
     // honest while the player walks and covers a smoothing/render race.
     if (!state.gateTimer) state.gateTimer = setInterval(() => { if (window.campus?.getPlayer?.()) gateSpins(); }, 1500);
     if (state.flags.__walk && !state.walking && navigator.permissions?.query) {
@@ -587,7 +588,12 @@
       // outside its geofence. The server refuses that spin, which makes it the enabled button
       // that always fails. Caught by testing a narrowed radius as well as a widened one; only
       // the widening direction worked.
-      const ok = Number.isFinite(d) ? d <= radius : nearIds.has(id);
+      // Unmeasurable falls back to the proximity index, but only when that index is not more
+      // generous than this stop's own fence. `nearIds` is built at the campus radius, so for
+      // a stop with a tighter one it would answer "near enough" for a distance its own fence
+      // rejects — enabling a button the server refuses. A geofence with no measurement fails
+      // closed; that is the rule the rest of this file already follows.
+      const ok = Number.isFinite(d) ? d <= radius : (radius >= PROX_RADIUS && nearIds.has(id));
       const label = ok ? 'Spin' : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
       // Only touch the DOM on change: this runs on a tick while the player walks.
       if (btn.disabled !== !ok) btn.disabled = !ok;
@@ -697,9 +703,19 @@
       if (stop) {
         const name = stop.target?.name || (window.hackStopsCache || []).find((s) => s.beaconId === stop.id)?.name || 'HackStop';
         const d = Math.round(stop.distanceMeters);
-        const inRange = d <= PROX_RADIUS;
+        // The stop's own fence, not the campus one.
+        //
+        // This compared against `PROX_RADIUS` while the Spin button beside it compares
+        // against that stop's `data-radius`, so on a pack where the two differ the readout
+        // said "in range — spin it!" next to a disabled button, or counted down to a
+        // distance that would not enable anything. `hackStopsCache` is already being read a
+        // couple of lines above for the name; the radius is in the same row.
+        const stopRadius = Number(
+          (window.hackStopsCache || []).find((x) => String(x.beaconId) === String(stop.id))?.geofenceRadiusMeters,
+        ) || PROX_RADIUS;
+        const inRange = d <= stopRadius;
         const segs = 8, on = Math.max(0, Math.min(segs, Math.round(segs * (1 - Math.min(1, d / 600)))));
-        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : `walk ${d - PROX_RADIUS} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
+        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : `walk ${d - stopRadius} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
         near.hidden = false;
       } else {
         near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP</div><div class="near-dist"><span>${window.campus?.getPlayer?.() ? 'Nothing in 1.2 km. Head for the Quad.' : 'Place your trainer to start walking.'}</span></div>`;

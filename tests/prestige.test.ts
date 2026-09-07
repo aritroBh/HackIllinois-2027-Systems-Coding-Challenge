@@ -3,7 +3,10 @@
  *
  * `public/views/me.js` carries a copy of the six prestige bands so the Me tab can draw a
  * distance — "1,500 karma to Leviathan Prime" needs both edges of the band, and
- * `GET /me/card` sends only the tier the balance landed in. A copy of a server rule is how
+ * `GET /me/card` sends the tier the balance landed in without its bounds. (It sends plenty
+ * else — karma, shortId, faction, badges — so "only the tier" was an overstatement; it is
+ * the band *edges* specifically that are absent, which is the only part a distance needs.
+ * The same sentence was corrected in `me.js` and left standing here.) A copy of a server rule is how
  * this repository grows its favourite bug, so the copy is gated rather than trusted.
  *
  * The bug this exists to have caught: the seed hand-typed `prestigeTier` beside
