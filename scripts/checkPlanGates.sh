@@ -50,9 +50,12 @@ pass=0; fail=0
 # What npm 11 actually emits, measured rather than assumed, because an earlier version of this
 # block asserted "npm then appends a dozen lines of `npm ERR! ... ELIFECYCLE`" two paragraphs
 # above another line saying that exact token matches nothing npm prints — the same comment
-# describing two different npms. A failing *script* appends no npm lines at all; the tool's own
-# output is the whole of it. Only npm failing *itself* (a missing script) prints anything, about
-# six lines, all prefixed `npm error`, lowercase.
+# describing two different npms. Measured on 11.19.0: a failing *script* gets no `npm error`
+# epilogue at all, but npm does *prepend* two echo lines — `> pkg@version script` and the command
+# it ran — which the filter keeps deliberately, because knowing which script failed is worth two
+# of the six lines. (The first version of this paragraph said the tool's own output "is the whole
+# of it", which those two lines contradict.) Only npm failing *itself* — a missing script —
+# prints an epilogue, about six lines, all prefixed `npm error`, lowercase.
 #
 # So the filter earns its keep on one case, not the common one, and the pattern must match
 # `npm error`, lowercase. npm has emitted that since v7 and this repo is

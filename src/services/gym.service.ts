@@ -82,9 +82,19 @@ export interface IBattleResult {
  * mode that admits everyone.
  *
  * The redaction costs the interface nothing, which is the part worth checking rather than
- * assuming. The client reads exactly one thing off the sensitive half — `(g.defenders || []).length`,
- * at `public/app.js:788` and `:1951`, rendered as "N defending". No view reads `leaderName`,
- * `leaderVolunteerId`, `lastBattledAt`, or any field of a defender.
+ * assuming. The client reads exactly one thing off the sensitive half: a count, rendered as
+ * "N defending". No view reads `leaderName`, `leaderVolunteerId`, `lastBattledAt`, or any field
+ * of an individual defender.
+ *
+ * Deliberately no line numbers, and no longer an expression to grep for. This paragraph used to
+ * say the client read `(g.defenders || []).length` at `public/app.js:788` and `:1951`. All three
+ * facts died in the same change: the projection replaced the `defenders` array with a
+ * `defenderCount` scalar, so the expression greps to nothing, and the two line numbers now point
+ * at a shift renderer and a coordinate comment. An auditor checking this redaction was sent to
+ * two unrelated places to look for something that no longer exists.
+ *
+ * `public/` is owned by a different session and its line numbers move under this file. Citing a
+ * behaviour that can be grepped for (`defenderCount`) outlives citing a location that cannot.
  */
 export interface PublicGym {
   _id: unknown;

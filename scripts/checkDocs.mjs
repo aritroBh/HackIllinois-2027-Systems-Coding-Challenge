@@ -38,9 +38,14 @@ import fs from 'fs';
  * The pattern is deliberately narrow: SCREAMING_SNAKE_CASE with at least one underscore. That is
  * specific enough to be almost always a real symbol — an env var, an enum member, a constant, a
  * pack key — and it excludes the acronyms that would otherwise flood this (`GET`, `SSE`, `CSP`,
- * `UTC`, `JSON`), which carry no underscore. Measured against the current tree it reports zero,
- * with no false positives across all sixteen documents, which is the bar a gate has to clear
- * before it is worth having: one that cries wolf gets `|| true` appended to it.
+ * `UTC`, `JSON`), which carry no underscore. Measured against the current tree it reports zero
+ * findings and zero false positives across every document it scans, which is the bar a gate has
+ * to clear before it is worth having: one that cries wolf gets `|| true` appended to it.
+ *
+ * No document count here on purpose. This sentence said "all sixteen documents"; the gate prints
+ * seventeen, because a document was added and nobody came back to this line. A number in prose
+ * that the program itself computes and prints on every run is a number that will rot, and the run
+ * is the authority.
  *
  * The haystack is every file a symbol could legitimately live in, including `content/` — pack
  * keys like `SIEBEL_ATRIUM` and faction ids like `TEAM_RED` are real identifiers that appear only
@@ -58,8 +63,14 @@ import fs from 'fs';
  * `scripts/` and `public/`. It is where the failure actually lives — the deleted-symbol
  * reference that motivated this check is itself in a `geo.ts` comment, which this gate cannot
  * see. It was measured rather than assumed, and the measurement says no: ten unresolved
- * identifiers, of which **one** was genuinely stale. The other nine fall into two groups that a
- * document essentially never produces and a source comment legitimately does.
+ * identifiers, of which **one** was genuinely stale — a ratio bad enough to sink the rule.
+ *
+ * The two groups below account for eight of the remaining nine, not all of them; the tenth was
+ * not written down at the time and cannot now be reconstructed. That is stated rather than
+ * quietly rounded, because this note previously read as a complete enumeration and its numbers
+ * did not add up — 1 + 6 + 2 is 9, against a stated total of 10, and a reader checking the
+ * arithmetic would have found a case that had gone missing. The decision rested on the ratio,
+ * which is unaffected; the appearance of a full accounting was the false part.
  *
  * Six were named *precisely because nothing emits them* — comments in `views/quests.js`,
  * `views/lead.js`, `app.js` and `checkEvents.mjs` whose entire point is "this looks like an event
