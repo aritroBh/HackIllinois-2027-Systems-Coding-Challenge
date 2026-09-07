@@ -33,6 +33,21 @@
  * into it. Fixing that is a change to what the seed writes, not to how the check is made, and it
  * is done there.
  */
+/*
+ * This module and `content/loader.ts` import each other, and that is deliberate but conditional.
+ *
+ * The cycle is safe **only because neither side dereferences the other at module scope**. This
+ * file imports `pack` and reads it exclusively inside `geofenceMetersFor`, which nothing calls
+ * during module evaluation; `loader.ts` imports `geofenceMetersFor` and calls it only inside
+ * `publicContent()`, which runs per request. So whichever module is evaluated first, the binding
+ * the other needs is populated by the time anything reads it. Both orders were run, not reasoned
+ * about — importing `loader` first and importing this file first each produce the same answers.
+ *
+ * What would break it: a module-scope read here, such as `const DEFAULT = pack.event.campus…`.
+ * That would evaluate while `loader` is half-initialised in one import order and not the other,
+ * which is the worst shape a bug can have — it depends on which file something else happened to
+ * import first. If you need a value at module scope, take the cycle out first.
+ */
 import { pack } from '../../content/loader';
 
 /**

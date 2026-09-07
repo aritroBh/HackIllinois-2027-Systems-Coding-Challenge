@@ -112,6 +112,17 @@ resolves a shift's location to a venue key and measures against that venue's rad
 is venue, then `event.campus.geofenceMeters`, then 75 — specific beats general. Set it for the
 arena you hold the opening ceremony in and leave the rest alone.
 
+**What the client is handed.** `GET /api/v1/content` returns each venue with `radiusMeters`
+exactly as you authored it — present on an override, absent otherwise — plus a resolved
+`geofenceMeters` carrying the number that actually applies. The dashboard reads the resolved one
+and does no arithmetic, so the precedence above is written down in exactly one place
+(`geofenceMetersFor`) rather than reimplemented in the browser. If you are writing a client of
+your own, read `geofenceMeters` for the same reason.
+
+That is not a hypothetical worry: the dashboard gated its Spin buttons on a hard-coded `75` while
+already holding `campus.geofenceMeters` for a label, so a pack widening to 120 m disabled a button
+the server would have accepted, and narrowing to 50 m enabled one it would refuse.
+
 Rejected: a key that is not `SCREAMING_SNAKE_CASE`, a venue entry that is a string rather
 than an object, an underscore key whose value is not a string, a latitude or longitude out
 of range.

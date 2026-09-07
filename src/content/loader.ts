@@ -14,6 +14,7 @@
 import fs from 'fs';
 import path from 'path';
 import { REPO_ROOT } from '../common/utils/repoRoot';
+import { geofenceMetersFor } from '../common/utils/geofence';
 import { ZodError, ZodTypeAny } from 'zod';
 import { env } from '../config/env';
 import {
@@ -271,7 +272,27 @@ export function publicContent(): Record<string, unknown> {
     pack: pack.event.id,
     packVersion: pack.event.packVersion,
     event: pack.event,
-    venues: pack.venues,
+    /*
+     * Venues, each carrying the geofence radius **already resolved**.
+     *
+     * `radiusMeters` is kept as the pack declared it — present when a venue overrides, absent
+     * when it does not — and `geofenceMeters` is added beside it as the number that actually
+     * applies: the venue's, else `event.campus.geofenceMeters`, else 75.
+     *
+     * The added field exists so the precedence rule has one implementation. The client gates its
+     * Spin buttons and writes its "walk closer" copy from this radius, and it could compute the
+     * same answer from the two raw fields — which would make the ordering a rule living in two
+     * languages, drifting the first time somebody changed it on one side. This repository spent a
+     * day removing two instances of exactly that (a gazetteer duplicated between `src/` and the
+     * pack, a loot table duplicated between a service and `loot.json`), and both had agreed by
+     * coincidence until somebody looked.
+     *
+     * So: the server resolves, the client reads. `geofenceMetersFor` is the one place the
+     * ordering is written down.
+     */
+    venues: Object.fromEntries(
+      Object.entries(pack.venues).map(([key, venue]) => [key, { ...venue, geofenceMeters: geofenceMetersFor(key) }])
+    ),
     factions: pack.factions,
     monuments: pack.monuments,
     contentBase: '/dashboard/content',
