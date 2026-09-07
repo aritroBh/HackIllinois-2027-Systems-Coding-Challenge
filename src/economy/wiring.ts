@@ -54,6 +54,39 @@ export function wireEconomy(): void {
     );
   };
 
+  /*
+   * Which events a quest may actually advance on. Declared once, subscribed from, and warned
+   * against — so the three cannot drift.
+   *
+   * `content/loader.ts` refuses a quest naming an event that does not exist. It cannot refuse one
+   * naming an event that exists and has no quest listener: `registration.cancelled` is emitted by
+   * the cancel path and subscribed by nothing, so a cancellation quest validates, boots, and sits
+   * at zero forever with `emit` returning early and nothing logged.
+   *
+   * The warning is here rather than in the loader because this is where the subscriptions are.
+   * `RaidService.subscribe` does the same for `joinEvents`, for the same reason.
+   */
+  const QUEST_ADVANCE_EVENTS = [
+    'checkin.completed',
+    'checkout.completed',
+    'registration.created',
+    'sos.resolved',
+    'gym.captured',
+    'hackstop.spun',
+    'booth.scanned',
+  ] as const;
+  {
+    const advanceable = new Set<string>(QUEST_ADVANCE_EVENTS);
+    for (const name of QuestService.declaredEvents()) {
+      if (!advanceable.has(name)) {
+        console.warn(
+          `[economy] a quest advances on "${name}", which no quest listener subscribes to — it ` +
+            `will never progress. Advanceable events: ${QUEST_ADVANCE_EVENTS.join(', ')}.`
+        );
+      }
+    }
+  }
+
   domainEvents.on('checkin.completed', advance('checkin.completed'));
   domainEvents.on('checkout.completed', advance('checkout.completed'));
   domainEvents.on('registration.created', advance('registration.created'));

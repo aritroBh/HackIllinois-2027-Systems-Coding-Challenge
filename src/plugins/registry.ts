@@ -274,7 +274,14 @@ export class PluginRegistry {
    * Idempotent by the `!state.enabled` guard, and that guard is doing real work: `disable` is
    * reached from three unrelated places — a missing asset at boot, a `registerRoutes` that
    * threw, and the consecutive-failure rule — and a plugin that trips two of them should not
-   * broadcast `PLUGIN_DISABLED` twice, because the dashboard renders that as an incident.
+   * broadcast `PLUGIN_DISABLED` twice.
+   *
+   * Be precise about who sees it, because this used to say "the dashboard renders that as an
+   * incident" and no view does. `public/app.js` forwards the type onto the client bus and nothing
+   * subscribes to render it, so today the event reaches an operator through `/health`'s plugin
+   * stats and the server log rather than through the interface. The duplicate-suppression is
+   * still worth having — a doubled event on the wire is a doubled event for whatever eventually
+   * listens — but it is not currently protecting a UI.
    * The first reason wins, which is also the useful one: it names what actually broke first.
    *
    * There is no `enable`. Re-enabling is a restart, deliberately — a plugin that failed five

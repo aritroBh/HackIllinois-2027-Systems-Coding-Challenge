@@ -7,8 +7,12 @@
  * the round trip. Only then is the sha256 taken, which means the hash identifies the image
  * rather than the file.
  *
- * Sharing is opt-in and reviewed: an avatar is visible to its owner and to leads while
- * PENDING, and to other players once APPROVED. Three distinct reporters — or one lead —
+ * Sharing is opt-in and reviewed, and it takes **both**: an avatar is visible to its owner and
+ * to leads while PENDING, and to other players once it is APPROVED *and* its owner set
+ * `shareOptIn`. Approval alone does not publish — `fetch` requires the pair (see the note on it
+ * below, which has always said so while this paragraph said only "once APPROVED"). An approved
+ * avatar whose owner never opted in stays owner-and-lead-only, which is a support question rather
+ * than a leak, but the shorter sentence was believed and wrong. Three distinct reporters — or one lead —
  * unpublish it immediately and emit `AVATAR_UNPUBLISHED` on the `game` channel, which is
  * what evicts the texture from every connected renderer's cache.
  */

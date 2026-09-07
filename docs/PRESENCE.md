@@ -56,7 +56,7 @@ Volunteers are additionally hidden from ordinary viewers while off shift; hacker
 
 A sheet is uploaded as a raw PNG (at most 64 KB, 20 per hour), decoded, and **re-encoded from its pixels** before anything is stored. The bytes served are ours, not the uploader's, so metadata chunks and polyglot files do not survive; anything trailing the `IEND` chunk is refused outright. The sha256 is taken over the re-encoded bytes, so it identifies the image rather than the file. The same person uploading the same sheet twice gets one row; two different people get one row each, so a takedown against one never clears the other's avatar.
 
-Sharing is opt-in and reviewed. An avatar is visible to its owner and to leads while `PENDING`, and to everyone once `APPROVED`. Three distinct reporters, or one lead, unpublish it immediately and emit `AVATAR_UNPUBLISHED` on the `game` channel, which is what evicts the texture from every connected renderer. Bytes are served `private, max-age=60, must-revalidate` with an ETag, never `immutable`, because that URL becomes a 404 the moment the avatar comes down.
+Sharing is opt-in and reviewed, and publication needs both halves. An avatar is visible to its owner and to leads while `PENDING`, and to everyone once it is `APPROVED` **and** its owner set `shareOptIn` — approval on its own does not publish it. Three distinct reporters, or one lead, unpublish it immediately and emit `AVATAR_UNPUBLISHED` on the `game` channel, which is what evicts the texture from every connected renderer. Bytes are served `private, max-age=60, must-revalidate` with an ETag, never `immutable`, because that URL becomes a 404 the moment the avatar comes down.
 
 The presence wire carries only the hash.
 

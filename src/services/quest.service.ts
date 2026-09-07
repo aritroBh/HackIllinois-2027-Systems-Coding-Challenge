@@ -216,6 +216,18 @@ function distinctValue(quest: Quest, meta: Record<string, unknown>, at: Date): s
 
 export class QuestService {
   /**
+   * Every `event` name the active pack's quests declare, deduplicated.
+   *
+   * Exists so `economy/wiring.ts` can warn at boot about a quest naming an event no listener
+   * subscribes to. The catalogue is module-private and the subscriptions live in the wiring, so
+   * one of the two has to reach across; an accessor here is smaller than exporting the catalogue
+   * or widening `ContentPack` to carry quests.
+   */
+  public static declaredEvents(): string[] {
+    return [...new Set(questCatalog().all.map((quest) => quest.event).filter(Boolean))] as string[];
+  }
+
+  /**
    * Read the catalog now, so a bad pack fails at boot rather than at the first player.
    *
    * The cross-checks live inside the lazy read — that is the right place for them, since it

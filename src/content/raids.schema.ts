@@ -9,9 +9,14 @@
  *
  * `joinEvents` is what counts as taking part. Naming the events rather than hard-coding
  * them is what lets one pack run a beacon raid on Friday and a gym raid on Saturday with no
- * server change. As in the quest schema, the names are checked for shape here and not
- * against the server's build: a raid listening for an event nothing emits is an empty
- * roster, which the service reports, not a broken pack.
+ * server change. The names are checked twice beyond their shape: `content/loader.ts` refuses one
+ * that is not a real domain event, and `RaidService.subscribe` warns at boot for one that is real
+ * but carries no account to enrol — `sos.resolved` is the example, and it is why that distinction
+ * needs two checks rather than one.
+ *
+ * This comment used to say a raid listening for an event nothing emits was "an empty roster,
+ * which the service reports". The service reported nothing; it mapped over a closed list and
+ * recorded silence for the whole window.
  *
  * Windows are allowed to overlap. Two open raids is a legitimate schedule (a sponsor hour
  * inside a longer teardown), and the multiplier that applies is the larger one — decided in

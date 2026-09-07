@@ -340,6 +340,33 @@ export class RaidService {
    * changes with the content, and the pack is read once anyway.
    */
   public static subscribe(): () => void {
+    /*
+     * A raid may name a real event this service does not enrol on, and that has to be said out
+     * loud rather than discovered from an empty roster.
+     *
+     * `crossValidate`'s sibling check in `content/loader.ts` refuses an event name that does not
+     * exist at all. It cannot refuse this one: `sos.resolved` is a perfectly real event, it is
+     * simply not in `JOINABLE_EVENTS` — because it carries no `accountId`, so there is nobody to
+     * enrol. A pack asking for an SOS-response raid therefore validates, boots, and records zero
+     * joins for the whole window.
+     *
+     * `raids.schema.ts` claimed for a long time that this was "an empty roster, which the service
+     * reports". It did not report anything. This is the report, and it is here rather than in the
+     * loader because the list of what is joinable lives here and importing it there would make a
+     * cycle.
+     */
+    const joinable = new Set<string>(JOINABLE_EVENTS);
+    for (const raid of raidCatalog().all) {
+      for (const name of raid.joinEvents ?? []) {
+        if (!joinable.has(name)) {
+          console.warn(
+            `[raids] raid "${raid.id}" joins on "${name}", which carries no account to enrol — ` +
+              `its roster will stay empty. Joinable events: ${JOINABLE_EVENTS.join(', ')}.`
+          );
+        }
+      }
+    }
+
     const offs = JOINABLE_EVENTS.map((name) =>
       domainEvents.on(name, (payload) => {
         // `sos.resolved` is not joinable precisely because it carries no `accountId`; every

@@ -173,9 +173,11 @@ its licence to `public/fonts/LICENSES.md`. `theme.js` maps five palette keys
 (`orange`, `blue`, `patina`, `harvest`, `prairie`) onto CSS custom properties at runtime;
 anything else in `palette` is carried but not applied.
 
-**Your own SSO, if you have one.** Adapters live beside the others in
-`src/services/auth.service.ts` and are small. Copy the Adonix one and keep its trust
-boundary.
+**Your own SSO, if you have one.** Adapters live in `src/auth/` — `adonix.ts` and `mailer.ts` are
+the two shipped ones, and they are small. Copy the Adonix one and keep its trust boundary.
+`src/services/auth.service.ts` is the *consumer* that mints a session from whichever adapter
+answered; you add a login method and an entry in `providers()` there, plus a route, but the
+adapter itself does not live in it.
 
 **Event-specific rules.** Anything that is behaviour rather than data belongs in a plugin
 rather than a fork of the services. See [PLUGINS.md](PLUGINS.md).

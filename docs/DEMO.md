@@ -160,10 +160,14 @@ The privacy rules are the part worth being proud of:
   failed read.
 - The shift roster reports buckets (`at venue` / `nearby` / `away`, `now` / `recent` /
   `stale`) and never a coordinate.
-- Opting out is symmetric: you neither appear nor see.
+- Opting out is symmetric **on the map**: you neither appear nor receive a frame.
 
-**Volunteer the asymmetry:** an opted-out *lead* still reads the roster. Receiving without
-publishing is a real hole in the "symmetric" claim, and it is in the ledger.
+**Volunteer the asymmetry, and give both halves of it.** An opted-out *lead* still reads exact
+positions two ways: the shift roster, and `GET /presence` once per five seconds — neither checks
+the reader's own opt-in, and both write an audit row. That is deliberate, because a lead has to be
+able to find somebody in an emergency whether or not they want their own dot drawn. Saying only
+"the roster" understates it, and this bullet said "symmetric" flatly until `README.md` and
+`docs/PRESENCE.md` were corrected and this page was missed.
 
 ## 7. The campus
 

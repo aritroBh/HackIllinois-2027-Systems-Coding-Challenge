@@ -242,8 +242,19 @@ What is checked, beyond each file's own shape:
 * a `DISTINCT` quest names the field it collects, a `STREAK` quest has a window to be
   consecutive in, and no two quests share an id.
 
-A quest naming a domain event the server does not emit is *not* a pack error — the pack is
-not allowed to depend on the server's build — but `npm run events:check` reports it.
+A quest naming a domain event the server does not have **is** a pack error: `npm run
+content:validate` refuses it and lists the known event names. The same check covers a raid's
+`joinEvents`.
+
+That sentence used to say the opposite — that it was not a pack error, and that `npm run
+events:check` reported it. `events:check` inspects the SSE bridge between the server and the
+browser; it never opens `quests.json`, and its name pattern cannot match a dotted event like
+`registration.created`. So nothing reported it, and a typo produced a green boot and a quest that
+sat at zero for the weekend.
+
+One case the pack check cannot catch, because the name is real: a raid may join on an event that
+carries no account to enrol on — `sos.resolved` is the only one today. `RaidService` warns about
+that at boot, naming the raid.
 
 ## What the boot-time cross-validation rejects
 

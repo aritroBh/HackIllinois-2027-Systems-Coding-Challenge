@@ -19,15 +19,28 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
  * `reward.powerUp` names in the content pack — so renaming one orphans every existing stack.
  * Add members; do not rename them.
  *
- * The trailing comments are the flavour, not the rule: the karma each one pays lives in
- * `POWER_UP_CATALOG` below and the gym effects live in `hackstop.service`.
+ * **Only two of the five do anything beyond paying karma**, and the trailing comments below say
+ * exactly which. They used to advertise "+35% speed", "fatigue immunity & priority waitlist
+ * pass", "auto-resolve SOS ticket" and "2x territorial multiplier" — none of which exists
+ * anywhere in this codebase — under a header calling them "the flavour, not the rule". A player
+ * does not read an item description as flavour: they burn a Mythic expecting a doubled territory
+ * or an SOS closed, and get the karma bonus only.
+ *
+ * The karma each one pays lives in `POWER_UP_CATALOG` below; the two real gym effects live in
+ * `hackstop.service`. If a fork wants the other three to mean something, that is a service
+ * change, not a rename here.
  */
 export enum PowerUpType {
-  COLD_BREW_ELIXIR = 'COLD_BREW_ELIXIR',             // Uncommon: +35% speed & +50 Karma
-  INSOMNIA_COOKIE_SHIELD = 'INSOMNIA_COOKIE_SHIELD', // Rare: Fatigue immunity & priority waitlist pass
-  OVERCLOCK_SOLDER_CORE = 'OVERCLOCK_SOLDER_CORE',   // Epic: +150 Karma & +250 Gym CP
-  RUBBER_DUCK_OMNISCIENCE = 'RUBBER_DUCK_OMNISCIENCE', // Legendary: Auto-resolve SOS ticket & +200 Karma
-  ANKER_GAUNTLET = 'ANKER_GAUNTLET',                 // Mythic: 2x territorial multiplier & +300 Karma
+  // Karma only. The "+35% speed" it used to advertise does not exist.
+  COLD_BREW_ELIXIR = 'COLD_BREW_ELIXIR',
+  // Karma, plus a two-hour gym shield when deployed at a gym. No fatigue or waitlist effect.
+  INSOMNIA_COOKIE_SHIELD = 'INSOMNIA_COOKIE_SHIELD',
+  // Karma, plus +250 control points when deployed at a gym. The one item that does what it says.
+  OVERCLOCK_SOLDER_CORE = 'OVERCLOCK_SOLDER_CORE',
+  // Karma only. Nothing auto-resolves an SOS ticket.
+  RUBBER_DUCK_OMNISCIENCE = 'RUBBER_DUCK_OMNISCIENCE',
+  // Karma only. There is no territorial multiplier.
+  ANKER_GAUNTLET = 'ANKER_GAUNTLET',
 }
 
 /** The catalogue entry for one item: what it is called, how rare it is, and what it pays. */
@@ -83,7 +96,7 @@ export const POWER_UP_CATALOG: Record<PowerUpType, IPowerUpItemMeta> = {
     type: PowerUpType.RUBBER_DUCK_OMNISCIENCE,
     name: 'Rubber Duck of Debugging Omniscience',
     rarity: 'LEGENDARY',
-    description: 'Eliminates one SOS incident instantly with +200 bonus Karma.',
+    description: 'Rubber-duck clarity when nothing else works. Grants +200 Karma instantly.',
     karmaBonus: 200,
   },
   [PowerUpType.ANKER_GAUNTLET]: {

@@ -174,8 +174,11 @@ export class GymService {
    * re-evaluated against the gym as it was read on this attempt: a shield dropped by somebody
    * else's power-up while this request was losing a compare-and-swap has to stop the retry,
    * and it does, because the read that feeds the check is inside the loop rather than above
-   * it. The 75 m radius is a literal here rather than the beacon-style per-document field
-   * HackStops use; the number is the same one, but a gym cannot widen it.
+   * it. The radius comes from the pack — `geofenceMetersFor()` with no venue key, so the
+   * campus-wide value — rather than the beacon-style per-document field HackStops use. A gym
+   * therefore widens with its campus and not on its own; `territories.json` names a venue per
+   * gym, so carrying that key onto the document would make per-gym radii possible, and that is
+   * a schema change rather than a line here.
    *
    * Karma is paid after the CAS has won and nothing compensates it if the award throws: the
    * strike stands and the payout is lost. That is the survivable direction — the alternative

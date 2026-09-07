@@ -19,13 +19,25 @@
  * on duty. The live figure people want alongside it is "how many are on a desk right now",
  * which is reported separately as `onDuty` and needs no calendar at all.
  *
- * **The leaderboard's tie-break is reliability, then name.** Equal karma is common — the
- * caps see to that — so a tie-break that is only karma-then-storage-order means the board
- * reshuffles between two identical requests. Reliability is the completed share of a
- * volunteer's shifts, so the person who finished what they signed up for is ahead of the
- * person with the same karma who did not, and name last makes the order total and stable.
- * An account with no shift history scores zero rather than a hundred: no record reads as no
- * record, not as a perfect one.
+ * **The leaderboard's tie-break is reliability, then name — and reliability is dead weight
+ * today, so in practice it is name.** Equal karma is common (the caps see to that), so a
+ * tie-break that is only karma-then-storage-order means the board reshuffles between two
+ * identical requests. Name last makes the order total and stable, and that part works.
+ *
+ * The reliability term does not, and the reason is worth stating precisely rather than leaving
+ * for somebody to discover from a ranking that looks alphabetical. `Volunteer.reliability`
+ * declares `{ completed, noShow }` and **nothing in `src/` ever writes either field** — not
+ * check-out, not cancellation, not a no-show sweep, because there is no no-show sweep. So
+ * `reliabilityPercent` is 0 for every account, every account ties on it, and the comparison
+ * falls straight through to name.
+ *
+ * The intended rule stands: the person who finished what they signed up for should rank above
+ * the person with the same karma who did not, and an account with no history should score zero
+ * rather than a hundred — no record reads as no record, not as a perfect one. Making it true
+ * needs a writer, and the honest place is check-out incrementing `completed` alongside the hours
+ * it already writes, plus a decision about what counts as a no-show. That is a scheduling
+ * decision rather than a leaderboard one, which is why it is recorded here instead of guessed
+ * at. `docs/LIMITATIONS.md` carries it.
  *
  * Both queries are aggregations rather than a load-and-reduce in JavaScript. At one
  * hackathon's size either would do; the aggregation is here because it does not ship every

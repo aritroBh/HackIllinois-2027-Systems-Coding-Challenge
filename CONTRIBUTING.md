@@ -40,12 +40,15 @@ be read.
 * Configuration is read through `src/config/env.ts` and nowhere else. Reading
   `process.env` directly bypasses both the schema and the production boot guards.
 * Colours, labels, venues and landmarks belong in a content pack rather than in `src/`. See
-  [docs/CONTENT-PACKS.md](docs/CONTENT-PACKS.md). Two exceptions predate the rule and are
-  worth knowing before you add a third: `src/models/gym.model.ts` names the faction ids,
-  because a closed enum is what makes the schema reject a typo, and
-  `src/common/utils/geo.ts` holds a second copy of the venue gazetteer — the one the
-  check-in geofence and SOS dispatch actually measure from. Its own docblock records why
-  that copy is a known gap rather than a design.
+  [docs/CONTENT-PACKS.md](docs/CONTENT-PACKS.md). This is checked, not just asked for:
+  `npm run pack:check` reads the active pack and fails if any of that event's content strings
+  appear in `src/`. What is still there is enumerated with a reason each in
+  `scripts/pack-driven-baseline.json`, and the gate refuses anything new.
+
+  Two exceptions used to be named here — a closed faction enum, and a second copy of the venue
+  gazetteer that the check-in geofence and SOS dispatch measured from while the client read the
+  pack's. Both are closed: the schema validator reads `pack.factions`, and `geo.ts` derives from
+  `pack.venues`.
 * Frontend files under `public/` are plain browser scripts served under
   `script-src 'self'`. No build step, no inline handlers, no external origins. Register
   actions with `Nexus.registerAction` and tabs with `Nexus.registerTab`, and escape

@@ -550,12 +550,13 @@ async function main(): Promise<void> {
   ok('the presence roster is not readable by an ordinary volunteer', rosterVol.status >= 400, `${rosterVol.status}`);
 
   const rosterLead = await lead.get('/presence');
-  ok('a lead can read the exact-position roster (one of the two audited readers)',
+  ok('a lead can read the exact-position roster (one of the three audited readers)',
     rosterLead.status === 200, `${rosterLead.status}`);
 
   // The "buckets, never a coordinate" claim is about the SHIFT roster, which is what a lead
   // looks at to see who has turned up. GET /presence is deliberately exact — it is one of the
-  // two readers docs/PRESENCE.md names, and it writes an audit row for the read.
+  // three readers docs/PRESENCE.md names (with SOS dispatch and the shift roster), and it writes
+  // an audit row for the read. This said "two" until the roster shipped as the third.
   const shiftRoster = await lead.get(`/shifts/${shiftsForRoster[0]._id}/roster`);
   const shiftRosterJson = JSON.stringify(shiftRoster.body?.data ?? {});
   ok('the shift roster reports buckets, never a coordinate',

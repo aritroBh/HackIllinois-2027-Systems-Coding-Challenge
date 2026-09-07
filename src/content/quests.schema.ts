@@ -14,10 +14,17 @@
  * give two quests the same progress row, which the unique index on
  * `(accountId, questId, windowKey)` would then merge into one silently.
  *
- * `event` is a domain event name from `src/common/events/domainEvents.ts`. It is validated
- * here only for shape, because the pack is not allowed to depend on the server's build: a
- * quest naming an event nothing emits is a dead quest, which the wiring reports, not a
- * broken pack.
+ * `event` is a domain event name from `src/common/events/domainEvents.ts`. Zod checks its shape
+ * here, and `content/loader.ts` checks the name against `DOMAIN_EVENT_NAMES` — so a typo is
+ * refused by `npm run content:validate` rather than becoming a quest that sits at zero all
+ * weekend.
+ *
+ * This comment used to say the name was checked "only for shape, because the pack is not allowed
+ * to depend on the server's build", and that a dead quest was something "the wiring reports, not
+ * a broken pack". Neither half held. `QuestService.advance` returns an empty array for an event
+ * nothing listens for, with no log, and `npm run events:check` — named in `docs/CONTENT-PACKS.md`
+ * as the thing that reported it — inspects the SSE bridge and cannot even match a dotted name
+ * like `registration.created`. Nothing reported anything.
  *
  * This file is separate from `schema.ts` for one reason: it is new and `schema.ts` is
  * shared. Folding it in is a two-line change described in the M6 wiring notes.

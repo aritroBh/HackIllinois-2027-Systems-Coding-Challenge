@@ -36,10 +36,19 @@ import { domainEvents } from '../common/events/domainEvents';
 import { rollLoot, rollKarma } from '../economy/lootTable';
 
 /**
- * The radius for deploying a gym-targeted power-up, which is the only thing this constant
- * governs. A spin reads the beacon's own `geofenceRadiusMeters` instead, and a gym battle
- * and an attendance check-in each carry their own literal 75 — so the four place-bound
- * checks in the game agree on the number without any of them sharing it.
+ * The radius for deploying a gym-targeted power-up, and the last place-bound check in the game
+ * still using a literal.
+ *
+ * The other three are pack-driven: a spin reads the beacon's own `geofenceRadiusMeters` (which
+ * the seed resolves from the pack), and a gym battle and an attendance check-in both call
+ * `geofenceMetersFor` in `common/utils/geofence.ts`. This one has no venue to key on — a
+ * power-up deploy names a gym, and a `Gym` document stores coordinates rather than a venue key —
+ * so it would need the campus-wide value at best.
+ *
+ * An earlier version of this comment said all four "carry their own literal 75 — so they agree
+ * on the number without any of them sharing it", and described that as the design. It was, and
+ * the cost showed up the moment a pack wanted a different number: three of the four moved, and
+ * a fork widening its campus fence still gets 75 here.
  */
 const GEOFENCE_RADIUS_METERS = 75;
 

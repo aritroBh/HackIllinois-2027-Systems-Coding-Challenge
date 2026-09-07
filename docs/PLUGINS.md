@@ -23,8 +23,11 @@ rather than a hostile one:
 
 * A hook that throws, or takes longer than two seconds, fails that hook only. The domain
   operation has already been committed by the time hooks run.
-* Five consecutive failures disable the plugin. A `PLUGIN_DISABLED` event goes out on the
-  ops channel so somebody sees it.
+* Five consecutive failures disable the plugin, and a `PLUGIN_DISABLED` event goes out on the
+  announce channel. **Nothing in the dashboard renders it yet** — `public/plugins.js` forwards
+  the type onto the client bus and no view subscribes — so an operator learns about a disabled
+  plugin from `GET /health`'s plugin stats or the server log, not from the screen. This bullet
+  said "so somebody sees it", which overstated a mechanism that stops one step short of a person.
 * A disabled plugin's routes and assets both return 404, and the manifest stops listing it.
   Express cannot unmount a router at runtime, so every plugin route and every plugin asset
   path runs through the same `registry.enabled(name)` guard rather than being removed.

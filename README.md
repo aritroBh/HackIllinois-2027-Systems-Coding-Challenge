@@ -4,7 +4,7 @@ A volunteer operations system for a large hackathon, with the campus it runs on 
 
 A thousand people are on a campus for thirty-six hours. Some are staffing shifts, most are building things, and a few need help right now. This is the software that schedules the first group, keeps the second entertained, and gets someone to the third quickly. The scheduling half is ordinary distributed-systems work done carefully. The game half exists because a volunteer who is enjoying themselves turns up for the 3:30 a.m. cleanup shift.
 
-Almost everything specific to HackIllinois and to the University of Illinois lives in a content pack: point the software at your own pack and it runs your event on your campus. Two things have not moved out of `src/` yet — the faction ids in `src/models/gym.model.ts`, and the venue gazetteer in `src/common/utils/geo.ts` that the check-in geofence measures from, so a fork that moves a venue in `venues.json` moves the map pin and not the fence.
+Almost everything specific to HackIllinois and to the University of Illinois lives in a content pack: point the software at your own pack and it runs your event on your campus. That is enforced rather than intended: `npm run pack:check` loads the active pack, takes every string that is your event's content, and fails the build if any of it appears in `src/`. Two exceptions used to be listed here — the faction ids and a second copy of the venue gazetteer, so a fork moving a venue moved the map pin and not the geofence — and both are closed.
 
 ```sh
 npm install

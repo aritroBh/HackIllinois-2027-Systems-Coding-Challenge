@@ -34,6 +34,7 @@ import {
 import { boothsSchema } from './booths.schema';
 import { raidsSchema } from './raids.schema';
 import { questsSchema } from './quests.schema';
+import { DOMAIN_EVENT_NAMES } from '../common/events/domainEvents';
 
 /**
  * Carries **every** issue, not the first one. A pack is edited by hand and a fork's first
@@ -109,7 +110,7 @@ export function loadPack(dir: string): ContentPack {
   // quest with no `distinctBy`, a STREAK over the whole event, or a duplicate id all booted
   // cleanly and then sat at zero for the weekend — the invisible-dead-quest failure the
   // schema exists to prevent, with the schema present and unused.
-  if (fs.existsSync(path.join(dir, 'quests.json'))) readJson(dir, 'quests.json', questsSchema, issues);
+  const quests = fs.existsSync(path.join(dir, 'quests.json')) ? readJson(dir, 'quests.json', questsSchema, issues) : null;
   const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
   // Venue keys in the game files, checked here rather than in `crossValidate` because these
@@ -132,6 +133,47 @@ export function loadPack(dir: string): ContentPack {
       }
     });
   }
+
+  /*
+   * A quest or a raid may only name a domain event that exists.
+   *
+   * Checked here for the same reason as the venue keys above: these files are optional and
+   * `crossValidate` never sees them.
+   *
+   * Both schemas claimed this was already covered. `quests.schema.ts` said a quest naming an
+   * event nothing emits was "a dead quest, which the wiring reports, not a broken pack", and
+   * `docs/CONTENT-PACKS.md` said `npm run events:check` reported it. Neither was true:
+   * `QuestService.advance` returns an empty array for an unlistened event with no log,
+   * `RaidService` maps over a closed list and records nothing, and `checkEvents.mjs` checks the
+   * *SSE* bridge — its name pattern cannot match a dotted event like `registration.created`, so
+   * it never looked at either file. A typo produced a green boot and a quest sitting at zero for
+   * the weekend, with no signal anywhere.
+   *
+   * This checks that the name exists, not that anything subscribes to it. A raid may name a real
+   * event `RaidService` does not enrol on — `sos.resolved` is one — and that is reported at boot
+   * by the service, which is where the list of what it listens for lives.
+   */
+  const knownEvents = new Set<string>(DOMAIN_EVENT_NAMES);
+  quests?.quests.forEach((quest, i) => {
+    if (quest.event && !knownEvents.has(quest.event)) {
+      issues.push({
+        file: 'quests.json',
+        path: `quests[${i}].event`,
+        message: `unknown domain event "${quest.event}"; known events are ${DOMAIN_EVENT_NAMES.join(', ')}`,
+      });
+    }
+  });
+  raids?.raids.forEach((raid, i) => {
+    (raid.joinEvents ?? []).forEach((name, j) => {
+      if (!knownEvents.has(name)) {
+        issues.push({
+          file: 'raids.json',
+          path: `raids[${i}].joinEvents[${j}]`,
+          message: `unknown domain event "${name}"; known events are ${DOMAIN_EVENT_NAMES.join(', ')}`,
+        });
+      }
+    });
+  });
 
   if (info) {
     const ids = new Set(monuments.monuments.map((m) => m.id));

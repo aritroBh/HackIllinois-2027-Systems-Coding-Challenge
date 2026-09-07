@@ -325,10 +325,14 @@ export type Loot = z.infer<typeof lootSchema>;
  * reads `pack.monuments` rather than `pack.monuments.monuments`.
  *
  * `factionIds` is a `Set` of the same ids `factions` already carries, built once at load for
- * membership tests; nothing in `src/` reads it today — only `tests/content.test.ts`, and the
- * gym battle path validates a faction against the `Faction` enum in `gym.model.ts` (via
- * `pokestop.schema.ts`), not against the pack — so it is a convenience waiting for a caller
- * rather than a live index.
+ * membership tests, and nothing in `src/` reads it today — only `tests/content.test.ts`. It is a
+ * convenience waiting for a caller rather than a live index.
+ *
+ * The reason it has no caller is *not* the one this comment used to give. It said the gym battle
+ * path validated against the `Faction` enum in `gym.model.ts` via `pokestop.schema.ts`, which
+ * stopped being true when that schema moved to a shape-only check and `faction.service.ts` took
+ * over the real validation — reading `pack.factions` directly and building its own list. So the
+ * pack *is* the authority now; `factionIds` is simply not the object it reads.
  * `campusMonumentIds` is null rather than empty when `campus.json` has not been built
  * — the two mean different things, and treating "not baked yet" as "baked with no monuments"
  * would make every monument look missing.

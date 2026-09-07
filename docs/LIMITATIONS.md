@@ -185,9 +185,9 @@ and in the service's own header — as the only way a row enters the sticker boo
 `Volunteer.badges` as the denormalised copy and `StickerLedger` as the auditable record behind
 it. That invariant is what makes an award reconstructable and a duplicate detectable.
 
-`CheckInService.checkOut` does not go through it. On a check-out between 02:00 and 05:00 UTC, or
-one whose surge multiplier reached 3.0, it pushes a string straight into `Volunteer.badges` with
-`$addToSet` and writes no ledger row at all. Two consequences, and the second is the worse one:
+`CheckInService.checkOut` does not go through it. On a check-in falling between 02:00 and 05:00
+**in the event's own timezone**, or a check-out whose surge multiplier reached 3.0, it pushes a
+string straight into `Volunteer.badges` with `$addToSet` and writes no ledger row at all. Two consequences, and the second is the worse one:
 
 - **The audit trail has holes by construction.** A badge earned this way cannot be dated,
   attributed, or explained, and an audit that reconciles `badges` against `StickerLedger` will
@@ -209,3 +209,25 @@ the clock is shared rather than copied so the next thing that needs it cannot dr
 
 What remains open here is only the ledger question above — which badge strings belong in
 `Volunteer.badges`, and whether an award without a `StickerLedger` row is acceptable.
+
+## The leaderboard's reliability tie-break is always zero
+
+`GameBoardService` ranks by karma, then by reliability, then by name, and documents reliability
+as "the completed share of a volunteer's shifts". `Volunteer.reliability` declares
+`{ completed, noShow }` and **nothing in `src/` writes either field**: not check-out, not
+cancellation, and not a no-show sweep, because no no-show sweep exists.
+
+So `reliabilityPercent` is 0 for every account. Every account ties on the second key and the
+order falls through to name — a board that looks alphabetical within a karma band, for a reason
+no reader can see from the outside.
+
+Not fixed here because the missing half is a scheduling decision rather than a leaderboard one.
+`completed` has an obvious home — check-out already writes hours and could increment it in the
+same update — but `noShow` requires deciding when a volunteer has actually failed to appear: at
+the end of the shift window, at some grace after it, and whether a cancellation before the shift
+counts. Picking that silently would put a number on somebody's record that the event never agreed
+to.
+
+`Volunteer.streak` is the same shape with less consequence: declared, projected into the account
+payload by `AuthService`, and never written. Quest streaks are computed live from `QuestProgress`
+instead, so the field is a stale zero rather than a wrong answer.

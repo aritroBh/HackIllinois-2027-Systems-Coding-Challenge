@@ -451,7 +451,7 @@ sequenceDiagram
     else Valid Check-In
         Srv->>Cache: Store nonce (TTL: 90s)
         Srv->>Srv: Mark Registration CHECKED_IN
-        Srv-->>Scanner: 200 OK: Check-In Confirmed & Karma Credited
+        Srv-->>Scanner: 200 OK: Check-In Confirmed (no karma yet — paid at check-out)
     end
 ```
 
@@ -638,8 +638,8 @@ sequenceDiagram
 |---|---|---|
 | **Race-Condition Overbooking** | 50 volunteers confirm for a 2-slot shift | WiredTiger atomic CAS predicate `$expr: { $lt: ['$filledSlots', '$capacity'] }`. |
 | **Attendance Screenshot Sharing** | Unattended volunteer checks in remotely | Dynamic HMAC-SHA256 tokens rotating every 30s with single-use nonce cache. |
-| **Proxy Attendance Spoofing** | Volunteer checks in from dorm outside venue | 75m geodesic Haversine distance geofence boundary verification. |
-| **Double-Bounty SOS Exploitation** | Malicious caller spams ticket resolution | Atomic state precondition: `status === DISPATCHED` required for transition to `RESOLVED`. |
+| **Proxy Attendance Spoofing** | Volunteer checks in from dorm outside venue | Geodesic Haversine distance against the venue's own radius — `venues.<KEY>.radiusMeters`, else `event.campus.geofenceMeters`, else 75 m. Coordinates are mandatory on this route in every posture. |
+| **Double-Bounty SOS Exploitation** | Malicious caller spams ticket resolution | The transition table is the precondition, and it is checked atomically: only a ticket still in a resolvable state moves to `RESOLVED`, so a second attempt matches nothing and the bounty pays once. Note that `OPEN` **is** resolvable — a bystander already on scene may close a ticket nobody dispatched, which is deliberate; the guard is single-transition, not dispatch-ordering. |
 | **Gym Damage Inversion** | Negative power input heals enemy gym | Boundary validation: $P \in [10, 500]$, checked twice — by the Zod contract and again in the service. Note it is a bound on the range only; a fractional power passes. |
 | **NoSQL Operator Injection** | Attacker injects `$ne` or `$regex` into query | Contract-first Zod schemas enforcing native TypeScript enums. |
 | **BSON CastError Leaks** | Arbitrary strings crash server and leak topology | Strict 24-char hexadecimal regex matching on all ObjectID parameters. |
