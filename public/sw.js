@@ -97,7 +97,8 @@
   //        that never existed, so all three failed silently.
   // `v42`: the quest board stops offering quests you are already on, and a refused claim is
   //        said where you are rather than in the War Room console.
-  const VERSION = 'v42';
+  // `v43`: a handover no longer shows the departing account's shifts as the arriving one's.
+  const VERSION = 'v43';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

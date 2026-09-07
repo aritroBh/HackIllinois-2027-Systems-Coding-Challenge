@@ -530,11 +530,20 @@ async function fetchVolunteers() {
 let myRegistrations = new Map();
 
 async function loadMyRegistrations() {
+  // Whose registrations these are. See `handoverGeneration`.
+  //
+  // Without this, a `/me/shifts` already in flight when the browser changes hands resolves
+  // after the handover has cleared everything and writes the *previous* account's shifts into
+  // the incoming one's board — the same window `loadUserInventory` and `loadSOSTickets` each
+  // close, on the same endpoint shape.
+  const mine = handoverGeneration;
   try {
     const res = await Nexus.api('/api/v1/me/shifts', { lenient: true });
+    if (mine !== handoverGeneration) return;
     const rows = res?.success ? (res.data?.shifts || []) : [];
     myRegistrations = new Map(rows.map((r) => [String(r.shiftId || r._id), String(r.status || '')]));
   } catch {
+    if (mine !== handoverGeneration) return;
     myRegistrations = new Map();   // no session, or the call failed: fall back to the old labels
   }
 }
@@ -2474,6 +2483,21 @@ async function init() {
     userInventoryCache = [];
     renderUserInventory();
 
+    // The two per-account caches this session added, which the handover did not know about.
+    //
+    // `myRegistrations` decides whether the quest board says "You're on this", and it survived
+    // a handover intact: an account that held nothing was shown the departing account's shifts
+    // as its own, with those cards disabled — so it could see what somebody else had signed up
+    // for *and* could not claim them itself. Measured before the fix: the incoming account held
+    // one shift and the board marked three as theirs.
+    //
+    // `spinCooldowns` is the same shape with a smaller blast radius: a stop the previous
+    // account spun would sit greyed out with a countdown for somebody who had never touched it.
+    // Both are cleared here and refilled by the reload below, under the new generation.
+    myRegistrations = new Map();
+    spinCooldowns.clear();
+    renderShifts(shiftsCache);
+
     // The incoming account's side, re-derived — not a blanket NEUTRAL.
     //
     // This line was `currentVolunteerFaction = 'NEUTRAL'` and it was wrong in both
@@ -2518,6 +2542,8 @@ async function init() {
     // looking at the previous lead's open medical calls — data their own session would have
     // been handed redacted. Cleared, repainted empty, then reloaded under the new session,
     // which returns whatever the new account is actually entitled to.
+    void fetchShifts();   // repopulates `myRegistrations` for whoever just arrived
+
     openSosTicketsCache = [];
     renderSOSTicketsList(openSosTicketsCache);
     syncCampusActors();
