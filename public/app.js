@@ -829,7 +829,14 @@ function renderGymsList() {
  *
  * A literal 75 sat in the HackStop list as the fallback for a stop with no radius of its own,
  * next to a button that falls back to `PROX_RADIUS` — so on a pack whose campus radius is not
- * 75 the label and the control beside it disagreed. Same number, same source, one place.
+ * 75 the label and the control beside it disagreed.
+ *
+ * Not "one place": there are three readers of `event.campus.geofenceMeters` in the client —
+ * this, `applyGeofence` in game.js, and `geofenceMetres` in views/me.js — because they live
+ * in three files that do not import one another. What they share is the *field*, and the
+ * precedence above it is resolved server-side, so they cannot disagree about the rule even
+ * though they each read it separately. Claiming one place was flattering; the property that
+ * matters is that none of them computes anything.
  */
 function packGeofenceMetres() {
   const m = Number(Nexus.content?.event?.campus?.geofenceMeters);
