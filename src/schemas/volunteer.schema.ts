@@ -35,3 +35,22 @@ export const getVolunteerParamsSchema = z.object({
     id: objectId('Invalid Volunteer ObjectId'),
   }),
 });
+
+/**
+ * `PATCH /me/faction` — choosing a side, once.
+ *
+ * The id is deliberately *not* validated against the pack here. Zod would have to be rebuilt
+ * per pack to do it, and the real check belongs next to the rule anyway: `assertPlayable` in
+ * `faction.service.ts` reads `pack.factions` and refuses NEUTRAL with a message that lists what
+ * this event's sides actually are. This schema only guarantees the field is a plausible id, so
+ * a malformed body is a 400 before it reaches a database lookup.
+ */
+export const chooseFactionSchema = z.object({
+  body: z.object({
+    faction: z
+      .string()
+      .min(1)
+      .max(40)
+      .regex(/^[A-Z][A-Z0-9_]*$/, 'A faction id is SCREAMING_SNAKE_CASE, as declared in factions.json'),
+  }),
+});

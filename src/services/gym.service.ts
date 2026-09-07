@@ -28,6 +28,7 @@
 import { Gym, IGym, Faction } from '../models/gym.model';
 import { Volunteer } from '../models/volunteer.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
+import { bindFaction } from './faction.service';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
@@ -212,39 +213,23 @@ export class GymService {
       );
     }
 
-    // Faction lock: the client names a faction per request, so without this
-    // one account could reinforce as an ally and attack as a rival at will.
-    // The first battle binds the account; later mismatches fail.
-    {
-      if (volunteer.faction && volunteer.faction !== volunteerFaction) {
-        throw ApiError.conflict(
-          `Faction allegiance locked to ${volunteer.faction}. Cannot battle as ${volunteerFaction}.`,
-          ErrorCode.FACTION_ALLEGIANCE_LOCKED
-        );
-      }
-      if (!volunteer.faction) {
-        // Conditional on the account still being unbound. Two first-ever battles declaring
-        // different factions both read `faction == null` and both wrote; the second write
-        // won, so one of the two accounts fought a whole battle for a side it was not, in
-        // the end, on. The filter makes the binding itself the claim: the loser sees the
-        // winner's faction and takes the mismatch branch, which is exactly what a second
-        // request with a different faction is supposed to get.
-        const bound = await Volunteer.findOneAndUpdate(
-          { _id: volunteerId, $or: [{ faction: null }, { faction: { $exists: false } }] },
-          { $set: { faction: volunteerFaction } },
-          { new: true }
-        );
-        if (!bound) {
-          const settled = await Volunteer.findById(volunteerId).select('faction');
-          if (settled?.faction && settled.faction !== volunteerFaction) {
-            throw ApiError.conflict(
-              `Faction allegiance locked to ${settled.faction}. Cannot battle as ${volunteerFaction}.`,
-              ErrorCode.FACTION_ALLEGIANCE_LOCKED
-            );
-          }
-        }
-      }
-    }
+    // Faction lock: the client names a faction per request, so without this one account could
+    // reinforce as an ally and attack as a rival at will. The first battle binds the account;
+    // later mismatches fail.
+    //
+    // The rule itself lives in `faction.service.ts` rather than here, and that move was made
+    // when `PATCH /me/faction` was added. The endpoint has to enforce exactly this — bind if
+    // unbound, refuse a different side, accept the same one — and a second implementation of
+    // "when is allegiance settled" is how this repository ended up with two gazetteers and two
+    // loot tables. One rule, one implementation, two callers.
+    //
+    // What that service does that this block used to spell out: the write is a conditional
+    // update, not a save. Two first-ever battles declaring different factions both read
+    // `faction == null` and both wrote; the second won, so one of the two accounts fought a
+    // whole battle for a side it was not, in the end, on. The filter makes the binding itself
+    // the claim, and the loser takes the mismatch branch — which is what a second request
+    // naming a different faction is supposed to get anyway.
+    await bindFaction(volunteerId, volunteerFaction);
 
     // Strict mode closes the remote-capture bypass: coordinates mandatory.
     if (env.REQUIRE_GEOFENCE && !coordinates) {

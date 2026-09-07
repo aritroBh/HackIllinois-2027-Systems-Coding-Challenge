@@ -40,10 +40,12 @@ import { SOSTicket, SOSTicketStatus } from '../../models/sosTicket.model';
 import { QuestService } from '../../services/quest.service';
 import { StickerService } from '../../services/sticker.service';
 import { AuthService } from '../../services/auth.service';
+import { bindFaction, playableFactions } from '../../services/faction.service';
 import { presenceService } from '../../presence/service';
 import { presenceStore } from '../../presence/store';
 import { dropSseSession } from '../../presence/sseTransport';
 import { patchPresencePrefSchema } from '../../schemas/presence.schema';
+import { chooseFactionSchema } from '../../schemas/volunteer.schema';
 import { validate } from '../../middleware/validate';
 import { ApiError } from '../../common/errors/apiError';
 import { ErrorCode } from '../../common/errors/errorCodes';
@@ -91,6 +93,53 @@ meRouter.get('/', requireAccount, async (req: Request, res: Response, next: Next
  * one-request way to take any named person off the map, with no session and (because a
  * claimed identity is not a session) no CSRF check either.
  */
+/**
+ * Choose a side, once.
+ *
+ * The dashboard has had a faction picker since the game layer shipped, and it wrote nothing.
+ * `public/app.js` keeps `currentVolunteerFaction` in a module variable, defaults it to the first
+ * playable faction, and no endpoint existed to persist it — a comment beside it said so plainly.
+ * The visible consequence was two panels disagreeing about the same fact: the campus HUD said
+ * TEAM KERNEL while `GET /me/card` said NEUTRAL for the same account in the same second, and a
+ * reload silently moved you to whichever faction the pack happened to list first.
+ *
+ * Allegiance is chosen once and is then locked, which is not this route's rule — it is the rule
+ * `GymService` has always enforced, because the client names a faction on every battle request
+ * and without a lock one account could reinforce as an ally and attack as a rival at will. Both
+ * callers go through `bindFaction` so there is one implementation of "when is this settled".
+ *
+ * Idempotent on the same faction: asking again for the side you already hold answers 200 with
+ * `bound: false`, because a client retrying a request it is unsure landed must not be told it
+ * has done something wrong. A different faction is 409 `FACTION_ALLEGIANCE_LOCKED`.
+ *
+ * `requireSession`, not `requireAccount`. This writes to an account, and in `legacy` mode a
+ * caller-asserted `?volunteerId=` satisfies `requireAccount` — which would let anyone bind a
+ * stranger to a faction for the rest of the event, permanently, since the choice cannot be
+ * undone. That is the same class of hole as the presence toggle and the avatar moderation
+ * routes, and it gets the same gate.
+ */
+meRouter.patch('/faction', requireSession, requireAccount, validate(chooseFactionSchema), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await bindFaction(req.account!.id, req.body.faction);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * The faction ids this event actually has, for a picker that should not hard-code them.
+ *
+ * Open to any signed-in account and deliberately dull: it is the pack's own `factions.json`
+ * minus NEUTRAL, which the client already fetches wholesale from `/api/v1/content`. It exists so
+ * a client can render the picker without knowing which pack it is talking to.
+ */
+meRouter.get('/faction/options', requireAccount, (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: { factions: playableFactions() } });
+});
+
 meRouter.patch('/presence', requireSession, requireAccount, validate(patchPresencePrefSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.account!.id;
