@@ -50,6 +50,19 @@
 
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /**
+   * The geofence the desk scanner will actually apply, from the pack.
+   *
+   * This sentence quoted a literal 75 while the server resolved the number from
+   * `campus.geofenceMeters`. A pack that widens or narrows the fence would have left this
+   * panel telling a volunteer to stand somewhere the scanner does not agree with — and the
+   * copy is the only place the rule is stated to the person it applies to.
+   */
+  const geofenceMetres = () => {
+    const m = Number(N.content?.event?.campus?.geofenceMeters);
+    return Number.isFinite(m) && m > 0 ? m : 75;
+  };
+
   /** SIEBEL_GUARDIAN -> "Siebel Guardian". The card printed the raw enum before. */
   const humanise = (v) => String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
 
@@ -339,7 +352,7 @@
           <div>
             <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
             <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
-            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within 75 m of the venue, so mint it once you are there.</p>
+            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres()} m of the venue, so mint it once you are there.</p>
             ${state.tokenError ? `<div class="ob-status is-err">${esc(state.tokenError)}</div>` : ''}
           </div>
         </div>

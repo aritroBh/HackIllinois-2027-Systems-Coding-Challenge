@@ -2189,6 +2189,15 @@ async function init() {
     applyFactions(content?.factions);
     applyBranding(content);
   }).catch((err) => console.warn('Content pack not applied:', err.message));
+  // Branding again on every `content`, so the strings stay with the pack.
+  //
+  // `applyBranding` writes the geofence into three `data-brand` spans, and `game.js` and
+  // `views/me.js` now take the same number from the same place. Those two follow the event;
+  // this ran once and did not, so a re-settled pack would have left three spans quoting a
+  // radius the rest of the page had stopped using. Branding only sets text and is safe to
+  // repeat; `applyFactions` is not — it rebuilds the faction table and the picker, which
+  // would undo a bound allegiance — so only this half re-runs.
+  Nexus.onEvent('content', (content) => applyBranding(content));
   loadMonumentInfo(); // independent of the API; no need to await
   hydrateSprites();
   window.Sprites?.ready.then(() => hydrateSprites()).catch(() => {});

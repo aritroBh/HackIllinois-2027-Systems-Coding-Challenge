@@ -21,7 +21,27 @@
   const STICKER_KEY = 'nexus.stickers.v1';
   // Walk-mode persistence lives in `state.flags.__walk` (saved with the
   // stickers); the old separate `nexus.walk.v1` key was never read.
-  const PROX_RADIUS = 75;
+  /**
+   * How close you have to be to spin, in metres — the pack's number, not ours.
+   *
+   * The server stopped hardcoding this: `geofenceMetersFor()` resolves a venue's own
+   * `radiusMeters`, then `campus.geofenceMeters`, then 75. A client holding its own literal
+   * 75 is a second copy of a rule that can now move, and it fails in both directions. A pack
+   * widening the fence to 120 leaves every Spin button disabled between 75 m and 120 m for a
+   * server that would have accepted — an entitled user losing the feature silently. A pack
+   * narrowing it to 50 enables the button from 75 m in, so it posts and is refused, which is
+   * the labelled-control-that-always-fails shape this dashboard has spent the round removing.
+   *
+   * `let`, because the pack arrives after this file is parsed. 75 is the same fallback the
+   * server uses when a pack says nothing, so the two agree before the descriptor lands as
+   * well as after.
+   *
+   * **Campus-level only.** Per-venue `radiusMeters` is resolved server-side but is not in the
+   * client descriptor, so a pack that widens one venue and not the campus still gates that
+   * venue at the campus number here. That is under-permissive — the server is the authority
+   * and will accept the spin — but the button will say "walk closer" when it need not.
+   */
+  let PROX_RADIUS = 75;
 
   const state = {
     name: 'Trainer',
@@ -910,8 +930,20 @@
    * Init + delegated actions
    * ------------------------------------------------------------------ */
 
+  /** Take the pack's geofence, and re-gate anything already drawn against the old one. */
+  function applyGeofence(content) {
+    const m = Number(content?.event?.campus?.geofenceMeters);
+    if (!Number.isFinite(m) || m <= 0 || m === PROX_RADIUS) return;
+    PROX_RADIUS = m;
+    if (has('setProximityRadius')) window.campus.setProximityRadius(PROX_RADIUS);
+    gateSpins();
+    updateHud(true);
+  }
+
   async function init() {
     await window.Sprites?.ready;
+    applyGeofence(window.Nexus?.content);
+    window.Nexus?.onEvent?.('content', applyGeofence);
     try {
       const A = await avatar();
       const saved = await A.loadAvatar();
@@ -1008,7 +1040,9 @@
     state, init, renderTrainer, computeEarned, award, toast, tick,
     // The spin geofence, so `lite.js` reports the same radius rather than keeping its own
     // copy of the number. The server enforces it either way; this is what the UI promises.
-    PROX_RADIUS,
+    // A getter, not a snapshot: `lite.js` reads this through `window.game`, and the value
+    // changes when the content pack settles.
+    get PROX_RADIUS() { return PROX_RADIUS; },
     gateSpins,
     /**
      * Stop the GPS watch, if one is running. Returns whether there was one.

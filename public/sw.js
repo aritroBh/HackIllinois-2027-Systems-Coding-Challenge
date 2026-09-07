@@ -76,7 +76,9 @@
   // `v26`: gym defender counts read the projected `defenderCount`, so the compatibility shim
   //        on the server side can go.
   // `v27`: the defenders array is gone from the wire, so the fallback that read it is gone too.
-  const VERSION = 'v27';
+  // `v28`: the spin geofence comes from the pack now that the server resolves it, instead of
+  //        a client-side literal 75 that could disagree with the server in either direction.
+  const VERSION = 'v29';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
