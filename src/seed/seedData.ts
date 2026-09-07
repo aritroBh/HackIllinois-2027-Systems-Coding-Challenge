@@ -30,6 +30,7 @@ import { ShiftSwap, SwapStatus } from '../models/swap.model';
 import { Gym, Faction } from '../models/gym.model';
 import { HackStop } from '../models/hackstop.model';
 import { pack } from '../content/loader';
+import { geofenceMetersFor } from '../common/utils/geofence';
 
 export async function seedDatabase(): Promise<void> {
   // ponytail: seed wipes every collection — refuse against a real database unless
@@ -435,7 +436,14 @@ export async function seedDatabase(): Promise<void> {
       latitude: pack.venues[b.venue].latitude,
       longitude: pack.venues[b.venue].longitude,
       cooldownSeconds: 300,
-      geofenceRadiusMeters: 75,
+      // The beacon's own radius, then its venue's, then the campus default.
+      //
+      // `beacons.json`'s `_about` has promised "the pack's geofence radius unless overridden"
+      // since it was written, and there was no override path: this line was a literal 75, so a
+      // fork widening a beacon for a large atrium got refusals from players standing inside the
+      // radius it had set. `spinBeacon` already reads this column off the document — the column
+      // was simply never given the pack's number.
+      geofenceRadiusMeters: b.radiusMeters ?? geofenceMetersFor(b.venue),
     }))
   );
 

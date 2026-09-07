@@ -27,7 +27,7 @@ Nothing travels in the query string. A failure answers 401 or 403 on the raw soc
 
 In order, and each for a reason:
 
-- **opt-in** — off by default, and symmetric: while it is off you neither publish nor receive.
+- **opt-in** — off by default, and symmetric *on the map*: while it is off you neither publish nor receive a frame. It is not symmetric for a lead's audited reads. `GET /api/v1/presence` (`src/routes/v1/presence.routes.ts`) gates on `requireSession` and `requireRole('SHIFT_LEAD')` and checks nothing about the reader's own preference; the shift roster behaves the same way. So an opted-out lead is invisible on the map and still reads exact positions over HTTP, once per five seconds, with an audit row per call. That is intended — a lead has to be able to find somebody in an emergency whether or not they want their own dot drawn — but it is a second asymmetry, and this list previously named only the roster.
 - **campus bbox** — a fix outside the pack's bounding box is refused, so nobody appears from another city.
 - **accuracy** — over 50 m the sample is dropped with no penalty. Indoor GPS is routinely 50-100 m, and a dropped sample already costs the sender everything: they stay invisible. Someone reporting a fake accuracy to dodge the speed check simply never appears.
 - **rate** — one accepted sample every 2 s.

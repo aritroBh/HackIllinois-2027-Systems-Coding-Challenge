@@ -259,7 +259,7 @@ export const swaggerDocument = {
         ],
         responses: {
           200: { description: 'Matching registrations' },
-          422: { description: 'Validation failed' },
+          400: { description: 'Validation failed' },
         },
       },
       post: {
@@ -656,7 +656,7 @@ export const swaggerDocument = {
         responses: {
           201: { description: 'Volunteer created' },
           409: { description: 'Email already registered' },
-          422: { description: 'Validation failed' },
+          400: { description: 'Validation failed' },
         },
       },
     },

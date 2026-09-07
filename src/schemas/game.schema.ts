@@ -8,7 +8,7 @@
  *
  * `code` is bounded but not shaped. It is typed off a sign by someone who has been awake for
  * a day and a half, so separators and casing reach the service, which normalises them; a
- * strict pattern here would turn a hyphen into a 422 instead of a scan.
+ * strict pattern here would turn a hyphen into a 400 instead of a scan.
  */
 import { z } from 'zod';
 import { objectId } from './common';

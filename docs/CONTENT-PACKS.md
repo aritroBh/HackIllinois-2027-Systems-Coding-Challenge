@@ -2,14 +2,19 @@
 
 A pack is a directory of JSON files describing one event on one campus. The server reads
 `${CONTENT_DIR}/${CONTENT_PACK}` once at import, validates it, and exports a typed `pack`
-object; most of `src/` hardcodes no building, faction or colour. There are three exceptions,
-and a fork meets all three: the venue gazetteer in `src/common/utils/geo.ts`, which check-in
-geofencing reads instead of the pack (see docs/FORK_GUIDE.md); `src/seed/seedData.ts`, which
-seeds the territory gyms and the HackStop beacons from its own inline lists rather than from
-`territories.json` and `beacons.json`; and `src/services/hackstop.service.ts`, which rolls
-spins against a literal drop table rather than `loot.json`. Each is flagged again beside the
-file it shadows. `CONTENT_DIR` defaults to `<repo>/content` and `CONTENT_PACK` to
-`hackillinois-2027`.
+object, and `src/` hardcodes no building, faction or colour. That is now enforced rather than
+asserted: `npm run pack:check` loads the active pack, takes every string that is that event's
+content, and fails if any of it appears in `src/`.
+
+Three exceptions used to be listed here and a fork met all three — the venue gazetteer in
+`src/common/utils/geo.ts` that check-in geofencing read instead of the pack, `src/seed/seedData.ts`
+seeding gyms and beacons from inline lists, and `src/services/hackstop.service.ts` rolling spins
+against a literal drop table. All three are closed. `geo.ts` derives from `pack.venues`, the seed
+reads `pack.territories` and `pack.beacons`, and `src/economy/lootTable.ts` builds the drop table
+from `pack.loot`. What remains is enumerated with a reason each in
+`scripts/pack-driven-baseline.json`, and the gate refuses anything new.
+
+`CONTENT_DIR` defaults to `<repo>/content` and `CONTENT_PACK` to `hackillinois-2027`.
 
 The contract is `src/content/schema.ts`. This page explains it. Where the two disagree, the
 schema is right.
@@ -66,12 +71,16 @@ work in it:
   (footways, lamps) is baked. Both are optional; `detailBbox` defaults to `coreBbox`.
 * `metersPerUnit` is the world scale. `10` is what the renderer is tuned for.
 * `vscale` exaggerates height (default `2.6`).
-* `geofenceMeters` is the default capture radius (default `75`). **Declared but not
-  enforced:** the check-in geofence (`checkin.service.ts`) and gym capture (`gym.service.ts`)
-  both use a hard-coded `75`. The one thing that does read it is the dashboard, which prints
-  it as the campus geofence figure, so setting it to anything but `75` today changes the
-  number on the screen and not the distance the server enforces — which is worse than being
-  ignored.
+* `geofenceMeters` is the campus-wide capture radius (default `75`), and it **is** enforced:
+  check-in and gym capture both measure against it, and the dashboard prints the same number,
+  so the figure on the screen is the distance the server applies. A venue's own `radiusMeters`
+  overrides it for that venue; gyms use the campus value, because a gym document stores
+  coordinates and no venue key.
+
+  It was declared and not enforced for a long time, with `checkin.service.ts` and
+  `gym.service.ts` each carrying a hard-coded `75` while the dashboard read the pack — so
+  setting it to anything else changed the number on the screen and not the distance enforced,
+  which is worse than being ignored.
 
 `branding.palette` is a map of names to `#rrggbb`. Five keys reach the UI: `orange`,
 `blue`, `patina`, `harvest` and `prairie`; `orangeDk` is derived from `orange` unless you
@@ -98,8 +107,10 @@ A flat map of venue key to venue. This is the gazetteer, and every other file re
 
 Keys are `SCREAMING_SNAKE_CASE`. `hints` are the uppercase fragments that let a free-text
 venue name resolve to this key, so put the abbreviations people actually type in there.
-`radiusMeters` is declared for a large or awkward building, but **nothing reads it yet** —
-see the note on `geofenceMeters` above.
+`radiusMeters` widens or narrows the geofence for one building, and it is read: check-in
+resolves a shift's location to a venue key and measures against that venue's radius. Precedence
+is venue, then `event.campus.geofenceMeters`, then 75 — specific beats general. Set it for the
+arena you hold the opening ceremony in and leave the rest alone.
 
 Rejected: a key that is not `SCREAMING_SNAKE_CASE`, a venue entry that is a string rather
 than an object, an underscore key whose value is not a string, a latitude or longitude out
@@ -134,33 +145,47 @@ and `hqVenue` is optional but must exist when present.
 `monument` and the `faction` that starts holding it, plus `cp` (current control points),
 `max` and `level`. `cp` may not exceed `max`.
 
-**Nothing seeds from this file.** `src/seed/seedData.ts` builds the gyms from an inline
-`TERRITORIES` array against the hard-coded gazetteer in `src/common/utils/geo.ts`, and never
-imports the pack. The shipped pack and the seed agree only because both were written by hand
-and kept in step; a fork that edits this file gets a validated pack and the HackIllinois gyms.
-Editing the seed is the second half of the job.
+**This file seeds the gyms.** `src/seed/seedData.ts` reads `pack.territories` and takes each
+gym's coordinates from `pack.venues[venue]`, so editing this file is the whole job — there is no
+second half. It did have one: the seed used to build the gyms from an inline `TERRITORIES` array
+against a hard-coded gazetteer, and the shipped pack and the seed agreed only because both were
+written by hand and kept in step, so a fork that edited this file got a validated pack and the
+HackIllinois gyms anyway.
 
 ## beacons.json
 
 `{ "beacons": [ … ] }`, the HackStops people spin. `id` is `SCREAMING_SNAKE_CASE` and must be
-unique across the file, `venue` must exist, and `radiusMeters` is declared here too and is
-**not read at all**; seeded HackStops carry a hard-coded 75 m radius on the document, which is
-what `hackstop.service.ts` checks. The same caveat as `territories.json` applies to the list
-itself: `seedData.ts` has its own `BEACONS` array, so this file is validated and then unused.
+unique across the file, `venue` must exist, and `radiusMeters` overrides the radius for this
+beacon alone — falling back to the venue's, then the campus default. The seed writes the
+resolved number onto the HackStop document as `geofenceRadiusMeters`, which is what
+`hackstop.service.ts` checks on every spin. `seedData.ts` creates one HackStop per entry here,
+at the venue's coordinates.
+
+Note the consequence of the radius being *seeded* rather than read live: changing it in the pack
+takes effect on the next seed, not on the next spin.
 
 ## loot.json
 
-The spin table the server does not roll against. `karmaMin` and `karmaMax` are checked for
-`karmaMin <= karmaMax`, `items` must hold at least one `{type, weight}`, and `type` is checked
-for shape only — nothing compares it with the power-up enum, so a misspelt item is a clean
-boot.
+The spin table. `karmaMin` and `karmaMax` are checked for `karmaMin <= karmaMax`, and `items`
+must hold at least one `{type, weight}`.
 
-**Declared and read by nobody.** `HackStopService.spinBeacon` rolls against a literal weight
-array in `src/services/hackstop.service.ts` and pays `25–49` karma plus the item's own bonus,
-both written in code; `pack.loot` reaches only the `content:validate` summary line.
-`src/models/powerup.model.ts` says the same thing beside the catalog it belongs to. The
-shipped `loot.json` carries exactly the numbers the code uses, which is why the gap is
-invisible until a fork changes one.
+**This is the table the server rolls against.** `src/economy/lootTable.ts` builds it from
+`pack.loot` at boot and `HackStopService.spinBeacon` calls into it, so the weights here decide
+the odds and `karmaMin`/`karmaMax` decide the payout band. Weights are **relative** — they are
+normalised against their own total, so they need not add to 100 and any set of positive numbers
+is a valid table.
+
+An item `type` the power-up catalogue does not price **refuses the boot**, naming the unknown
+type and listing the known ones. It used to be shape-checked only, which made a misspelt item a
+clean boot and a crash inside one unlucky player's spin.
+
+The pack chooses the odds; `POWER_UP_CATALOG` in `src/models/powerup.model.ts` chooses what each
+item is called and what it pays. That split is deliberate: a pack is public, served to every
+browser under `/dashboard/content`, and `karmaBonus` is money.
+
+This file used to be read by nobody while the service rolled against a literal array holding the
+same five items at the same five weights — the two agreed by coincidence, so the gap was
+invisible until a fork changed one.
 
 ## memorabilia.json
 

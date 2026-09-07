@@ -43,12 +43,15 @@ export interface IPowerUpItemMeta {
  * Item definitions, in code rather than in the content pack — the one part of the game layer
  * that is not pack-driven.
  *
- * There is an argument for that — `karmaBonus` is money, and a pack is public, served to
- * every browser under `/dashboard/content` — but be honest that it is not a decision anyone
- * carried through. The pack has a `loot.json` with weights in it, and nothing reads it: the
- * drop table `HackStopService` actually rolls against is a literal array inside that service,
- * and `pack.loot` is validated at boot and then used for nothing. So the game's odds and its
- * prices are both in code, and one of them has a pack file that looks like it is in charge.
+ * The reason is that `karmaBonus` is money, and a pack is public — served to every browser under
+ * `/dashboard/content`. So the split is: the pack chooses the **odds** (`loot.json`, read by
+ * `src/economy/lootTable.ts`), and this file chooses the **prices**. The join between them is
+ * the `type` string, and a pack naming a type this catalogue does not hold refuses the boot.
+ *
+ * That split was not always a decision. Until recently `pack.loot` was validated and read by
+ * nothing while `HackStopService` rolled against a literal array holding the same five items at
+ * the same five weights — odds and prices both in code, with a pack file that looked like it was
+ * in charge of one of them.
  *
  * `Record<PowerUpType, …>` is load-bearing: a new member of the enum fails the build here
  * until it is priced, so an item cannot reach a player's inventory with no definition behind

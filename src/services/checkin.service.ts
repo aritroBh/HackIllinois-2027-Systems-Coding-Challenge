@@ -62,6 +62,7 @@ import { Volunteer } from '../models/volunteer.model';
 import { DynamicQrTokenEngine, IVerificationResult } from '../common/utils/crypto';
 import { SurgePricingEngine } from '../common/utils/surgePricing';
 import { GeoEngine, resolveVenue } from '../common/utils/geo';
+import { geofenceMetersFor } from '../common/utils/geofence';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
@@ -217,15 +218,24 @@ export class CheckInService {
           code: ErrorCode.MISSING_REQUIRED_FIELD,
         });
       }
-      const geoCheck = GeoEngine.isWithinGeofence(userCoordinates, venue.coordinates, 75);
+      // The radius is the venue's, not a literal. `venues.<KEY>.radiusMeters` overrides
+      // `event.campus.geofenceMeters`, which overrides 75 — see `common/utils/geofence.ts`. Both
+      // pack fields were parsed and documented as overrides and read by nothing until now, so a
+      // fork with a large venue set the number the docs told it to and its volunteers were still
+      // refused at 75 m.
+      const radiusMeters = geofenceMetersFor(venue.key);
+      const geoCheck = GeoEngine.isWithinGeofence(userCoordinates, venue.coordinates, radiusMeters);
       geofenceStatus = {
         distanceMeters: geoCheck.distanceMeters,
         maxAllowedMeters: geoCheck.maxRadiusMeters,
         passed: geoCheck.allowed,
       };
       if (!geoCheck.allowed) {
+        // The message quotes the radius actually applied. It used to say "Max allowed: 75m"
+        // regardless, so a fork that had widened a venue was told a number that was not the one
+        // it was being measured against.
         throw ApiError.forbidden(
-          `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: 75m). Move closer to the check-in terminal.`
+          `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: ${geoCheck.maxRadiusMeters}m). Move closer to the check-in terminal.`
         );
       }
     }

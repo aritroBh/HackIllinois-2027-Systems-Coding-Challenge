@@ -64,16 +64,27 @@ class SsePresenceClient implements PresenceClient {
   }
 
   /**
-   * Unregister the session. There is no connection to hang up, so this is the whole of it.
+   * Unregister the session and forget the client. There is no connection to hang up.
    *
-   * It does not remove the client from `byAccount` — only `dropSseSession` and the sweep do
-   * that. A close arriving from the service side therefore leaves this object cached under its
-   * account: `presenceService.stop()` at shutdown and the revoked-session eviction in
-   * `evictRevoked` both call this directly rather than going through `dropSseSession`, and the
-   * next `ensureSseSession` then hands the cached client back without registering a session
-   * for it.
+   * The `byAccount` delete is the important half and it used to be missing. Only
+   * `dropSseSession` and the idle sweep removed the cache entry, but two callers reach `close()`
+   * directly — `presenceService.stop()` at shutdown, and `evictRevoked` when a session's
+   * `sessionVersion` moves under it. Either left this object cached under its account with no
+   * session behind it, and `ensureSseSession` then found the cached client, refreshed
+   * `lastPostAt`, and returned it **without registering a session**.
+   *
+   * The result was a presence leg that was permanently, silently dead. The account's
+   * `POST /api/v1/presence` calls kept succeeding, `lastPostAt` kept being refreshed so the idle
+   * sweep never reaped it, and no frame ever arrived again — for the rest of the process's life.
+   * The person it happened to is someone whose session was revoked and who then signed back in,
+   * which is precisely the handover path the revocation exists to serve.
+   *
+   * The identity check matters: a newer session for the same account may already have replaced
+   * this client in the map, and deleting unconditionally would evict the live one on the old
+   * one's way out.
    */
   close(): void {
+    if (byAccount.get(this.account.id) === this) byAccount.delete(this.account.id);
     presenceService.remove(this.id);
   }
 }

@@ -58,7 +58,9 @@ export class ApiError extends Error {
 
   /** One caller only, `middleware/validate.ts`, turning a `ZodError` into one
    *  `{field, message, rule}` entry per failed check so a client can point at the offending
-   *  input rather than guess. A 400, whatever the Swagger document says about 422. */
+   *  input rather than guess. A 400 — and the Swagger document now says so too; it documented
+   *  422 on two operations for a long time, which would have made a generated client miss every
+   *  validation failure the server actually returns. */
   public static validationError(message: string, details?: Array<unknown>): ApiError {
     return new ApiError(400, ErrorCode.VALIDATION_ERROR, message, details);
   }

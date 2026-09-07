@@ -65,6 +65,37 @@ export interface ICreateSwapDTO {
   desiredShiftIds?: string[];
 }
 
+/**
+ * Mark a swap FAILED **only while it is still pending**.
+ *
+ * The two failure paths in `acceptBilateralSwap` used to do `swap.status = FAILED` followed by
+ * `swap.save()`, on a document read at the very top of the method, before any of the checks. A
+ * Mongoose `save()` writes the whole document from that in-memory copy, so the write was
+ * unconditional on what had happened to the row in between.
+ *
+ * That is losable. Two coordinators accept the same PENDING proposal: X wins, its transaction
+ * rotates both registrations and CASes the swap to EXECUTED. Y, still holding the copy it read
+ * as PENDING, now finds `regA` is no longer CONFIRMED — because X moved it — takes the
+ * "no longer valid" branch, and saves FAILED over the EXECUTED row. The trade really happened;
+ * the record says it did not. Nothing downstream reconciles the two, so the swap ledger and the
+ * registrations disagree permanently, and the only trace of the real outcome is the
+ * `SWAP_EXECUTED` frame X already broadcast.
+ *
+ * Conditioning the write on `status: PENDING` makes the loser's write match nothing, which is
+ * correct: a swap that has moved on is not this caller's to describe. It matches the discipline
+ * everywhere else in this file — the executing path is already a CAS.
+ *
+ * Returns whether it claimed the transition, so a caller can tell "I failed it" from "somebody
+ * else had already finished it".
+ */
+async function failIfStillPending(swapId: Types.ObjectId, reason: string): Promise<boolean> {
+  const result = await ShiftSwap.updateOne(
+    { _id: swapId, status: SwapStatus.PENDING },
+    { $set: { status: SwapStatus.FAILED, failureReason: reason } }
+  );
+  return result.matchedCount > 0;
+}
+
 export class SwapService {
   /**
    * Record a proposal. Nothing moves yet.
@@ -190,10 +221,14 @@ export class SwapService {
     ]);
 
     if (!regA || !regB || !shiftA || !shiftB || !volA || !volB) {
-      swap.status = SwapStatus.FAILED;
-      swap.failureReason = 'One or more participating shifts or registrations are no longer valid.';
-      await swap.save();
-      throw ApiError.conflict(swap.failureReason, ErrorCode.SWAP_INVALID);
+      const reason = 'One or more participating shifts or registrations are no longer valid.';
+      // Conditional on the swap still being PENDING — see `failIfStillPending`. The most likely
+      // cause of a registration no longer being CONFIRMED is that a competing accept moved it a
+      // moment ago, which is exactly the case where this must not overwrite the outcome.
+      if (!(await failIfStillPending(swap._id as Types.ObjectId, reason))) {
+        throw ApiError.conflict('Swap was already settled by another coordinator.', ErrorCode.SWAP_CONFLICT);
+      }
+      throw ApiError.conflict(reason, ErrorCode.SWAP_INVALID);
     }
 
     // Check skills: volA needs shiftB.skills; volB needs shiftA.skills
@@ -253,10 +288,11 @@ export class SwapService {
       });
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      swap.status = SwapStatus.FAILED;
-      swap.failureReason = 'Swap transaction aborted due to a concurrent modification.';
-      await swap.save();
-      throw ApiError.conflict(swap.failureReason, ErrorCode.SWAP_CONFLICT);
+      const reason = 'Swap transaction aborted due to a concurrent modification.';
+      // Same guard as above, and for the same reason: an abort here is usually a competing
+      // accept committing first, so the row may already say EXECUTED.
+      await failIfStillPending(swap._id as Types.ObjectId, reason);
+      throw ApiError.conflict(reason, ErrorCode.SWAP_CONFLICT);
     } finally {
       await session.endSession();
     }

@@ -26,34 +26,36 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 import { pack } from '../content/loader';
 
 /**
- * Faction ids the *shipped* pack happens to declare, plus NEUTRAL.
+ * `NEUTRAL`, and nothing else.
  *
- * **This is a convenience, not the authority.** The authority is
- * `content/<pack>/factions.json`, and the only member of this enum a fork can rely on is
- * `NEUTRAL`, which `crossValidate` requires every pack to declare. Nothing in `src/` reads
- * `Faction.TEAM_KERNEL`, `Faction.TEAM_TENSOR` or `Faction.TEAM_SILICON` — checked, not
- * assumed — and the three exist only because `tests/` still names them. They should go when
- * those tests move to reading the pack, and until then they are the last event-specific strings
- * left in `src/`.
+ * This is not the set of factions — that is `content/<pack>/factions.json`, and every check that
+ * matters reads it: the Mongoose validator on `controllingFaction` below, and `assertPlayable`
+ * in `faction.service.ts`. `NEUTRAL` survives as a named constant because it is the one id the
+ * *protocol* requires — `crossValidate` refuses a pack that does not declare it — and because it
+ * means something structural (a territory nobody holds) rather than something an event chose.
  *
- * Reading this enum as the set of valid factions is what broke forks: `GymSchema` used to
- * validate `controllingFaction` against `Object.values(Faction)`, which rejected any faction a
- * pack declared that was not one of these three. See the comment on that field.
+ * It used to carry the shipped pack's three team ids as well, and they were read as the authority
+ * twice over: `GymSchema` validated `controllingFaction` against `Object.values(Faction)`, and
+ * `battleGymSchema` validated request bodies with `z.nativeEnum(Faction)`. Either one rejected a
+ * faction a fork's own pack declared. The second outlived the first by half a day, because a grep
+ * for `Faction.TEAM_` does not match `z.nativeEnum(Faction)` — the enum is read as an object, not
+ * by member — and a comment was written here claiming nothing in `src/` read those members.
+ * Literally true, materially wrong.
+ *
+ * **The lesson, if this enum ever grows again: ask what reads `Faction`, not what reads its
+ * members.**
  *
  * A volunteer's allegiance is bound on their first non-neutral battle and locked thereafter, so
- * one account cannot reinforce as an ally and attack as a rival.
+ * one account cannot reinforce as an ally and attack as a rival. `NEUTRAL` is refused there —
+ * it is the unclaimed state of a territory, not a side a person can be on.
  *
- * Ids only. **Colours, labels and HQ venues live in the pack**, which is what the map, the HUD
- * and the sticker tints read. These comments used to carry hex values and had gone stale — they
- * still named the pre-redesign palette (`#00F2FE`/`#FF007F`/`#FFB300`) while everything that
- * renders used the pack's. Duplicating a pack value in a source comment makes it a second source
- * of truth that nothing checks, so the theme is named here and the value is not.
+ * Ids only. Colours, labels and HQ venues live in the pack, which is what the map, the HUD and
+ * the sticker tints read. This comment used to carry hex values and they had gone stale, naming
+ * a pre-redesign palette while everything that renders used the pack's: duplicating a pack value
+ * in a source comment makes it a second source of truth that nothing checks.
  */
 export enum Faction {
-  TEAM_KERNEL = 'TEAM_KERNEL',   // Systems & Infrastructure. Shipped pack only; see above.
-  TEAM_TENSOR = 'TEAM_TENSOR',   // AI & ML. Shipped pack only.
-  TEAM_SILICON = 'TEAM_SILICON', // Hardware & Robotics. Shipped pack only.
-  NEUTRAL = 'NEUTRAL',           // Unclaimed. Required in every pack, per crossValidate.
+  NEUTRAL = 'NEUTRAL', // Unclaimed. Required in every pack, per crossValidate.
 }
 
 /**

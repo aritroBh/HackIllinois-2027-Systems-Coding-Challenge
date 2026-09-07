@@ -1,17 +1,77 @@
 {
-  "_about": "HackStop beacons. `venue` must be a key in venues.json; the beacon sits at the venue's coordinates with the pack's geofence radius unless overridden.",
+  "_about": "HackStop beacons. `venue` must be a key in venues.json; the beacon sits at that venue's coordinates. Radius precedence: this beacon's `radiusMeters`, then the venue's, then event.json's campus.geofenceMeters. The resolved number is written onto the HackStop document at seed time, so a change here takes effect on the next seed, not the next spin. Read by src/seed/seedData.ts.",
   "beacons": [
-    { "id": "BEACON_SIEBEL_ATRIUM", "name": "Siebel Cyber Fountain", "where": "Siebel Center Atrium", "venue": "SIEBEL_ATRIUM" },
-    { "id": "BEACON_SIEBEL_BASEMENT", "name": "Basement Solder Relic", "where": "Siebel Center Basement", "venue": "SIEBEL_BASEMENT" },
-    { "id": "BEACON_ECEB_LOBBY", "name": "ECEB Tesla Coil Relay", "where": "ECEB Main Lobby", "venue": "ECEB_LOBBY" },
-    { "id": "BEACON_KENNEY_GYM", "name": "Kenney Arena Supply Pod", "where": "Kenney Gym Central", "venue": "KENNEY_GYM" },
-    { "id": "BEACON_DCL_BRIDGE", "name": "DCL Nexus Transceiver", "where": "DCL Bridge Walkway", "venue": "DCL_BRIDGE" },
-    { "id": "BEACON_GRAINGER", "name": "Grainger Reading Cache", "where": "Grainger Library Rotunda", "venue": "GRAINGER_LIBRARY" },
-    { "id": "BEACON_ALMA_MATER", "name": "Alma Mater Reliquary", "where": "Green & Wright", "venue": "ALMA_MATER" },
-    { "id": "BEACON_UNION", "name": "Union Courtyard Dispenser", "where": "Illini Union Courtyard", "venue": "ILLINI_UNION" },
-    { "id": "BEACON_ALTGELD", "name": "Altgeld Chime Resonator", "where": "Altgeld Hall Steps", "venue": "ALTGELD_HALL" },
-    { "id": "BEACON_FOELLINGER", "name": "Foellinger Colonnade Drop", "where": "Foellinger Portico", "venue": "FOELLINGER_AUDITORIUM" },
-    { "id": "BEACON_KRANNERT", "name": "Krannert Stage Door Crate", "where": "Krannert Terrace", "venue": "KRANNERT_CENTER" },
-    { "id": "BEACON_STADIUM", "name": "Stadium Tunnel Locker", "where": "Memorial Stadium Gate 4", "venue": "MEMORIAL_STADIUM" }
+    {
+      "id": "BEACON_SIEBEL_ATRIUM",
+      "name": "Siebel Cyber Fountain",
+      "where": "Siebel Center Atrium",
+      "venue": "SIEBEL_ATRIUM"
+    },
+    {
+      "id": "BEACON_SIEBEL_BASEMENT",
+      "name": "Basement Solder Relic",
+      "where": "Siebel Center Basement",
+      "venue": "SIEBEL_BASEMENT"
+    },
+    {
+      "id": "BEACON_ECEB_LOBBY",
+      "name": "ECEB Tesla Coil Relay",
+      "where": "ECEB Main Lobby",
+      "venue": "ECEB_LOBBY"
+    },
+    {
+      "id": "BEACON_KENNEY_GYM",
+      "name": "Kenney Arena Supply Pod",
+      "where": "Kenney Gym Central",
+      "venue": "KENNEY_GYM"
+    },
+    {
+      "id": "BEACON_DCL_BRIDGE",
+      "name": "DCL Nexus Transceiver",
+      "where": "DCL Bridge Walkway",
+      "venue": "DCL_BRIDGE"
+    },
+    {
+      "id": "BEACON_GRAINGER",
+      "name": "Grainger Reading Cache",
+      "where": "Grainger Library Rotunda",
+      "venue": "GRAINGER_LIBRARY"
+    },
+    {
+      "id": "BEACON_ALMA_MATER",
+      "name": "Alma Mater Reliquary",
+      "where": "Green & Wright",
+      "venue": "ALMA_MATER"
+    },
+    {
+      "id": "BEACON_UNION",
+      "name": "Union Courtyard Dispenser",
+      "where": "Illini Union Courtyard",
+      "venue": "ILLINI_UNION"
+    },
+    {
+      "id": "BEACON_ALTGELD",
+      "name": "Altgeld Chime Resonator",
+      "where": "Altgeld Hall Steps",
+      "venue": "ALTGELD_HALL"
+    },
+    {
+      "id": "BEACON_FOELLINGER",
+      "name": "Foellinger Colonnade Drop",
+      "where": "Foellinger Portico",
+      "venue": "FOELLINGER_AUDITORIUM"
+    },
+    {
+      "id": "BEACON_KRANNERT",
+      "name": "Krannert Stage Door Crate",
+      "where": "Krannert Terrace",
+      "venue": "KRANNERT_CENTER"
+    },
+    {
+      "id": "BEACON_STADIUM",
+      "name": "Stadium Tunnel Locker",
+      "where": "Memorial Stadium Gate 4",
+      "venue": "MEMORIAL_STADIUM"
+    }
   ]
 }

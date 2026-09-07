@@ -19,11 +19,15 @@
  * Anything that needs a normalised header value should normalise it at the point of use.
  *
  * A `ZodError` becomes a **400** carrying per-field `{field, message, rule}` issues, so a
- * client can point at the offending input instead of guessing. (An earlier version of this
- * comment said 422; `ApiError.validationError` has always constructed a 400, and
- * `tests/shifts.test.ts` asserts it. `config/swagger.ts` still documents 422 on two
- * operations and is wrong about them.) Anything else is passed through untouched for the
- * error handler to classify.
+ * client can point at the offending input instead of guessing. Anything else is passed through
+ * untouched for the error handler to classify.
+ *
+ * The number has a history worth one sentence, because it was wrong in three places at once and
+ * they were fixed one at a time: an earlier version of this comment said 422, `config/swagger.ts`
+ * documented 422 on two operations, and `schemas/game.schema.ts` reasoned about a 422 branch.
+ * `ApiError.validationError` has always constructed a 400 and `tests/shifts.test.ts` has always
+ * asserted it. A generated client keyed on the documented 422 would have missed every real
+ * validation failure.
  */
 import { Request, Response, NextFunction } from 'express';
 import { AnyZodObject, ZodError } from 'zod';

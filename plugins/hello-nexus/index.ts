@@ -3,7 +3,12 @@
  *
  * It does one of each thing a plugin can do, and nothing else: one route, one hook, one
  * client tab. Copy this directory, rename it (the directory name is the plugin name), add
- * the export to `CATALOG` in `src/plugins/registry.ts`, and put the name in `PLUGINS`.
+ * the export to `CATALOG` in `src/plugins/registry.ts`, and list the name in your content pack's
+ * `event.json` under `plugins` — that last step is the activation.
+ *
+ * This used to say "put the name in `PLUGINS`". The environment variable now only *narrows* the
+ * pack's list, and a name in it that the pack does not declare refuses the boot, so following the
+ * old instruction on its own gets you a refusal rather than a plugin.
  *
  * Two patterns here are worth copying deliberately:
  *

@@ -21,14 +21,24 @@
  * both pass the cooldown check and pay twice. Battle effects still apply while the
  * cooldown is active; only the karma stops, so spamming changes the map but not the score.
  *
- * `REQUIRE_GEOFENCE` optionally requires GPS on a battle, closing remote capture. It is
- * off by default so the dashboard works without location permission, and it is the only
- * place in the codebase that flag has any effect.
+ * `REQUIRE_GEOFENCE` is the only place in the codebase that flag has any effect, and over HTTP
+ * it currently has none — which is worth stating plainly rather than leaving as a surprise.
+ * `battleGymSchema` makes `coordinates` unconditionally required, so Zod rejects a body without
+ * them before this service is entered, and the `if (env.REQUIRE_GEOFENCE && !coordinates)` check
+ * below can only be reached by a direct call from another service or a test. The remote-capture
+ * bypass it was written to close is already closed, one layer earlier and in every posture.
+ *
+ * The comment here used to say the flag was "off by default so the dashboard works without
+ * location permission". That has not been true since `coordinates` became required: a dashboard
+ * without location permission cannot battle at all, whatever the flag says. The check is kept
+ * because it is correct for the non-HTTP callers, and because making coordinates optional again
+ * is a decision somebody might take; it is not kept because it currently guards a request.
  */
 import { Gym, IGym, Faction } from '../models/gym.model';
 import { Volunteer } from '../models/volunteer.model';
 import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
 import { bindFaction } from './faction.service';
+import { geofenceMetersFor } from '../common/utils/geofence';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
@@ -87,20 +97,14 @@ export interface PublicGym {
   maxControlPoints: number;
   level: number;
   isShielded: boolean;
-  /** How many hold it. The honest replacement for counting the array. */
-  defenderCount: number;
   /**
-   * Length-preserving and empty.
+   * How many hold it, and the only thing about them that leaves the server.
    *
-   * A compatibility shim, kept deliberately rather than dropped: the two client call sites
-   * above count this array, and removing the field would have made every gym read "0 defending"
-   * in the window between this change and a matching client change owned by someone else.
-   * Entries are `{}` because every field of `IGymDefender` is either the person or their
-   * contribution, so there is nothing in one that survives redaction.
-   *
-   * Remove it once `public/app.js` counts `defenderCount` instead.
+   * There was briefly a `defenders` field alongside this — a length-preserving array of empty
+   * objects — so that a client counting `defenders.length` kept working across the change. Both
+   * call sites read `defenderCount` now, so the shim is gone.
    */
-  defenders: Record<string, never>[];
+  defenderCount: number;
 }
 
 export class GymService {
@@ -127,7 +131,6 @@ export class GymService {
       level: gym.level,
       isShielded: gym.isShielded,
       defenderCount: (gym.defenders ?? []).length,
-      defenders: (gym.defenders ?? []).map(() => ({}) as Record<string, never>),
     }));
   }
 
@@ -253,14 +256,24 @@ export class GymService {
       // Checked whenever coordinates are present, not only under REQUIRE_GEOFENCE: a client
       // that volunteers a position is held to it either way.
       if (coordinates) {
+        // The campus-wide radius from the pack, not a literal.
+        //
+        // Campus-wide rather than per-venue, and the reason is a real limit rather than a
+        // shortcut: a `Gym` document stores coordinates and no venue key, so there is nothing
+        // here to look a venue's own `radiusMeters` up by. `territories.json` does name a venue
+        // per gym, so carrying it onto the document would make per-gym radii possible — that is
+        // a schema change and a migration, not a line here, and it is worth doing only if an
+        // event actually has a landmark that needs a different radius from its campus default.
+        const radiusMeters = geofenceMetersFor();
         const geoCheck = GeoEngine.isWithinGeofence(
           coordinates,
           { latitude: gym.latitude, longitude: gym.longitude },
-          75
+          radiusMeters
         );
         if (!geoCheck.allowed) {
+          // Quotes the radius applied, not a literal that may disagree with it.
           throw ApiError.forbidden(
-            `Out of range: You are ${geoCheck.distanceMeters}m from ${gym.name}. Must be within 75m to contest this Gym.`
+            `Out of range: You are ${geoCheck.distanceMeters}m from ${gym.name}. Must be within ${geoCheck.maxRadiusMeters}m to contest this Gym.`
           );
         }
       }

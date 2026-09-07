@@ -177,3 +177,31 @@ geofence radius against how many honest check-ins it rejects at each venue.
 | What does `AUTH_MODE=legacy` permit, exactly? | `docs/IDENTITY.md` |
 | Who can read whose position? | `docs/PRESENCE.md` |
 | What should an operator watch? | `docs/DEPLOYMENT.md` |
+
+## Checkout writes badges that no ledger row backs
+
+`StickerService` is documented — in `docs/DATA-MODEL.md`, in `src/models/stickerLedger.model.ts`
+and in the service's own header — as the only way a row enters the sticker book, with
+`Volunteer.badges` as the denormalised copy and `StickerLedger` as the auditable record behind
+it. That invariant is what makes an award reconstructable and a duplicate detectable.
+
+`CheckInService.checkOut` does not go through it. On a check-out between 02:00 and 05:00 UTC, or
+one whose surge multiplier reached 3.0, it pushes a string straight into `Volunteer.badges` with
+`$addToSet` and writes no ledger row at all. Two consequences, and the second is the worse one:
+
+- **The audit trail has holes by construction.** A badge earned this way cannot be dated,
+  attributed, or explained, and an audit that reconciles `badges` against `StickerLedger` will
+  always show a discrepancy that is not a bug in the audit.
+- **The strings are not stickers.** `MIDNIGHT_KRAKEN` and `SIEBEL_GUARDIAN` are `PrestigeTier`
+  members, not ids from `memorabilia.json`. So the badge array mixes two vocabularies — earned
+  sticker ids and prestige-tier names — and anything rendering it has to know both. The seed
+  writes tier names into `badges` as well, which is where the pattern came from.
+
+Not fixed here because it is a data-model decision rather than a defect with an obvious repair:
+either those two become real memorabilia entries awarded through `StickerService`, or `badges`
+is formally two fields. Both change what the offline card and the leaderboard read, and both
+want the owner's agreement first. Recorded rather than left for the next reader to rediscover.
+
+The hour comparison is also in UTC while the karma ledger, the quest windows and the surge curve
+all read `pack.event.timezone`, so "2 a.m. to 5 a.m." is 8 p.m. to 11 p.m. at a Chicago event —
+the same defect that was fixed in `surgePricing.ts`, still present here.

@@ -13,7 +13,27 @@
  * original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
  */
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
 import { KARMA_SOURCES } from '../common/karmaSources';
+import { POWER_UP_CATALOG } from '../models/powerup.model';
+import { REPO_ROOT } from '../common/utils/repoRoot';
+
+/**
+ * The running server's version, read from `package.json` once at import.
+ *
+ * Read rather than hard-coded so it cannot drift from the number a release actually ships as —
+ * a version gate whose idea of "this server" is a stale literal is worse than no gate. Falls
+ * back to `0.0.0` if the file cannot be read, which fails *closed*: every pack then looks newer
+ * and is refused, loudly, rather than every pack silently passing.
+ */
+export const SERVER_VERSION: string = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 // A tuple rather than `{ lat, lng }` because that is how these appear in the JSON and in the
 // baked model, and because a tuple cannot be silently transposed by a key typo the way an
@@ -35,9 +55,11 @@ const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
  * anything else fails to parse and the server refuses to boot, rather than reading a future
  * format with today's field names.
  *
- * `minServerVersion` is **not** a gate. It is required and shaped as a string and nothing
- * anywhere compares it to anything, so a pack can demand a server it will happily run against
- * an older one. It is documentation until something reads it.
+ * `minServerVersion` **is** a gate. `crossValidate` compares it against the server's own version
+ * from `package.json` and refuses a pack that demands a newer server than the one about to run
+ * it. It was not a gate for a long time — required, shaped as a string, and compared to nothing,
+ * so a pack could demand a server it would then happily run against an older one, which is the
+ * one kind of mismatch on this page that failed silently instead of at boot.
  *
  * Most of the nested defaults exist so `example-campus` — a fork's starting point — is short.
  * The two blocks where a default is a *decision* rather than a convenience are `presence`
@@ -193,11 +215,16 @@ export const factionsSchema = z.object({ _about: z.string().optional(), factions
  * The intended starting state of one gym — which faction holds it, at how many control points,
  * against which monument.
  *
- * Be clear about what reads it, because the answer is nothing. `crossValidate` checks that
- * every territory names a real venue, monument and faction and that `cp <= max`, and that is
- * the whole of its effect: `src/seed/seedData.ts` creates the fourteen gyms from its own
- * hard-coded array rather than from `pack.territories`. So a fork can edit this file, watch it
- * validate, and get the shipped territories anyway. Same for `beacons.json` below.
+ * `src/seed/seedData.ts` reads `pack.territories` and creates one gym per entry, taking each
+ * one's coordinates from `pack.venues[venue]`. `crossValidate` is what makes that safe to do
+ * without further checks: it has already confirmed that every territory names a real venue, a
+ * real monument and a real faction, and that `cp <= max`.
+ *
+ * This comment used to say the answer was nothing, and it was right at the time — the seed built
+ * fourteen gyms from a hard-coded array, so a fork could edit this file, watch it validate, and
+ * get the shipped territories anyway. The fix landed and the sentence outlived it, which is the
+ * defect this repository produces most; it was found by an external reviewer reading the fix and
+ * the prose beside it in the same pass.
  */
 export const territorySchema = z.object({
   name: z.string().min(1),
@@ -212,8 +239,8 @@ export const territorySchema = z.object({
 export const territoriesSchema = z.object({ _about: z.string().optional(), territories: z.array(territorySchema) });
 
 /**
- * A HackStop's placement. Cross-referenced against the gazetteer and checked for a duplicate
- * id, and — like territories above — not what the seeder actually creates beacons from.
+ * A HackStop's placement. Cross-referenced against the pack's venues and checked for a duplicate
+ * id, and — like territories above — exactly what the seeder creates beacons from.
  */
 export const beaconSchema = z.object({
   id: z.string().regex(/^[A-Z0-9_]+$/),
@@ -225,12 +252,18 @@ export const beaconSchema = z.object({
 export const beaconsSchema = z.object({ _about: z.string().optional(), beacons: z.array(beaconSchema) });
 
 /**
- * The drop table — declared, validated, and read by nothing.
+ * The drop table the server actually rolls against.
  *
- * `crossValidate` checks `karmaMin <= karmaMax` and that is the whole of its effect on the
- * running system: `HackStopService` rolls against a weight table written inside the service,
- * and `pack.loot` is never consulted. Stated plainly here because a pack file that looks like
- * it controls the economy and does not is worse than one that is absent.
+ * `src/economy/lootTable.ts` builds it from `pack.loot` at import and `HackStopService` calls
+ * into that, so the weights here decide the odds and `karmaMin`/`karmaMax` decide the payout
+ * band. Weights are relative and are normalised against their own total, so they need not sum
+ * to any particular number.
+ *
+ * `crossValidate` checks `karmaMin <= karmaMax`; `lootTable.ts` additionally refuses to boot on
+ * an item `type` that `POWER_UP_CATALOG` does not price, which used to be a crash inside one
+ * unlucky player's spin instead.
+ *
+ * This said "declared, validated, and read by nothing" until the day it stopped being true.
  */
 export const lootSchema = z.object({
   _about: z.string().optional(),
@@ -326,6 +359,35 @@ export interface PackIssue {
 /** Cross-reference checks that Zod cannot express file-by-file. */
 export function crossValidate(pack: Omit<ContentPack, 'factionIds' | 'files'>): PackIssue[] {
   const issues: PackIssue[] = [];
+
+  /*
+   * The version gate.
+   *
+   * Compared numerically, field by field, rather than with `localeCompare` — "1.10.0" sorts
+   * before "1.9.0" as a string, which would let a pack needing 1.10 boot on 1.9 while refusing
+   * the reverse. Missing fields read as 0, so "2" and "2.0.0" are the same demand.
+   *
+   * Only a pack demanding something *newer* is refused. A pack that asks for an older server
+   * than the one running it is fine and says nothing: that is the ordinary case of a pack
+   * outliving a release.
+   */
+  const asParts = (version: string): number[] => version.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const demanded = asParts(pack.event.minServerVersion);
+  const running = asParts(SERVER_VERSION);
+  for (let i = 0; i < Math.max(demanded.length, running.length); i += 1) {
+    const want = demanded[i] ?? 0;
+    const have = running[i] ?? 0;
+    if (want === have) continue;
+    if (want > have) {
+      issues.push({
+        file: 'event.json',
+        path: 'minServerVersion',
+        message: `pack needs server ${pack.event.minServerVersion}; this server is ${SERVER_VERSION}`,
+      });
+    }
+    break;
+  }
+
   const venueKeys = new Set(Object.keys(pack.venues));
   const factionIds = new Set(pack.factions.map((f) => f.id));
   const monumentIds = new Set(pack.monuments.map((m) => m.id));
@@ -372,6 +434,31 @@ export function crossValidate(pack: Omit<ContentPack, 'factionIds' | 'files'>): 
     seenBeacon.add(b.id);
   }
   if (pack.loot.karmaMin > pack.loot.karmaMax) issues.push({ file: 'loot.json', path: 'karmaMin', message: 'karmaMin exceeds karmaMax' });
+  /*
+   * Every loot item must be something the catalogue prices.
+   *
+   * The pack chooses the odds and `POWER_UP_CATALOG` chooses the payouts, so the `type` string is
+   * the join between them; a typo there used to be a clean `content:validate`, a clean boot, and
+   * then a crash inside one unlucky player's spin when `POWER_UP_CATALOG[awarded]` came back
+   * undefined.
+   *
+   * `lootTable.ts` also throws on this at import, and that guard stays — but it fires at *server
+   * boot*, and `npm run content:validate` never imports that module. So the one command a fork
+   * runs before deploying passed a pack the server would later refuse. Checking it here is what
+   * makes the failure arrive when somebody is still editing the file.
+   *
+   * Two comments elsewhere already claimed `crossValidate` did this. They were wrong when
+   * written; this is the line that makes them true.
+   */
+  for (const [i, item] of pack.loot.items.entries()) {
+    if (!Object.prototype.hasOwnProperty.call(POWER_UP_CATALOG, item.type)) {
+      issues.push({
+        file: 'loot.json',
+        path: `items[${i}].type`,
+        message: `unknown power-up "${item.type}"; known types are ${Object.keys(POWER_UP_CATALOG).join(', ')}`,
+      });
+    }
+  }
   if (pack.campusMonumentIds) {
     const baked = new Set(pack.campusMonumentIds);
     for (const id of monumentIds) if (!baked.has(id)) issues.push({ file: 'campus.json', path: id, message: 'monument missing from the baked model — rebuild with npm run campus' });

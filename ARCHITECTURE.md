@@ -697,10 +697,17 @@ be compared against the one this bake used) into `content/<pack>/campus/`
     9,188 building footprints · 1,994 roads · 467 lawns · 14 monuments · 124 tiles
 ```
 
-Landmark coordinates in `HACKILLINOIS_VENUES` (`src/common/utils/geo.ts`) were
-cross-checked against OSM building centroids while building the map. That audit
-corrected several venue positions — Kenney Gym was ~450 m south of its true
-location — so the geofencing engine and the map now agree on where campus is.
+Landmark coordinates in the pack's `venues.json` were cross-checked against OSM
+building centroids while building the map. That audit corrected several venue
+positions — Kenney Gym was ~450 m south of its true location — so the geofencing
+engine and the map agree on where campus is.
+
+They agree by construction now rather than by audit: `src/common/utils/geo.ts`
+derives `VENUE_COORDINATES` from `pack.venues`, so there is one set of
+coordinates rather than two that have to be kept in step. It used to hold its own
+hard-coded venue table — byte-for-byte identical to the pack's, and checked by
+nothing — which meant a fork editing `venues.json` moved the map pin and left the
+geofence where it was.
 
 One monument is massed from its verified centroid rather than an outline: Alma
 Mater is a `tourism=artwork` node, so the pipeline boxes it from the coordinate

@@ -5,25 +5,24 @@ the palette and the fonts all live in a **content pack** under `content/`, and t
 reads the pack rather than a literal. Forking is therefore mostly writing your own pack and
 baking your own campus. This page is the order to do it in.
 
-> **The exceptions, and they will bite you.** Three parts of `src/` still hold their own copy
-> of what the pack describes, and a fork that follows only the steps below inherits
-> HackIllinois in all three.
+> **This page used to carry three exceptions, and they are closed.** Venue resolution, the
+> seed, and the drop table each held their own copy of what the pack describes, and a fork that
+> followed only the steps below inherited HackIllinois in all three: every check-in rejected
+> because `resolveVenue()` measured against a hard-coded gazetteer, a map that started as
+> Siebel and Altgeld because the seed built gyms from inline arrays, and a drop table that
+> ignored `loot.json` entirely.
 >
-> **Shift-location resolution does not read the pack.** `resolveVenue()` in
-> `src/common/utils/geo.ts` matches against a hard-coded `HACKILLINOIS_VENUES` table and a
-> hard-coded keyword list, and `src/services/checkin.service.ts` refuses any check-in whose
-> shift location does not match. So a fork that skips this gets a system where **every
-> check-in is rejected** and SOS escalation reports a null venue. Until `resolveVenue` reads
-> `pack.venues` and its `hints`, you must edit that gazetteer too.
+> `resolveVenue()` derives from `pack.venues` and its `hints`, and falls back to
+> `pack.event.hqVenue`. `src/seed/seedData.ts` reads `pack.territories` and `pack.beacons`.
+> `src/economy/lootTable.ts` builds the spin table from `pack.loot`. **Do not go looking for
+> the inline arrays this page used to send you to — they are gone**, and editing the services
+> to tune your event is now the wrong lever.
 >
-> **The seed does not read the pack.** `src/seed/seedData.ts` creates the territory gyms and
-> the HackStop beacons from inline arrays keyed on that same gazetteer, so `territories.json`
-> and `beacons.json` are validated and then ignored. Your map starts as Siebel, Altgeld and
-> Memorial Stadium until you edit the seed.
->
-> **The drop table does not read the pack.** `src/services/hackstop.service.ts` rolls spins
-> against a literal weight array and pays karma from a literal range; `loot.json` reaches
-> nothing. See the notes in [CONTENT-PACKS.md](CONTENT-PACKS.md).
+> `npm run pack:check` is what keeps it that way: it loads your pack, takes every string that
+> is your event's content, and fails if any of it appears in `src/`. What is left is enumerated
+> with a reason each in `scripts/pack-driven-baseline.json` — the largest remaining item is
+> that the seed's six **demo shifts** are still literals, because there is no shift schema in a
+> pack yet.
 >
 > Everything else on this page — content, branding, the campus bake — works from the pack
 > alone.
@@ -145,10 +144,11 @@ taking over a staff account.
 The pack is data, but somebody has to author it.
 
 **The gazetteer.** `venues.json` is every place a shift can be at, with coordinates and the
-`hints` that let free-text venue names resolve. Nothing else in the pack is valid until
-these keys exist. Note the caveat at the top of this page: the pack's gazetteer is what the
-*client* and the cross-validator read, while check-in geofencing still resolves against the
-hard-coded table in `src/common/utils/geo.ts`. Both need your venues.
+`hints` that let free-text venue names resolve. Nothing else in the pack is valid until these
+keys exist, and it is the single highest-leverage file: the client, the cross-validator, the
+check-in geofence and SOS dispatch all read the same copy. `hints` are matched longest-first
+against an upper-cased shift location, so the list is order-independent — a short hint cannot
+shadow a longer one belonging to another building.
 
 **Landmarks.** `monuments.json` is the list of buildings that become territory gyms. Each
 one needs an OSM `name` to match or a verified centroid. Expect to iterate: the build
@@ -156,10 +156,14 @@ prints what each monument resolved to and how big it is, and a wrong match is vi
 the model immediately.
 
 **The game layer.** Factions, seed territories, beacons and the loot table are yours to
-balance. The example pack has the minimum that validates, not a good game. Note the caveat at
-the top of this page for three of the four: only `factions.json` is read at runtime, so
-balancing territories, beacons and loot means editing `src/seed/seedData.ts` and
-`src/services/hackstop.service.ts` alongside the pack files that describe them.
+balance, and all four are read — editing the pack is the whole job. The example pack has the
+minimum that validates, not a good game.
+
+Two things about `loot.json` worth knowing before you tune it. Weights are **relative**: they
+are normalised against their own total, so they need not add to 100. And the item `type` must
+name something `POWER_UP_CATALOG` prices, because the pack chooses the odds while the code
+chooses the payouts — a type the catalogue does not hold refuses the boot rather than crashing
+inside somebody's spin.
 
 **Art.** `memorabilia.json` carries 16 x 16 pixel grids and a palette per sticker. The
 fonts named in `branding.fonts` must be families already served from `public/fonts/`,
