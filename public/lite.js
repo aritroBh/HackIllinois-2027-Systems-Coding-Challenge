@@ -182,9 +182,15 @@
     setDisplay(document.getElementById('campus-3d-canvas'), 'none');
 
     if (!state.panel) {
-      // z-index 1 sits over the WebGL canvas and under the HUD (4) and the
-      // corner frame (3), so the trainer card and the tab controls stay put.
-      const panel = el('div', { position: 'absolute', inset: '0', zIndex: '1', display: 'grid', gridTemplateRows: 'auto 1fr auto', gap: '8px', padding: '18px 18px 14px', background: '#0b1a33' }, { id: 'lite-map' });
+      // z-index 6 sits over the WebGL canvas **and** over the 3D HUD (4) and the corner frame
+      // (3). It used to be 1, which put this panel under the HUD of the renderer it replaces —
+      // including under its own "Load 3D" button, so the way back to the campus was drawn but
+      // unclickable. `body.lite` hides that HUD as well, since half of it (FPS, building count,
+      // the walk hint, the retro/cinematic toggles) describes a renderer that is not running.
+      //
+      // Set here rather than only in the stylesheet: this is an inline style, and an inline
+      // style wins, so a `body.lite #lite-map { z-index: … }` rule could never have moved it.
+      const panel = el('div', { position: 'absolute', inset: '0', zIndex: '6', display: 'grid', gridTemplateRows: 'auto 1fr auto', gap: '8px', padding: '18px 18px 14px', background: '#0b1a33' }, { id: 'lite-map' });
       const label = el('div', {}, { className: 'hud-label', textContent: 'LOW-POWER MAP' });
       const canvas = el('canvas', { width: '100%', height: '100%', display: 'block' }, { id: 'lite-map-canvas' });
       canvas.setAttribute('role', 'img');

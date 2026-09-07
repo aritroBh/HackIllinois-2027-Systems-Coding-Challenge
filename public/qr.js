@@ -428,6 +428,9 @@
   function render(el, text) {
     if (!el) return null;
     el.textContent = '';
+    // Cleared every time: a previous encode failure leaves this class behind, and without
+    // removing it the next successful QR paints inside a green-monospace text container.
+    el.classList.remove('qr-fallback');
     if (!text) return null;
     let result = null;
     try {

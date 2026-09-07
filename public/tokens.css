@@ -18,7 +18,7 @@
   --prairie-lt: #3fc474;
   --cream: #FFF3E0;
   --cream-dim: #D8C4A6;
-  --mute: #8A9BC0;
+  --mute: #97A6C7;
   --pink: #FF3E8C;
   --white: #FFFFFF;
   --gold: #FFD34D;
@@ -29,13 +29,16 @@
 
   --live: var(--prairie-lt);
   --danger: var(--pink);
+  /* Pink is a fill colour; as text on a panel it measures 3.69:1. Error copy uses this
+     lifted tint instead, at 4.66:1, so a refusal is never the hardest thing to read. */
+  --danger-text: #FF6CA8;
   --warn: var(--harvest);
 
   /* Legacy aliases still referenced by older markup / the label layer. */
   --text: var(--cream);
   --text-2: var(--cream-dim);
   --text-3: var(--mute);
-  --text-4: #5C6E96;
+  --text-4: #929EB9;
   --cyan: var(--kernel);
   --violet: var(--tensor);
   --amber: var(--silicon);

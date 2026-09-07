@@ -347,7 +347,11 @@
     // The token is drawn, not printed. `qr.js` encodes it in the page — the panel says "show
     // this at the desk" and a desk scanner cannot read base64, which is what this box held
     // before. Rendered after `innerHTML` because the element has to exist first.
-    window.NexusQR?.render(document.getElementById('me-token-code'), state.token ? state.token.token : '');
+    const qrBox = document.getElementById('me-token-code');
+      // If qr.js did not load, show the token rather than an empty box under a running
+      // countdown: a desk can type a token, it cannot type a blank square.
+      if (window.NexusQR) window.NexusQR.render(qrBox, (state.token ? state.token.token : ''));
+      else if (qrBox) { qrBox.textContent = (state.token ? state.token.token : ''); qrBox.classList.add('qr-fallback'); }
   }
 
   /* ------------------------------------------------------------------ *

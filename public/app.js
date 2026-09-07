@@ -1298,7 +1298,11 @@ async function refreshQrToken(mineGen = handoverGeneration) {
       //
       // This used to print the token as text, which is why the panel that says "show this at
       // the desk" could not be shown to a desk: no scanner reads base64.
-      window.NexusQR?.render(document.getElementById('qr-local'), currentQrToken);
+      const qrBox = document.getElementById('qr-local');
+      // If qr.js did not load, show the token rather than an empty box under a running
+      // countdown: a desk can type a token, it cannot type a blank square.
+      if (window.NexusQR) window.NexusQR.render(qrBox, currentQrToken);
+      else if (qrBox) { qrBox.textContent = currentQrToken; qrBox.classList.add('qr-fallback'); }
       startQrCountdown(json.data.expiresInSeconds);
       logQrTerminal(`Token generated (slice ${json.data.timeSlice}) — ${currentQrToken.substring(0, 24)}…`);
     } else {
