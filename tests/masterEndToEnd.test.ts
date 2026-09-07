@@ -12,7 +12,7 @@ import { SOSService } from '../src/services/sos.service';
 import { GymService } from '../src/services/gym.service';
 import { HackStopService } from '../src/services/hackstop.service';
 import { AdonixSyncService } from '../src/services/adonixSync.service';
-import { HACKILLINOIS_VENUES } from '../src/common/utils/geo';
+import { VENUE_COORDINATES } from '../src/common/utils/geo';
 
 describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', () => {
   it('executes the full hackathon operations lifecycle across all 10 subsystems end-to-end', async () => {
@@ -149,7 +149,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     // =========================================================================
     // Check-in from Kenney Gym (>250m away from Siebel) -> MUST BE REJECTED
     await expect(
-      CheckInService.verifyAndCheckIn(tokenRes.token, 'SCANNER_DESK_01', HACKILLINOIS_VENUES.KENNEY_GYM)
+      CheckInService.verifyAndCheckIn(tokenRes.token, 'SCANNER_DESK_01', VENUE_COORDINATES.KENNEY_GYM)
     ).rejects.toThrow(/Geofence Check-In Denied/i);
 
     // Generate a fresh dynamic token and check in at Siebel (<5m away)
@@ -283,7 +283,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     const ticket = await SOSService.createTicket({
       hackerName: 'Grace Hopper',
       tableLocation: 'Siebel Basement Lab 0220',
-      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      coordinates: VENUE_COORDINATES.SIEBEL_BASEMENT,
       category: SOSTicketCategory.HARDWARE_MALFUNCTION,
       description: 'FPGA development board power rail failure.',
       urgency: SOSTicketUrgency.CRITICAL,
@@ -324,8 +324,8 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     const siebelGym = await Gym.create({
       name: 'Siebel Cyber Bastion',
       locationName: 'Siebel Center',
-      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+      latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
+      longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
       controllingFaction: Faction.TEAM_KERNEL,
       controlPoints: 100,
       maxControlPoints: 1000,
@@ -338,7 +338,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       volAda._id.toString(),
       Faction.TEAM_TENSOR,
       150,
-      HACKILLINOIS_VENUES.SIEBEL_ATRIUM
+      VENUE_COORDINATES.SIEBEL_ATRIUM
     );
     expect(battleRes.action).toBe('CAPTURED');
     expect(battleRes.controllingFaction).toBe(Faction.TEAM_TENSOR);
@@ -355,8 +355,8 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       beaconId: `BEACON_MASTER_${timestamp}`,
       name: 'ACM Student Chapter Supply Terminal',
       locationName: 'Siebel 1100',
-      latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-      longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+      latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
+      longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
       cooldownSeconds: 300,
       geofenceRadiusMeters: 75,
     });
@@ -365,7 +365,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     const spinRes = await HackStopService.spinBeacon(
       hackStop.beaconId,
       volAda._id.toString(),
-      HACKILLINOIS_VENUES.SIEBEL_ATRIUM
+      VENUE_COORDINATES.SIEBEL_ATRIUM
     );
     expect(spinRes.awardedKarma).toBeGreaterThan(0);
     expect(spinRes.awardedPowerUp).toBeDefined();
@@ -375,7 +375,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       HackStopService.spinBeacon(
         hackStop.beaconId,
         volAda._id.toString(),
-        HACKILLINOIS_VENUES.SIEBEL_ATRIUM
+        VENUE_COORDINATES.SIEBEL_ATRIUM
       )
     ).rejects.toThrow(/cooling down/i);
 
@@ -398,7 +398,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       volAda._id.toString(),
       spinRes.awardedPowerUp,
       gymItem ? siebelGym._id.toString() : undefined,
-      gymItem ? HACKILLINOIS_VENUES.SIEBEL_ATRIUM : undefined
+      gymItem ? VENUE_COORDINATES.SIEBEL_ATRIUM : undefined
     );
     expect(useRes.remainingQuantity).toBe(0);
 
@@ -414,7 +414,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
         volAda._id.toString(),
         spinRes.awardedPowerUp,
         gymItem ? siebelGym._id.toString() : undefined,
-        gymItem ? HACKILLINOIS_VENUES.SIEBEL_ATRIUM : undefined
+        gymItem ? VENUE_COORDINATES.SIEBEL_ATRIUM : undefined
       )
     ).rejects.toThrow(/Insufficient inventory/i);
   }, 45000);

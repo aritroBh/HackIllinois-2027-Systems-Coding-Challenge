@@ -1,4 +1,4 @@
-import { GeoEngine, HACKILLINOIS_VENUES, resolveVenue } from '../src/common/utils/geo';
+import { GeoEngine, VENUE_COORDINATES, resolveVenue } from '../src/common/utils/geo';
 import { uniqueKey } from './helpers/uniqueKey';
 import { SOSService } from '../src/services/sos.service';
 import { SOSTicketCategory, SOSTicketUrgency, SOSTicketStatus } from '../src/models/sosTicket.model';
@@ -35,7 +35,7 @@ describe('Campus venue resolution', () => {
 
   it('no venue hint is shadowed by a longer hint belonging to another venue', () => {
     // Every venue must be reachable by its own most specific name.
-    for (const key of Object.keys(HACKILLINOIS_VENUES)) {
+    for (const key of Object.keys(VENUE_COORDINATES)) {
       const humanised = key.replace(/_/g, ' ');
       expect(resolveVenue(humanised).matched).toBe(true);
     }
@@ -48,8 +48,8 @@ describe('Campus venue resolution', () => {
 
 describe('Spatial Geofencing & Haversine Distance Engine', () => {
   it('correctly calculates Haversine distance between Siebel Center and ECEB', () => {
-    const siebel = HACKILLINOIS_VENUES.SIEBEL_ATRIUM;
-    const eceb = HACKILLINOIS_VENUES.ECEB_LOBBY;
+    const siebel = VENUE_COORDINATES.SIEBEL_ATRIUM;
+    const eceb = VENUE_COORDINATES.ECEB_LOBBY;
 
     const distance = GeoEngine.haversineDistanceMeters(siebel, eceb);
     // Siebel Atrium to ECEB Lobby is ~280-290 meters
@@ -58,9 +58,9 @@ describe('Spatial Geofencing & Haversine Distance Engine', () => {
   });
 
   it('enforces 75-meter geofence radius boundary correctly', () => {
-    const siebel = HACKILLINOIS_VENUES.SIEBEL_ATRIUM;
+    const siebel = VENUE_COORDINATES.SIEBEL_ATRIUM;
     const insideCoords = { latitude: 40.113820, longitude: -88.224930 }; // ~2 meters away
-    const outsideCoords = HACKILLINOIS_VENUES.KENNEY_GYM; // ~270 meters away
+    const outsideCoords = VENUE_COORDINATES.KENNEY_GYM; // ~270 meters away
 
     const insideCheck = GeoEngine.isWithinGeofence(insideCoords, siebel, 75);
     expect(insideCheck.allowed).toBe(true);
@@ -101,7 +101,7 @@ describe('Spatial Geofencing & Haversine Distance Engine', () => {
 
     // Check-in from Kenney Gym (outside 75m geofence for SIEBEL_ATRIUM)
     await expect(
-      CheckInService.verifyAndCheckIn(token, 'SCANNER_01', HACKILLINOIS_VENUES.KENNEY_GYM)
+      CheckInService.verifyAndCheckIn(token, 'SCANNER_01', VENUE_COORDINATES.KENNEY_GYM)
     ).rejects.toThrow(/Geofence Check-In Denied/);
 
     // Generate a fresh token (each dynamic HMAC token is single-use to prevent replay attacks)
@@ -188,7 +188,7 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     const ticket = await SOSService.createTicket({
       hackerName: 'Stuck Hacker',
       tableLocation: 'Table 42 (Siebel Basement)',
-      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      coordinates: VENUE_COORDINATES.SIEBEL_BASEMENT,
       category: SOSTicketCategory.HARDWARE_MALFUNCTION,
       description: 'Soldering iron shorted out, need backup ESP32 board immediately.',
       urgency: SOSTicketUrgency.HIGH,
@@ -216,7 +216,7 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     const ticket2 = await SOSService.createTicket({
       hackerName: 'Second Hacker',
       tableLocation: 'Table 43 (Siebel Basement)',
-      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      coordinates: VENUE_COORDINATES.SIEBEL_BASEMENT,
       category: SOSTicketCategory.HARDWARE_MALFUNCTION,
       description: 'Need a USB-C cable.',
       urgency: SOSTicketUrgency.MEDIUM,
@@ -258,7 +258,7 @@ describe('Hacker SOS Emergency Ticket & Spatial Dispatch Engine', () => {
     const ticket = await SOSService.createTicket({
       hackerName: 'Anonymous Ada',
       tableLocation: 'Table 44 (Siebel Basement)',
-      coordinates: HACKILLINOIS_VENUES.SIEBEL_BASEMENT,
+      coordinates: VENUE_COORDINATES.SIEBEL_BASEMENT,
       category: SOSTicketCategory.HARDWARE_MALFUNCTION,
       description: 'No creator on this one.',
       urgency: SOSTicketUrgency.HIGH,

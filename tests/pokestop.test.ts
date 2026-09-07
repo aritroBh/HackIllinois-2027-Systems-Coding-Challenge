@@ -4,7 +4,7 @@ import { Volunteer } from '../src/models/volunteer.model';
 import { PowerUpInventory, PowerUpType } from '../src/models/powerup.model';
 import { GymService } from '../src/services/gym.service';
 import { HackStopService } from '../src/services/hackstop.service';
-import { HACKILLINOIS_VENUES } from '../src/common/utils/geo';
+import { VENUE_COORDINATES } from '../src/common/utils/geo';
 
 describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
   let volA: any;
@@ -28,8 +28,8 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
       const gym = await Gym.create({
         name: 'Siebel Central Atrium Arena',
         locationName: 'Siebel Center',
-        latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-        longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+        latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
+        longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
         controllingFaction: Faction.TEAM_KERNEL,
         controlPoints: 500,
         maxControlPoints: 1000,
@@ -54,8 +54,8 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
       const gym = await Gym.create({
         name: 'ECEB Microelectronics Bastion',
         locationName: 'ECEB',
-        latitude: HACKILLINOIS_VENUES.ECEB_LOBBY.latitude,
-        longitude: HACKILLINOIS_VENUES.ECEB_LOBBY.longitude,
+        latitude: VENUE_COORDINATES.ECEB_LOBBY.latitude,
+        longitude: VENUE_COORDINATES.ECEB_LOBBY.longitude,
         controllingFaction: Faction.TEAM_KERNEL,
         controlPoints: 80,
         maxControlPoints: 1500,
@@ -89,8 +89,8 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
         beaconId: 'BEACON_SIEBEL_TEST',
         name: 'Siebel Cyber Fountain',
         locationName: 'Siebel Center 1404',
-        latitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.latitude,
-        longitude: HACKILLINOIS_VENUES.SIEBEL_ATRIUM.longitude,
+        latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
+        longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
         cooldownSeconds: 300,
         geofenceRadiusMeters: 75,
       });
@@ -98,7 +98,7 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
 
     it('rejects beacon spin if volunteer is outside 75m geofence perimeter', async () => {
       // ECEB coordinates (~285m away from Siebel Center)
-      const farCoords = HACKILLINOIS_VENUES.ECEB_LOBBY;
+      const farCoords = VENUE_COORDINATES.ECEB_LOBBY;
 
       await expect(
         HackStopService.spinBeacon(hackStop.beaconId, volA._id.toString(), farCoords)
