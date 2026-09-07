@@ -1,7 +1,8 @@
 /**
  * Two different playable sides, taken from the pack rather than named.
  *
- * The suite wrote `Faction.TEAM_KERNEL` and `Faction.TEAM_TENSOR` seventeen times, and in
+ * The suite named the shipped pack's two teams through the Faction enum seventeen times
+ * (those members no longer exist, which is why they are not backticked here), and in
  * every one of them the identity of the team was irrelevant: what each test needed was
  * *the side that holds this gym* and *a different side*, so that reinforcing and contesting
  * take different branches. Naming the shipped pack's teams to express "two of them" tied the
@@ -12,11 +13,12 @@
  * `HOLDER` and `RIVAL` say what the tests mean. They come from `pack.factions` in declared
  * order with `NEUTRAL` removed, so they follow whatever pack is loaded.
  *
- * The cast is deliberate and is the honest shape of things. `Faction` in `src/models/gym.model.ts`
- * still enumerates the shipped pack's three teams, but the model's validator has already moved
- * to `pack.factions` and does not consult the enum, so the enum is a stale convenience the
- * server no longer believes. Casting here, in one place with this note, is what lets those
- * three members be deleted without touching a single call site.
+ * The cast is deliberate. `Faction` in `src/models/gym.model.ts` now holds only `NEUTRAL` —
+ * the three team members were deleted once these call sites stopped naming them, and the
+ * model's validator reads `pack.factions` rather than the enum. So the cast is not widening
+ * a string into one of three known members; it is saying that a pack-declared faction id is
+ * what this field carries, which the enum no longer describes and the validator already
+ * enforces. Keeping it in this one file is what made that deletion a no-op everywhere else.
  */
 import { pack } from '../../src/content/loader';
 import type { Faction } from '../../src/models/gym.model';

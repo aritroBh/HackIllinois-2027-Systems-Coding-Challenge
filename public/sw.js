@@ -75,7 +75,8 @@
   //        the pixel dropdown honours `disabled` so a locked control looks locked.
   // `v26`: gym defender counts read the projected `defenderCount`, so the compatibility shim
   //        on the server side can go.
-  const VERSION = 'v26';
+  // `v27`: the defenders array is gone from the wire, so the fallback that read it is gone too.
+  const VERSION = 'v27';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
