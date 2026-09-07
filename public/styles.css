@@ -792,7 +792,10 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .lead-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 12px; }
 .lead-row .hud-label { margin: 0; flex: none; }
 .lead-row .px-input { flex: none; width: 7ch; text-align: center; }
-.lead-row .pb { margin-left: auto; }
+/* The Post button, pushed right. Scoped to the wrapper as well as the bare button because
+   `pxselect.js` wraps every `select.pb` in a `.pxsel` — without this the auto-margin applies
+   inside a dropdown's wrapper instead of to the submit button at the end of the row. */
+.lead-row > .pb[type="submit"] { margin-left: auto; }
 
 /* ---------------- The attendance QR (qr.js) ----------------
    The box used to hold the token as green text under a heading that says "show this at the

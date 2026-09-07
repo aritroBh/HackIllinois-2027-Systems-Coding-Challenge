@@ -62,7 +62,8 @@
   // `v7`: low-power map stacking — the way back to the 3D campus was under the 3D HUD.
   // `v8`: the campus never stands itself down now; low-power is a choice, not a guess.
   // `v9`: contrast and type pass — invisible ink-on-dark text, undefined tokens, 7px Silkscreen.
-  const VERSION = 'v9';
+  // `v10`: destructive demo controls removed from the shipped nav.
+  const VERSION = 'v10';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

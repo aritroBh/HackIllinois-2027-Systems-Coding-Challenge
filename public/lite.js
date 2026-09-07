@@ -1,13 +1,19 @@
 /**
- * lite — the low-power campus surface (plan C10).
+ * lite — the flat campus surface, as an explicit choice.
  *
- * The WebGL campus bakes roughly nine hundred building footprints and then
- * holds a render loop for as long as the tab is open. With Data Saver on, two
- * gigabytes of memory, or a nearly flat battery that is the wrong trade: every
- * other panel in the war room is text and stays useful without it. This script
- * decides whether to skip the renderer, raises `Nexus.flags.lite` so the
- * scripts that would boot it can stand down, and paints a flat 2D map into the
- * viewport in its place.
+ * This file used to decide for you. It no longer does; see the note by the boot block.
+ *
+ * The WebGL campus bakes thousands of building footprints and then holds a render loop for as
+ * long as the tab is open. On a weak device that is a real cost, and every other panel in the
+ * war room is text and stays useful without it — so a flat 2D map exists as an alternative.
+ *
+ * What changed: this script used to *decide*, on Data Saver, on two gigabytes of reported
+ * memory, or on a low battery. The battery rule was evaluated on every load and never recorded,
+ * so a laptop on battery got the flat map every single time with no memory of having chosen it
+ * — and because the panel mounted under the 3D HUD, the way back was invisible. That reads
+ * exactly like the campus having been deleted, and it is the best thing here.
+ *
+ * Now it only ever raises `Nexus.flags.lite` and paints the flat map when somebody asks.
  *
  * The decision stays the user's. "Load 3D" clears the flag and boots the
  * renderer, and the answer is remembered under `nexus.lite.v1` so a reload does

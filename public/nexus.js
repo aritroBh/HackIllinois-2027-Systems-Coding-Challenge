@@ -59,7 +59,11 @@
   const reducedMotionQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
   const flags = {
     dev: false,            // session.js: legacy mode or the dev provider is enabled
-    lite: /(?:^|[?&])lite=1(?:&|$)/.test(location.search) || !!navigator.connection?.saveData,
+    // `?lite` only. The Data Saver sniff was removed with the rest of the automatic downgrade
+    // in `lite.js`: leaving it here meant a Data Saver browser reported `flags.lite === true`
+    // while the page booted the 3D campus and never applied `body.lite`, so anything reading
+    // the flag disagreed with what was on the screen.
+    lite: /(?:^|[?&])lite(?:=([^&]*))?(?=&|$)/.test(location.search),
     reducedMotion: !!reducedMotionQuery?.matches,
   };
   reducedMotionQuery?.addEventListener?.('change', (e) => {

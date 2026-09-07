@@ -374,9 +374,24 @@ Nexus.registerTab({
   id: 'tab-qr', label: 'Trainer', order: 40, roles: STAFF,
   onShow: () => { if (shiftsCache.length > 0 && !currentQrShiftId) setupDefaultQr(); },
 });
-// The Chaos Lab fires a fifty-worker race at the live server. That is a demonstration for
-// whoever is running the event, not a control to hand a thousand attendees.
-Nexus.registerTab({ id: 'tab-chaos', label: 'Chaos Lab', order: 50, roles: ['ORGANIZER', 'ADMIN'] });
+/*
+ * The Chaos Lab is behind `?chaos`, and role-gating was never enough for it.
+ *
+ * Its three buttons do not simulate anything. `runConcurrencyBomb` creates a real shift, fifty
+ * real volunteer accounts and fifty real registrations. `simulateDropCascade` cancels
+ * `json.data[0]` — the first CONFIRMED registration the API returns, which at an event is some
+ * attendee's actual spot, chosen by list order rather than by anyone's intent.
+ * `resolveCyclicTrade` executes real swaps. None of the three asks first, and the `Destructive`
+ * sticker beside them is a label, not a guard.
+ *
+ * It is a genuinely good demonstration of the concurrency work and it stays in the repository —
+ * but a control that can quietly cancel a volunteer's shift does not belong in the navigation a
+ * thousand people are handed, one misclick away, on the strength of a role check. Organisers
+ * misclick too. `?chaos` makes running it a decision.
+ */
+if (/(?:^|[?&])chaos(?:=|&|$)/.test(location.search)) {
+  Nexus.registerTab({ id: 'tab-chaos', label: 'Chaos Lab', order: 50, roles: ['ORGANIZER', 'ADMIN'] });
+}
 Nexus.registerTab({ id: 'tab-leaderboard', label: 'Ranks', order: 60, roles: EVERYONE });
 Nexus.onEvent('tab', ({ id }) => window.game?.onTabChange(id));
 

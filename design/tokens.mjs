@@ -48,7 +48,7 @@ export const C = {
   // Ink on the ground
   cream: '#FFF3E0',
   creamDim: '#D8C4A6',
-  mute: '#8A9BC0',
+  mute: '#97A6C7',            // 5.03:1 on --panel; #8A9BC0 measured 4.40 and failed AA
   pink: '#FF3E8C',
   white: '#FFFFFF',
   gold: '#FFD34D',
@@ -64,7 +64,7 @@ export const C = {
 // Aliases kept for design/build.mjs + parts.mjs (the earlier console build);
 // they resolve onto the neo-retro palette so the mocks stay renderable.
 Object.assign(C, {
-  text: C.cream, text2: C.creamDim, text3: C.mute, text4: '#5C6E96',
+  text: C.cream, text2: C.creamDim, text3: C.mute, text4: '#929EB9',
   hairline: C.edge, hairlineHi: '#3A5A9A', raised: C.edge,
   illiniBlue: C.ground, illiniOrange: C.orange, orangeDeep: C.orangeDk, orangeSoft: '#FFB38A',
   live: C.prairieLt, danger: C.pink, warn: C.harvest,
@@ -191,6 +191,8 @@ export function cssVars(event = null) {
     '': null, // blank line
     '--live': 'var(--prairie-lt)',
     '--danger': 'var(--pink)',
+    // Pink is a fill; as text on a panel it is 3.69:1. Error copy uses this at 4.66:1.
+    '--danger-text': '#FF6CA8',
     '--warn': 'var(--harvest)',
     ' ': null,
     '/* Legacy aliases still referenced by older markup / the label layer. */': null,

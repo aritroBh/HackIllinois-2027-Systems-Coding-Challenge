@@ -29,8 +29,6 @@
 
   --live: var(--prairie-lt);
   --danger: var(--pink);
-  /* Pink is a fill colour; as text on a panel it measures 3.69:1. Error copy uses this
-     lifted tint instead, at 4.66:1, so a refusal is never the hardest thing to read. */
   --danger-text: #FF6CA8;
   --warn: var(--harvest);
 
