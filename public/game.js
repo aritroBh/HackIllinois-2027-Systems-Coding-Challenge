@@ -732,7 +732,15 @@
     const ctrl = $('hud-control');
     if (ctrl) {
       const gyms = window.gymsCache || [];
-      const tally = { TEAM_KERNEL: 0, TEAM_TENSOR: 0, TEAM_SILICON: 0, NEUTRAL: 0 };
+      // Seeded from the pack, not from this repository's three ids.
+      //
+      // A hardcoded `{TEAM_KERNEL:0, TEAM_TENSOR:0, TEAM_SILICON:0, NEUTRAL:0}` meant the
+      // CAMPUS CONTROL strip under any other pack drew three phantom factions at zero and
+      // never drew the pack's real ones at all — `example-campus` rendered `0 0 0 1` for a
+      // two-team event. Non-fatal only because the `!= null` guard funnelled every real gym
+      // into NEUTRAL, which is its own lie: every stronghold reported unclaimed.
+      const tally = {};
+      for (const id of Object.keys(factionTable())) tally[id] = 0;
       for (const g of gyms) tally[tally[g.controllingFaction] != null ? g.controllingFaction : 'NEUTRAL']++;
       const total = Math.max(1, gyms.length);
       ctrl.innerHTML = `<div class="hud-label">CAMPUS CONTROL</div><div class="ctrl-meter">${Object.entries(tally).map(([k, n]) => `<i style="width:${(n / total) * 100}%;background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>`).join('')}</div><div class="ctrl-legend">${Object.entries(tally).map(([k, n]) => `<span><i style="background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>${n}</span>`).join('')}</div>`;
@@ -870,6 +878,21 @@
 
   /** Gym ids with a battle write in flight. Outlives the stage, which is the point. */
   const inFlight = new Set();
+
+  /**
+   * The pack's faction ids, via the only handle this file has on them.
+   *
+   * `app.js` owns `FACTION` and rebuilds it from the pack; `factionOf` is the accessor it
+   * exposes. There is no exported map, so the ids come from the content descriptor with the
+   * shipped three as the pre-pack fallback — the same order `applyFactions` would produce.
+   */
+  function factionTable() {
+    const list = window.Nexus?.content?.factions;
+    if (Array.isArray(list) && list.length) {
+      return Object.fromEntries(list.map((f) => [f.id, true]));
+    }
+    return { TEAM_KERNEL: true, TEAM_TENSOR: true, TEAM_SILICON: true, NEUTRAL: true };
+  }
 
   const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const beat = (ms) => new Promise((resolve) => setTimeout(resolve, REDUCE_MOTION ? 0 : ms));

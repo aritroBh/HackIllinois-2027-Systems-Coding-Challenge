@@ -90,6 +90,15 @@ const FACTION_DEFAULTS = {
   TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24', cls: 'c-amber' },
   NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa', cls: 'c-dim' },
 };
+/**
+ * Legacy CSS classes for the shipped pack's three teams.
+ *
+ * Only a lookup for ids this repository happens to ship. A fork's factions are not in it, so
+ * `FACTION_CLS[f.id] || 'c-dim'` gave every one of them the *unclaimed* class — a Team Red
+ * that carries its own colour in `--c` and then wears the grey of a stronghold nobody holds.
+ * `c-dim` is now the fallback only for NEUTRAL itself; anything else falls back to no class
+ * and is drawn from the pack's `color`, which every consumer already reads.
+ */
 const FACTION_CLS = { TEAM_KERNEL: 'c-cyan', TEAM_TENSOR: 'c-violet', TEAM_SILICON: 'c-amber', NEUTRAL: 'c-dim' };
 const FACTION = Object.fromEntries(Object.entries(FACTION_DEFAULTS).map(([k, v]) => [k, { ...v }]));
 
@@ -104,7 +113,7 @@ function applyFactions(list) {
       label: f.label || dflt.label,
       short: f.short || f.label || dflt.short,
       color: typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : dflt.color,
-      cls: FACTION_CLS[f.id] || 'c-dim',
+      cls: FACTION_CLS[f.id] || (f.id === 'NEUTRAL' ? 'c-dim' : ''),
       hqVenue: f.hqVenue || null,
       theme: f.theme || null,
     };
@@ -119,6 +128,15 @@ function applyFactions(list) {
 
   const playable = Object.keys(FACTION).filter((id) => id !== 'NEUTRAL');
   if (!FACTION[currentVolunteerFaction] || currentVolunteerFaction === 'NEUTRAL') currentVolunteerFaction = playable[0] || 'NEUTRAL';
+
+  // The campus legend names the teams too, and was static HTML: under any other pack it went
+  // on listing Kernel/Tensor/Silicon beside a map drawing Red and Blue.
+  const legend = document.getElementById('legend-factions');
+  if (legend) {
+    legend.innerHTML = Object.values(FACTION)
+      .map((f) => `<span><i style="--c: ${esc(f.color)}"></i> ${esc(f.label)}</span>`)
+      .join('');
+  }
 
   const sel = document.getElementById('user-faction-selector');
   if (sel) {
@@ -164,8 +182,14 @@ function applyBranding(content) {
   // key keeps the sentence.
   const n = Array.isArray(content.monuments) ? content.monuments.length : 0;
   if (n) {
-    setAll('monument-count', `${n} landmarks`);
+    // The whole clause, not just the noun.
+    //
+    // `example-campus` ships exactly one monument, and pluralising only the noun produced
+    // "1 landmark are strongholds" — the verb was static text outside the span. A count that
+    // comes from the pack drags its grammar with it, so the span covers the sentence.
+    setAll('monument-count', n === 1 ? '1 landmark is a stronghold' : `${n} landmarks are strongholds`);
     setAll('monument-number', String(n));
+    setAll('monument-noun', n === 1 ? 'monument is a stronghold' : 'monuments are strongholds');
   }
   if (Number.isFinite(ev.campus?.geofenceMeters)) setAll('geofence', `${ev.campus.geofenceMeters} m`);
   return true;
@@ -915,7 +939,19 @@ function renderFactionStrip() {
     tally[k].held += 1;
     tally[k].cp += Number(g.controlPoints) || 0;
   }
-  strip.innerHTML = ['TEAM_KERNEL', 'TEAM_TENSOR', 'TEAM_SILICON', 'NEUTRAL'].map((k) => {
+  // The pack's factions, not this repository's three.
+  //
+  // The tally four lines up is already pack-driven — `FACTION[g.controllingFaction] ? … :
+  // 'NEUTRAL'` — and then this rendered from a hardcoded roster. `applyFactions` replaces
+  // `FACTION` wholesale, so under any pack that is not hackillinois-2027 `FACTION['TEAM_KERNEL']`
+  // is undefined, `f.color` threw, and the throw propagated out of `renderGymsList` into
+  // `loadGymsData`: **the entire Turf Wars board rendered nothing**, faction strip and all,
+  // against a server that had answered 200 with the gyms in it. `docs/FORK_GUIDE.md` sends a
+  // fork to `content/example-campus`, so that was the first thing a stranger following our own
+  // guide saw on the flagship feature. NEUTRAL last because it is the absence of a side.
+  const order = Object.keys(FACTION).filter((k) => k !== 'NEUTRAL');
+  if (FACTION.NEUTRAL) order.push('NEUTRAL');
+  strip.innerHTML = order.map((k) => {
     const f = FACTION[k];
     const t = tally[k] || { held: 0, cp: 0 };
     return `

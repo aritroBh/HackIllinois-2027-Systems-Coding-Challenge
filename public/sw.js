@@ -113,7 +113,9 @@
   //        "Fourteen", which the Campus intro had already been rewriting for months.
   // `v48`: the Details link on a quest card opens a panel instead of writing one line to a
   //        console on a tab you are not looking at.
-  const VERSION = 'v49';
+  // `v50`: the client stopped hardcoding this repository's three factions — Turf Wars threw
+  //        and rendered nothing under any other content pack.
+  const VERSION = 'v51';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

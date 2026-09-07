@@ -145,7 +145,7 @@
         <div>
           <div class="eyebrow">Overworld</div>
           <h2 data-brand="campus-label">UIUC campus</h2>
-          <p>The real campus from OpenStreetMap. <span data-brand="monument-count">Fourteen landmarks</span> are strongholds. Walk with WASD or your GPS, stand within <span data-brand="geofence">75 m</span> of a HackStop to spin it, click a monument to inspect it.</p>
+          <p>The real campus from OpenStreetMap. <span data-brand="monument-count">Fourteen landmarks are strongholds</span>. Walk with WASD or your GPS, stand within <span data-brand="geofence">75 m</span> of a HackStop to spin it, click a monument to inspect it.</p>
         </div>
         <div class="actions">
           <span class="signal" id="onduty-chip">— on duty</span>
@@ -206,10 +206,15 @@
 
       <div class="px flat campus-foot">
         <div class="legend">
-          <span><i style="--c: var(--kernel)"></i> Team Kernel</span>
-          <span><i style="--c: var(--tensor)"></i> Team Tensor</span>
-          <span><i style="--c: var(--silicon)"></i> Team Silicon</span>
-          <span><i style="--c: var(--neutral)"></i> Unclaimed</span>
+          <!-- The faction rows are rewritten from the pack by applyFactions(); these four are
+               the shipped defaults so the legend is never blank before content settles. The
+               rows below them are not factions and stay put. -->
+          <span id="legend-factions">
+            <span><i style="--c: var(--kernel)"></i> Team Kernel</span>
+            <span><i style="--c: var(--tensor)"></i> Team Tensor</span>
+            <span><i style="--c: var(--silicon)"></i> Team Silicon</span>
+            <span><i style="--c: var(--neutral)"></i> Unclaimed</span>
+          </span>
           <span><i style="--c: var(--live)"></i> On-duty volunteer</span>
           <span><i style="--c: var(--tensor)"></i> HackStop beacon</span>
           <span><i style="--c: var(--danger)"></i> Distress call</span>
@@ -225,7 +230,7 @@
         <div>
           <div class="eyebrow">PokéShift</div>
           <h2>Campus turf wars</h2>
-          <p><span data-brand="monument-number">Fourteen</span> monuments are strongholds. Click one to open the encounter. Reinforce your own, contest the others, spin HackStops for loot.</p>
+          <p><span data-brand="monument-number">Fourteen</span> <span data-brand="monument-noun">monuments are strongholds</span>. Click one to open the encounter. Reinforce your own, contest the others, spin HackStops for loot.</p>
         </div>
         <div class="actions">
           <span class="hud-label">Your faction</span>
