@@ -216,11 +216,18 @@
             <span><i style="--c: var(--neutral)"></i> Unclaimed</span>
           </span>
           <span><i style="--c: var(--live)"></i> On-duty volunteer</span>
-          <span><i style="--c: var(--tensor)"></i> HackStop beacon</span>
+          <span><i style="--c: var(--beacon)"></i> HackStop beacon</span>
           <span><i style="--c: var(--danger)"></i> Distress call</span>
           <span><i style="--c: var(--orange)"></i> You</span>
         </div>
-        <p class="attribution">Building footprints, streets and green space © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors, ODbL 1.0. Alma Mater, the ECE Building and the Main Library are massed from verified centroids.</p>
+        <!-- The ODbL credit is a legal requirement and is true of any pack whose campus is baked
+             from OSM, so it is static. The sentence after it named Alma Mater, the ECE Building
+             and the Main Library — three buildings a fork does not have — and nothing rewrote
+             it: `grep attribution public/*.js public/views/*.js` finds no writer. A false
+             sentence sitting directly under an attribution is the worst place in the page to
+             put one, because it is the one place a reader is entitled to assume is accurate.
+             Reworded to say what is true of every pack. -->
+        <p class="attribution">Building footprints, streets and green space © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors, ODbL 1.0. Landmark buildings are massed from verified centroids.</p>
       </div>
     </section>
 

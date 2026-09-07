@@ -115,7 +115,9 @@
   //        console on a tab you are not looking at.
   // `v50`: the client stopped hardcoding this repository's three factions — Turf Wars threw
   //        and rendered nothing under any other content pack.
-  const VERSION = 'v51';
+  // `v52`: the OSM attribution named three UIUC buildings a fork does not have, directly
+  //        under a legal credit, with nothing rewriting it.
+  const VERSION = 'v52';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
