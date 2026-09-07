@@ -461,12 +461,26 @@
       </div>`;
   }
 
-  /** Plan §C7: what opting in actually discloses, said differently for each role. */
+  /**
+   * What opting in actually discloses, said differently for each role.
+   *
+   * This said "It is symmetric" — you are invisible and you see nobody — and that is not true
+   * of the one thing a person reading it cares about. `GET /api/v1/presence` is
+   * `requireSession` + `requireRole('SHIFT_LEAD')` and checks nothing about the reader's own
+   * opt-in, and the shift roster behaves the same way: a lead who has switched themselves off
+   * still reads exact positions, audited, whatever this switch says.
+   *
+   * The same panel already told leads that four sentences later, so it carried the claim and
+   * its own contradiction. README, `docs/PRESENCE.md` and `docs/DEMO.md` were corrected for
+   * this earlier; **this is the only one of the four addressed to the person whose privacy it
+   * describes**, and it is the one they read at the moment they decide. Nobody opens
+   * PRESENCE.md before flipping a location switch.
+   */
   function privacyCopy() {
     const u = N.session.user || {};
-    const base = 'Off, you are invisible and you see nobody. It is symmetric. On, other trainers see a position snapped to a 20 m grid, nudged a few metres, and released a second late.';
+    const base = 'Off, you are invisible on the map and you see nobody there. Leads can still read your exact position — from the shift roster and GET /presence — and every one of those reads is logged under their name. On, other trainers see a position snapped to a 20 m grid, nudged a few metres, and released a second late.';
     if (u.kind === 'HACKER') {
-      return `${base} A lead can read your exact position, and every read is logged for thirty days. Raising an SOS shares where you are whatever this switch says.`;
+      return `${base} Those logs are kept for thirty days. Raising an SOS shares where you are whatever this switch says.`;
     }
     const volunteer = `${base} Off shift you stay hidden from everyone but a lead. Distress calls only reach volunteers who are opted in and on shift; opted out, dispatch falls back to your shift venue.`;
     return LEAD_ROLES.includes(u.role)

@@ -210,8 +210,9 @@ function playerCoords() {
 /**
  * Where the trainer is, or a refusal that says how to fix it.
  *
- * One message for both economy actions, because the remedy is the same: the map has to know
- * where you are before it can tell the server you are somewhere.
+ * One message for all three actions that need a position — Spin, gym Contest and a
+ * gym-targeted Deploy — because the remedy is the same: the map has to know where you are
+ * before it can tell the server you are somewhere. (It said "both" while guarding three.)
  */
 /**
  * The player's position, or null having *said so where they can see it*.
@@ -926,7 +927,7 @@ function renderGymsList() {
  * where the errors kept being introduced. What they share is the *field*, and the
  * precedence above it is resolved server-side, so they cannot disagree about the rule even
  * though they each read it separately. Claiming one place was flattering; the property that
- * matters is that none of them computes anything.
+ * matters is that none of them implements the precedence.
  */
 function packGeofenceMetres() {
   const m = Number(Nexus.content?.event?.campus?.geofenceMeters);
@@ -1588,8 +1589,11 @@ async function changeUserFaction(faction) {
     paintFactionPicker(previous, false);
     renderGymsList();
     window.game?.onFactionChange();
-    logChaosTerminal('[ERROR] Faction change timed out; nothing was saved.');
-    window.game?.toast?.('That did not reach the server. Pick again.');
+    // Not "nothing was saved" — the client cannot know that. A request that has not answered
+    // in fifteen seconds may still be in flight, and may already have bound the side. Saying
+    // so plainly is the difference between a status and a guess.
+    logChaosTerminal('[ERROR] Faction change had no answer in 15s; it may or may not have been saved.');
+    window.game?.toast?.('No answer from the server. Reload to see which side you are on.');
   }, 15000);
 
   try {
@@ -1750,7 +1754,11 @@ async function battleOrFortifyGym(gymId, btn) {
 async function loadHackStopsData() {
   try {
     hackStopsCache = await apiGet('/api/v1/pokeshift/hackstops');
+    // The per-caller cooldowns ride along on this payload; take them every time rather than
+    // trying to keep a local model in step with a ledger the server already sends.
+    seedSpinCooldowns(hackStopsCache);
     renderHackStopsList();
+    window.game?.gateSpins?.();
     syncCampusActors();
   } catch (err) {
     console.error('Failed to load hackstops:', err);
@@ -1767,12 +1775,29 @@ async function loadHackStopsData() {
  * the labelled-control-that-always-fails shape, and this one lasts five minutes after every
  * single success — the most reachable instance of it in the app.
  *
- * Two writers, because neither is sufficient alone. A success schedules `now + cooldown`,
- * which covers the normal case. A refusal parses the remaining seconds out of the server's
- * message, which covers the cases the first cannot know about: a spin from the player's other
- * device, and a page reload that lost the in-memory record.
+ * **Seeded from the server, not inferred.** `GET /pokeshift/hackstops` returns
+ * `yourNextSpinAt` per beacon for the signed-in caller — the ledger the refusal is computed
+ * from — so every load of the stop list carries the truth for that account. The first version
+ * of this instead scheduled `now + cooldownSeconds` on success and regex-parsed "in N seconds"
+ * out of the refusal text, which was wrong in four ways at once: it was blind after a reload
+ * until one click had already failed, blind to a spin from the player's other device, blind to
+ * a change of account, and it broke on the contended-race refusal ("spin already recorded. Try
+ * again shortly."), which carries no number at all — the regex yielded `NaN` and the gate never
+ * armed. Reading the field the server already publishes has none of those failure modes.
+ *
+ * The local write on success stays, as an optimistic update so the button greys immediately
+ * rather than after the next list refresh. The server's value overwrites it on every load.
  */
 const spinCooldowns = new Map();
+
+/** Take the per-caller cooldowns straight off a hackstops payload. */
+function seedSpinCooldowns(stops) {
+  spinCooldowns.clear();
+  for (const s of stops || []) {
+    const next = s?.yourNextSpinAt ? Date.parse(s.yourNextSpinAt) : NaN;
+    if (Number.isFinite(next) && next > Date.now()) spinCooldowns.set(String(s.beaconId), next);
+  }
+}
 
 /** Seconds left on a beacon's cooldown, or 0. */
 function spinCooldownLeft(beaconId) {
@@ -1812,13 +1837,11 @@ async function spinHackStop(beaconId, lat, lon, btn) {
       if (secs > 0) spinCooldowns.set(beaconId, Date.now() + secs * 1000);
       window.game?.gateSpins?.();
     } else {
-      // The server says how long is left; believe it over any local arithmetic, because it
-      // is the half that knows about the player's other device.
-      const left = Number(/(\d+)\s*seconds?/.exec(json.message || '')?.[1]);
-      if (json.error === 'SCHEDULE_CONFLICT' && Number.isFinite(left)) {
-        spinCooldowns.set(beaconId, Date.now() + left * 1000);
-        window.game?.gateSpins?.();
-      }
+      // A refusal means the ledger disagrees with us, whatever the wording. Re-read the list
+      // rather than parsing prose: `yourNextSpinAt` is authoritative and the two refusal
+      // messages do not share a shape — one quotes seconds, the other says "try again
+      // shortly" and carries no number.
+      if (/cooling down/i.test(json.message || '')) void loadHackStopsData();
       logChaosTerminal(`[ERROR] HackStop spin failed: ${json.message}`);
     }
   } catch (err) {
@@ -2509,6 +2532,15 @@ async function init() {
     // Both are cleared here and refilled by the reload below, under the new generation.
     myRegistrations = new Map();
     spinCooldowns.clear();
+    // The faction write belongs to the account that started it.
+    //
+    // `handoverGeneration` did not touch `factionWriteGeneration`, so a PATCH still in flight
+    // across a handover passed its own generation guard and painted A's confirmed side, locked,
+    // under B's session — and B's picker sat disabled at "saving" until A's response landed.
+    // Bumping the write generation makes that response a no-op the way it already is for a
+    // superseded pick.
+    factionWriteGeneration += 1;
+    factionWritePending = false;
     renderShifts(shiftsCache);
 
     // The incoming account's side, re-derived — not a blanket NEUTRAL.

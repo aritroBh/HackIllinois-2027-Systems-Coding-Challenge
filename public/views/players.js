@@ -10,7 +10,8 @@
  * only while they are actually walking. Inbound: snapshots and deltas of everyone within
  * 300 m, plus cluster counts beyond that, fed straight into `campus.setPlayers`.
  *
- * Privacy is symmetric and opt-in. While `presenceOptIn` is false the client neither
+ * Presence is opt-in, and symmetric **between trainers** — not against a lead. While
+ * `presenceOptIn` is false the client neither
  * publishes nor receives, and the server enforces the same rule — the toggle in Me →
  * Settings is the only way in.
  */

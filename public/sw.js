@@ -100,7 +100,16 @@
   // `v43`: a handover no longer shows the departing account's shifts as the arriving one's.
   // `v44`: in lite mode a real GPS fix now beats the hidden demo sprite, for both the button
   //        gate and the coordinates sent to the server.
-  const VERSION = 'v44';
+  // `v21`, `v22`, `v23`, `v29`, `v31`: intermediate bumps during the review rounds, each a lock rewrite for
+  //        a change described in the commit rather than here. Named so the sequence has no
+  //        silent gaps — these notes are the audit trail for a cache that evicts everything,
+  //        and a missing number invites the question of what shipped undescribed.
+  // `v40`: plugins.js no longer claims a content pack can carry a plugin.
+  // `v45`: round twenty-three — cooldowns come from the server ledger, the nearest-stop
+  //        readout honours them, and a handover resets faction and position provenance.
+  // `v46`: the Privacy panel no longer tells you presence is symmetric. It is not: a lead
+  //        reads your exact position whether or not they have switched themselves on.
+  const VERSION = 'v46';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

@@ -758,9 +758,17 @@
         const stopRadius = Number(
           (window.hackStopsCache || []).find((x) => String(x.beaconId) === String(stop.id))?.geofenceRadiusMeters,
         ) || PROX_RADIUS;
-        const inRange = d <= stopRadius;
+        // The same two reasons the button uses, in the same order.
+        //
+        // This computed `inRange` from distance alone, so after every successful spin the
+        // panel said "in range — spin it!" beside a button counting down 4:12. The diff that
+        // introduced `stopRadius` fixed exactly this disagreement for distance and left it
+        // standing for cooldown — one control and one caption describing the same stop and
+        // contradicting each other, which is the shape this whole pass has been removing.
+        const stopCool = cooldownLeft(stop.id);
+        const inRange = d <= stopRadius && stopCool === 0;
         const segs = 8, on = Math.max(0, Math.min(segs, Math.round(segs * (1 - Math.min(1, d / 600)))));
-        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : `walk ${d - stopRadius} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
+        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : stopCool > 0 ? `cooling down · ${coolLabel(stopCool)}` : `walk ${d - stopRadius} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
         near.hidden = false;
       } else {
         near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP</div><div class="near-dist"><span>${window.campus?.getPlayer?.() ? 'Nothing in 1.2 km. Head for the Quad.' : 'Place your trainer to start walking.'}</span></div>`;
@@ -804,8 +812,23 @@
   let positionSource = null;
   /** Metres from the campus bounding box when the fix is outside it; 0 otherwise. */
   let positionOffBy = 0;
-  /** Per-session, deliberately: see the note where it is set. */
+  /** Per-session, deliberately: see the note where it is set. Reset on handover too. */
   let offCampusToldThisSession = false;
+
+  /**
+   * A new account on this device inherits none of the previous one's position story.
+   *
+   * `positionSource` and `positionOffBy` describe *whose* GPS produced the sprite, so leaving
+   * them across a handover labels B's screen with A's provenance — `GPS · ON CAMPUS` for
+   * somebody who has granted nothing. And `offCampusToldThisSession` carried the suppression
+   * with it, so B never got the explanation A had already dismissed: the once-per-lifetime
+   * defect this round removed, recreated once per handover.
+   */
+  function resetPositionProvenance() {
+    positionSource = window.campus?.getPlayer?.() ? 'demo' : null;
+    positionOffBy = 0;
+    offCampusToldThisSession = false;
+  }
 
   /**
    * Great-circle metres from a fix to the nearest edge of the campus bounding box.
@@ -1159,7 +1182,11 @@
     walk: () => toggleWalk(),
     follow: () => toggleFollow(),
     retro: () => toggleRetro(),
-    place: () => { if (has('setPlayer')) { window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction }); applyPlayerSprite(); gateSpins(); toast('Dropped you on the Main Quad. WASD to walk.'); updateHud(true); } },
+    // "Drop me on the Quad" puts the sprite back on the demo point, so the provenance goes
+    // back to `demo` with it. Without this the label kept whatever the last GPS fix had set —
+    // `GPS · ON CAMPUS` over a sprite the player had just teleported, or `GPS · 10,077 KM
+    // AWAY` on a trainer standing on the Quad.
+    place: () => { if (has('setPlayer')) { window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction }); positionSource = 'demo'; positionOffBy = 0; applyPlayerSprite(); gateSpins(); toast('Dropped you on the Main Quad. WASD to walk.'); updateHud(true); } },
   };
 
   // Same handlers, registered into the Nexus action registry (nexus.js owns
@@ -1180,6 +1207,7 @@
    * writes the old flags straight back into the key that was just emptied.
    */
   window.Nexus?.onEvent?.('session:handover', () => {
+    resetPositionProvenance();
     state.flags = {};
     state.head = null;
     state.sheet = null;

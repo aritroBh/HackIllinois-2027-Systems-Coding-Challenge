@@ -390,8 +390,12 @@ if (!fs.existsSync(lockPath)) {
     // Sorting needs the order and label, which the scan above did not keep. Re-read them.
     const meta = new Map();
     for (const rel of TAB_SOURCES) {
+      // Same strip as the first scan. This kept the start-anchored form after that one was
+      // widened, so a trailing `//` inside a `registerTab` body corrupted the `order:` and
+      // `label:` parse here while the id parse two hundred lines up handled it correctly —
+      // one scanner, two answers to the same input.
       const src = fs.readFileSync(path.join(root, rel), 'utf8')
-        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
       for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) continue;
