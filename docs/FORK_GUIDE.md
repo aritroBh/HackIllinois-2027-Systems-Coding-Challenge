@@ -173,6 +173,17 @@ its licence to `public/fonts/LICENSES.md`. `theme.js` maps five palette keys
 (`orange`, `blue`, `patina`, `harvest`, `prairie`) onto CSS custom properties at runtime;
 anything else in `palette` is carried but not applied.
 
+**Sponsor booth placards.** `npm run placards` prints the code for each booth in your pack.
+Codes are an HMAC over the booth id under `QR_HMAC_SECRET`, derived by the same function the
+scanner verifies with, so a printed code cannot disagree with the server.
+
+**Set `QR_HMAC_SECRET` before you print, and it must be the secret the event runs under.**
+`env.ts` treats the value `.env.example` ships as *unset* and generates an ephemeral per-boot
+secret — so copying `.env.example` to `.env` unchanged, which is the obvious first move, silently
+gives you codes that change on every restart. `npm run placards` refuses to print in that state
+rather than handing you a sheet of posters that stop working at the next deploy, which is the one
+failure here you cannot fix once the posters are on the tables.
+
 **Your own SSO, if you have one.** Adapters live in `src/auth/` — `adonix.ts` and `mailer.ts` are
 the two shipped ones, and they are small. Copy the Adonix one and keep its trust boundary.
 `src/services/auth.service.ts` is the *consumer* that mints a session from whichever adapter

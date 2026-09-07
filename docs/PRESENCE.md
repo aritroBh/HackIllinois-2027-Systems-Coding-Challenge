@@ -70,7 +70,30 @@ Three things carry the tick, and each of them replaced a per-client cost with a 
 
 **A coarse block index over the cells.** A 300 m radius over 50 m cells is 169 lookups whether or not anybody is there, and at three in the morning most of a 25 km² campus is car parks. Cells are grouped into 400 m blocks, and the scan asks which blocks are occupied before it asks which cells are. On a thinly spread campus that turns a hundred and sixty-nine misses into a handful.
 
-The tick is also **sliced**. The work is the same, but it yields to the event loop every 8 ms, so the worst latency presence adds to an unrelated HTTP request is a slice rather than a whole tick. Measured on a laptop with five thousand sessions and five thousand publishers, all moving every second: about 50 ms of CPU per tick in the venue-clustered layout, about 115 ms in an artificially scattered one, and never more than about 11 ms of contiguous blocking in either.
+The tick is also **sliced**. The work is the same, but it yields to the event loop every 8 ms, so the worst latency presence adds to an unrelated HTTP request is a slice rather than a whole tick. Measured with five thousand sessions and five thousand publishers, all moving every second.
+
+| | venue-clustered | artificially scattered |
+|---|---|---|
+| originally recorded (a laptop) | ~50 ms | ~115 ms |
+| re-measured 2026-09-07 (loaded dev machine, two runs) | p50 **59 ms**, p95 94–104 ms | p50 **162 ms**, p95 211 ms |
+| longest contiguous block | 9.4–10.8 ms | 12.2 ms |
+
+**The slicing guarantee holds and the scattered figure does not.** Contiguous blocking stayed
+within a slice of the 8 ms budget in every run, which is the property the slicing exists to
+provide and the one worth trusting. The clustered figure is ~18% above what was recorded; the
+scattered one is ~40% above, and "about 115 ms" is not a fair description of 162 ms.
+
+Both sets are honest and neither is portable — the first was a laptop, the second a machine that
+had been running test suites and three review agents all day. **Treat the absolute milliseconds as
+a property of the machine and the ratio as the property of the code**: the scattered layout costs
+roughly 2.7x the clustered one here against 2.3x as first recorded, because sharing one cohort
+pass per occupied cell is exactly what scattering defeats. That is the claim that survives being
+run somewhere else.
+
+One consequence worth seeing, because it is the number the ladder cares about: scattered p95 of
+211 ms is *above* the 200 ms rung-1 threshold below. This run stayed on rung 0 with no skipped
+ticks, but on a machine like this the scattered layout sits at the degradation boundary rather
+than comfortably inside it. Re-measure before quoting either figure at an event.
 
 ```
 npx tsx scripts/benchmarks/presenceTick.ts               # in-process, no network

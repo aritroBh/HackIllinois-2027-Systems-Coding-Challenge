@@ -30,7 +30,8 @@
     "bench:presence": "NODE_ENV=development tsx scripts/loadPresence.ts",
     "e2e": "tsx scripts/e2e.ts",
     "comments:check": "node scripts/checkCommentsOnly.mjs",
-    "pack:check": "node scripts/checkPackDriven.mjs"
+    "pack:check": "node scripts/checkPackDriven.mjs",
+    "placards": "tsx scripts/placards.ts"
   },
   "keywords": [
     "hackillinois",
