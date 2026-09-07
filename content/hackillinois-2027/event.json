@@ -83,5 +83,7 @@
     "CRITICAL": 800
   },
   "hackerBountyBudgetPerDay": 600,
-  "plugins": []
+  "plugins": [
+    "hello-nexus"
+  ]
 }

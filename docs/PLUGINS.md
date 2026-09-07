@@ -39,7 +39,20 @@ built. Do not enable it as a plugin instead.
 The registry knows every plugin by static import, so `tsc` type-checks all of them whether
 or not they run. Which ones are *active* is configuration: the content pack's `event.json`
 lists the plugins the event wants under `plugins`, and the deployment can narrow that
-further. A plugin that is not active is inert, and its routes and assets do not exist.
+further with the `PLUGINS` environment variable. A plugin that is not active is inert, and
+its routes and assets do not exist.
+
+That paragraph described an intention for a long time rather than the code. `event.json`'s
+`plugins` array was parsed by the schema and read by nobody; activation came only from
+`PLUGINS`, which `.env.example` ships empty and which nothing in this repository set — not
+the demo script, not CI, not the Dockerfile, not `render.yaml`. So no plugin had ever run in
+any configuration this project ships, and a fork that followed this page got silence. Both
+halves are true now, and `tests/plugins.test.ts` holds them to it.
+
+`PLUGINS` **narrows and cannot add**. A name in it that the pack does not list is a boot
+refusal, not a silent no-op — the failure this whole mechanism exists to avoid. Use it to
+switch something off for one deployment: a staging box that should not post to a live
+scoreboard names only what it wants.
 
 ## The hooks
 

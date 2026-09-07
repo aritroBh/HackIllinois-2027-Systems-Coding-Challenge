@@ -2,7 +2,8 @@
  * The server plugin contract (plan §A8).
  *
  * A plugin is a plain object, not a class and not a package: a fork adds a directory under
- * `plugins/`, exports one of these, and names it in `PLUGINS`. There is no dynamic
+ * `plugins/`, exports one of these, adds it to `CATALOG`, and names it in its pack's
+ * `event.json` under `plugins`. There is no dynamic
  * `require` anywhere in the loader, so every plugin is type-checked with the rest of the
  * codebase and a broken one fails `npm run lint` rather than the event.
  *

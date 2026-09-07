@@ -1,11 +1,14 @@
 /**
  * The plugin registry: which plugins exist, which are switched on, and when one is cut off.
  *
- * **Static catalogue, dynamic activation.** `CATALOG` is a literal array of imported
+ * **Static catalogue, pack-chosen activation.** `CATALOG` is a literal array of imported
  * modules, so `tsc` sees every plugin and a fork that breaks the contract fails the build
- * instead of the event. `PLUGINS` (comma-separated names) selects which of them are
- * activated at boot. An unknown name is a boot failure, not a warning: a typo that silently
- * runs nothing is precisely the misconfiguration that surfaces at 3 a.m.
+ * instead of the event. Which of them actually run is decided by the content pack —
+ * `event.json`'s `plugins` array — because which features an event runs is that event's
+ * configuration and belongs beside its venues and its factions. The `PLUGINS` environment
+ * variable narrows that list for one deployment and cannot add to it; see `activeSelection`.
+ * An unknown name is a boot failure, not a warning: a typo that silently runs nothing is
+ * precisely the misconfiguration that surfaces at 3 a.m.
  *
  * **Hooks are fire-and-forget with a leash.** Each subscribes to the domain bus, runs with a
  * 2 second timeout, and never propagates a failure back to the operation that published the
@@ -35,6 +38,7 @@ import { eventHub } from '../common/sse/eventHub';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { env } from '../config/env';
+import { pack } from '../content/loader';
 import {
   CheckInHookEvent,
   GymCapturedHookEvent,
@@ -50,7 +54,14 @@ import {
 } from './types';
 import { helloNexusPlugin } from '../../plugins/hello-nexus';
 
-/** Every plugin that ships in this tree. Add a fork's plugin here; `PLUGINS` turns it on. */
+/**
+ * Every plugin that ships in this tree.
+ *
+ * Adding a directory under `plugins/` is not enough — a fork adds its export here, and then
+ * names it in its pack's `event.json`. Two steps rather than one, deliberately: this array is
+ * what makes every plugin type-check with the rest of the codebase, and the pack entry is what
+ * makes running it a decision the event makes rather than a consequence of a file existing.
+ */
 const CATALOG: readonly ServerPlugin[] = [helloNexusPlugin];
 
 /**
@@ -96,15 +107,46 @@ function withTimeout(work: Promise<void>, ms: number, label: string): Promise<vo
   return Promise.race([work, leash]).finally(() => clearTimeout(timer));
 }
 
-class PluginRegistry {
+/**
+ * A refusal to boot, raised rather than executed.
+ *
+ * These four checks — unknown name, unsafe name, wrong `apiVersion`, duplicate name — exist to
+ * fail loudly, and every one of them called `process.exit(1)` directly from the constructor.
+ * That made them the only checks in this repository that nothing could assert on: a test for
+ * "this refuses to boot" would have taken the runner down with it, which is why this subsystem
+ * had no tests at all. It was not that nobody wrote them; they were not writable.
+ *
+ * Throwing moves the decision to the caller. The singleton at the bottom of this file catches it
+ * and does exactly what the constructor used to — same message, same `exit(1)` — so boot
+ * behaviour is unchanged, and a test can construct a registry with a deliberately broken
+ * catalogue and assert on the message.
+ *
+ * This is the shape `content/loader.ts` already uses for a bad pack, for the same reason.
+ */
+export class PluginBootError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PluginBootError';
+  }
+}
+
+/**
+ * Exported so a test can build one with a fake catalogue and a fake selection.
+ *
+ * The singleton below is bound at import to the real catalogue and the real pack, which makes it
+ * useless for testing the refusals — you cannot give it a plugin that targets the wrong API
+ * version without editing the catalogue. Exporting the class costs nothing (nothing else
+ * constructs one) and is what makes `tests/plugins.test.ts` possible.
+ */
+export class PluginRegistry {
   private readonly states = new Map<string, PluginState>();
-  /** Activation order, which is `PLUGINS` order. Routes and assets mount in it. */
+  /** Activation order, which is the order the selection lists them. Routes and assets mount in it. */
   private readonly order: string[] = [];
 
   /**
    * Validate the selection and activate what it names, or refuse to boot.
    *
-   * Every failure here is `process.exit(1)` rather than a warning, and the reasoning is the
+   * Every failure here throws `PluginBootError` rather than warning, and the reasoning is the
    * same each time: a plugin that is configured and silently not running is the
    * misconfiguration nobody notices until the feature is missing at 3 a.m. A name that is not
    * in the catalogue, a name that is not a safe route and directory segment, a plugin built
@@ -113,46 +155,40 @@ class PluginRegistry {
    *
    * The duplicate-name check runs over the *catalogue*, before selection, because two plugins
    * sharing a name share a route prefix, an asset prefix and a state entry; there is no
-   * sensible winner. Being named twice in `PLUGINS` is different and is not an error — it
-   * activates once, because a comma-separated list is a set.
+   * sensible winner. Being named twice in the selection is different and is not an error — it
+   * activates once, because a list of names is a set.
    *
    * Hooks are bound only when something was activated, so a deployment running no plugins adds
    * no bus listeners at all.
    */
-  constructor(catalog: readonly ServerPlugin[], selection: string) {
+  constructor(catalog: readonly ServerPlugin[], selection: readonly string[]) {
     const known = new Map<string, ServerPlugin>();
     for (const plugin of catalog) {
       if (known.has(plugin.name)) {
-        console.error(`❌ Refusing to boot: two plugins are named "${plugin.name}".`);
-        process.exit(1);
+        throw new PluginBootError(`two plugins are named "${plugin.name}".`);
       }
       known.set(plugin.name, plugin);
     }
 
-    const wanted = selection
-      .split(',')
-      .map((n) => n.trim())
-      .filter((n) => n.length > 0);
+    const wanted = selection.map((n) => n.trim()).filter((n) => n.length > 0);
 
     for (const name of wanted) {
       const plugin = known.get(name);
       if (!plugin) {
-        console.error(
-          `❌ Refusing to boot: PLUGINS names "${name}", which is not in the catalogue (${[...known.keys()].join(', ') || 'empty'}).`
+        throw new PluginBootError(
+          `"${name}" is not in the plugin catalogue (${[...known.keys()].join(', ') || 'empty'}). ` +
+            'Add it to CATALOG in src/plugins/registry.ts, or remove it from the selection.'
         );
-        process.exit(1);
       }
       if (!PLUGIN_NAME_PATTERN.test(plugin.name)) {
-        console.error(`❌ Refusing to boot: plugin name "${plugin.name}" is not a safe route and directory name.`);
-        process.exit(1);
+        throw new PluginBootError(`plugin name "${plugin.name}" is not a safe route and directory name.`);
       }
       if (plugin.apiVersion !== PLUGIN_API_VERSION) {
-        console.error(
-          `❌ Refusing to boot: plugin "${plugin.name}" targets API version ${plugin.apiVersion}; this server speaks ${PLUGIN_API_VERSION}.`
+        throw new PluginBootError(
+          `plugin "${plugin.name}" targets API version ${plugin.apiVersion}; this server speaks ${PLUGIN_API_VERSION}.`
         );
-        process.exit(1);
       }
-      if (this.states.has(name)) continue; // named twice in PLUGINS; activate once
+      if (this.states.has(name)) continue; // named twice in the selection; activate once
       this.states.set(name, { plugin, enabled: true, failures: 0, disabledReason: null });
       this.order.push(name);
     }
@@ -421,7 +457,67 @@ class PluginRegistry {
   }
 }
 
-export const pluginRegistry = new PluginRegistry(CATALOG, env.PLUGINS);
+/**
+ * Which plugins this deployment activates: the pack's list, optionally narrowed by the
+ * environment.
+ *
+ * `docs/PLUGINS.md` has always said "the content pack's `event.json` lists the plugins the event
+ * wants under `plugins`, and the deployment can narrow that further". Neither half was true.
+ * `event.json`'s `plugins` array was parsed by `src/content/schema.ts` and read by **nobody**;
+ * activation came only from the `PLUGINS` environment variable, which `.env.example` ships empty
+ * and which nothing in this repository sets — not the demo script, not CI, not the Dockerfile,
+ * not `render.yaml`. So no plugin had ever run in any configuration this project ships, and a
+ * fork following the documentation exactly got no plugin, no error and no warning.
+ *
+ * The pack is now the source, which is the right place: which features an event runs is that
+ * event's configuration, and it belongs beside its venues and its factions rather than in a
+ * deploy-time variable somebody has to remember.
+ *
+ * `PLUGINS` **narrows** — it is a filter over the pack's list, not a second way to switch things
+ * on. A name it carries that the pack does not is a boot refusal rather than a silent no-op,
+ * because "I enabled it and nothing happened" is the exact failure this whole change exists to
+ * remove. Set it to turn something off for one deployment: a staging box that should not post to
+ * a live scoreboard names only what it wants.
+ */
+export function activeSelection(packPlugins: readonly string[], override: string): string[] {
+  const wanted = packPlugins.map((name) => name.trim()).filter(Boolean);
+  const narrowed = override
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (narrowed.length === 0) return wanted;
+
+  const declared = new Set(wanted);
+  for (const name of narrowed) {
+    if (!declared.has(name)) {
+      throw new PluginBootError(
+        `PLUGINS names "${name}", which the content pack does not list under event.json's "plugins". ` +
+          'PLUGINS narrows the pack\'s list; it cannot add to it. Add the plugin to the pack, or drop it from PLUGINS.'
+      );
+    }
+  }
+  return wanted.filter((name) => narrowed.includes(name));
+}
+
+/**
+ * The process-wide registry, built at import.
+ *
+ * The try/catch is what keeps the boot message identical now that the constructor throws instead
+ * of exiting: a `PluginBootError` prints the same refusal and exits 1, and anything else is a
+ * genuine bug and is re-raised with its stack. Under `NODE_ENV=test` it rethrows rather than
+ * exiting, exactly as `content/loader.ts` does for a bad pack — a suite that asserts a refusal
+ * cannot do so if the assertion kills the runner.
+ */
+export const pluginRegistry: PluginRegistry = (() => {
+  try {
+    return new PluginRegistry(CATALOG, activeSelection(pack.event.plugins, env.PLUGINS));
+  } catch (error) {
+    if (!(error instanceof PluginBootError)) throw error;
+    console.error(`❌ Refusing to boot: ${error.message}`);
+    if (env.NODE_ENV === 'test') throw error;
+    process.exit(1);
+  }
+})();
 
 /**
  * The 404 gate every plugin route and asset sits behind. A disabled plugin's URLs must not
