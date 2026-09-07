@@ -578,6 +578,47 @@ describe('the SOS ticket list is redacted like the channel that carries it', () 
    * victim in `?volunteerId=` matched `createdById` and returned their ticket whole —
    * coordinates, table text, hacker name, description, medical category — with no credential.
    */
+  it('redacts the lifecycle responses too, which is where the last sibling was', async () => {
+    // Acknowledging, arriving, cancelling, reassigning and resolving are *actions*, and
+    // `legacy` is documented as believing a claimed identity for actions. Each of them answered
+    // with the whole ticket document, and that is a *disclosure*: an anonymous caller naming the
+    // assignee's public id passed the assignee check and was handed the coordinates, the
+    // hacker's name, the table and the medical category.
+    const hacker = await makeAccount({ kind: AccountKind.HACKER });
+    const responder = await makeAccount();
+    const ticket = await makeTicket(String(hacker._id));
+    await SOSTicket.updateOne(
+      { _id: ticket._id },
+      { $set: { status: SOSTicketStatus.DISPATCHED, assignedVolunteerId: responder._id, dispatchedAt: new Date() } }
+    );
+
+    const original = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      const claimed = await request(app)
+        .post(`/api/v1/sos/tickets/${ticket._id}/acknowledge?volunteerId=${responder.id}`)
+        .send({});
+      // The action is still permitted — that is the legacy contract — but the answer is not
+      // the whole ticket.
+      expect(claimed.status).toBe(200);
+      expect(claimed.body.data.coordinates).toBeUndefined();
+      expect(claimed.body.data.tableLocation).toBeUndefined();
+      expect(claimed.body.data.hackerName).toBeUndefined();
+      expect(claimed.body.data.status).toBe(SOSTicketStatus.ACKNOWLEDGED);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = original;
+    }
+
+    // The responder who proved who they are still gets the address they are walking to.
+    const { agent, csrf } = await signIn(String(responder._id));
+    const proved = await agent
+      .post(`/api/v1/sos/tickets/${ticket._id}/on-scene`)
+      .set('X-CSRF-Token', csrf)
+      .send({});
+    expect(proved.status).toBe(200);
+    expect(proved.body.data.tableLocation).toBe('Table 9');
+  });
+
   it('refuses the whole ticket to a claimed party, and still gives it to a proved one', async () => {
     const hacker = await makeAccount({ kind: AccountKind.HACKER });
     const responder = await makeAccount();

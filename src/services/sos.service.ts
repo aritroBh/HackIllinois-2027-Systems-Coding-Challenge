@@ -101,7 +101,7 @@ const isProvenLead = (viewer?: { role?: string; source?: string }): boolean =>
  * own and each left a sibling. A shared shape means the next reader has one thing to check
  * rather than four, and adding a field to it is a decision made once.
  */
-function redactedTicket(t: ISOSTicket): Record<string, unknown> {
+export function redactedTicket(t: ISOSTicket): Record<string, unknown> {
   const venue = resolveVenue(t.tableLocation);
   return {
     _id: t._id,
@@ -133,6 +133,30 @@ const DISTANCE_BUCKET_M = 25;
 /** What a ticket offers when the creator names no figure. The pack's per-urgency ceiling caps it. */
 const DEFAULT_BOUNTY = 150;
 const coarsen = (m: number): number | null => (Number.isFinite(m) ? Math.round(m / DISTANCE_BUCKET_M) * DISTANCE_BUCKET_M : null);
+
+/**
+ * The ticket as this caller may see it — full for a proved lead or a proved party, redacted
+ * otherwise.
+ *
+ * Every SOS **lifecycle** response goes through here. Acknowledging, arriving, cancelling,
+ * reassigning and resolving are *actions*, and `legacy` is documented as believing a claimed
+ * identity for actions — but each of them answered with the whole ticket document, and that is
+ * a *disclosure*. `POST /tickets/:id/acknowledge?volunteerId=<the assignee>` from an anonymous
+ * caller passed the assignee check and was handed the coordinates, the hacker's name, the table
+ * and the medical category; naming any lead's public id passed every lead override too.
+ *
+ * So the action stays believable and the answer does not. A responder who has actually proved
+ * who they are still gets the address they are walking to; anyone else gets a receipt.
+ */
+export function ticketFor(
+  t: ISOSTicket,
+  viewer?: { id?: string; role?: string; source?: string }
+): ISOSTicket | Record<string, unknown> {
+  if (isProvenLead(viewer)) return t;
+  const proved = viewer?.source === 'session' && !!viewer.id;
+  if (proved && (sameId(t.createdById, viewer!.id!) || sameId(t.assignedVolunteerId, viewer!.id!))) return t;
+  return redactedTicket(t);
+}
 
 export class SOSService {
   /**

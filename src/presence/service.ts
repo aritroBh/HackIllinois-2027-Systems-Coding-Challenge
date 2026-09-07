@@ -60,8 +60,9 @@ export interface AccountFacts {
   muteUntil: number;
   /**
    * The account's *current* session version, compared each tick against the one the socket
-   * connected with. See the eviction in `tick()`: this is how a revoked session stops
-   * receiving the map.
+   * connected with. `evictRevoked()`, called at the top of every `tick()`, is what closes the
+   * socket when the two disagree — which is how a revoked session stops receiving the map even
+   * if it never sends anything again.
    */
   sessionVersion: number;
 }
@@ -201,8 +202,6 @@ export class PresenceService {
   async factsFor(accountId: string, nowMs = Date.now()): Promise<AccountFacts | null> {
     await this.refreshRoster(nowMs);
     await this.refreshMutes(nowMs);
-    // Before any frame is built: a socket whose session was revoked gets no more of them.
-    this.evictRevoked();
     const cached = this.facts.get(accountId);
     if (cached && nowMs - (cached as AccountFacts & { at?: number }).at! < FACT_TTL_MS) {
       return {
@@ -410,6 +409,14 @@ export class PresenceService {
     }
     const t0 = Date.now();
     this.tickNo += 1;
+    // Before any frame is built: a socket whose session was revoked gets no more of them.
+    //
+    // This belongs here and not in `factsFor`, where it was first put by mistake. `factsFor` is
+    // reached when an account *samples* or says hello, so a revoked publisher would have been
+    // evicted — but a revoked **watcher**, a lead with the map open who sends nothing, never
+    // calls it and would have kept receiving everybody's positions indefinitely. That watcher
+    // is the half of the bug that mattered, and the half the misplaced call missed.
+    this.evictRevoked();
     const { expired } = this.store.tick(t0);
     if (expired.length) {
       for (const s of this.sessions.values()) for (const id of expired) s.forget(id, this.tickNo);

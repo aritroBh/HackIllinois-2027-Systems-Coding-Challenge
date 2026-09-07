@@ -17,10 +17,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { HackStopService } from '../services/hackstop.service';
 import { resolveActorId } from '../middleware/identity';
-import { isLeadOrAbove } from '../common/types/account';
+import { isProvenLead } from '../common/types/account';
 import { sameId } from '../common/utils/id';
 import { ApiError } from '../common/errors/apiError';
-import { env } from '../config/env';
 
 export class HackStopController {
   public static async listBeacons(_req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -53,8 +52,14 @@ export class HackStopController {
   public static async getInventory(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const target = req.params.volunteerId as string;
-      // In `required` mode an inventory is private: yours, or a lead's view of it.
-      if (env.AUTH_MODE === 'required' && req.account && !sameId(req.account.id, target) && !isLeadOrAbove(req.account)) {
+      // An inventory is private in **every** mode: yours, or a proved lead's view of it.
+      //
+      // This used to be conditional on `env.AUTH_MODE === 'required'`, which turned the check
+      // off in the shipped default, and on `req.account` being set, which let an anonymous
+      // caller short-circuit it in the one mode that was supposed to enforce it. The route now
+      // requires a session, so `req.account` is always present here and always proved; the
+      // remaining question is only whether it is *this* account or a lead.
+      if (!sameId(req.account!.id, target) && !isProvenLead(req.account)) {
         throw ApiError.forbidden('You can only view your own inventory.');
       }
       const inventory = await HackStopService.getVolunteerInventory(target);

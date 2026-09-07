@@ -346,6 +346,44 @@ describe('a claimed identity is not a session, on every self-read', () => {
     expect((await agent.get(path)).status).toBe(200);
   });
 
+  it('refuses another account\'s inventory by path parameter, in both modes', async () => {
+    // The sixth instance of this class, and the one the `/me/*` round could not reach: this
+    // route takes the account id as a **path** parameter, so tightening `GET /me/inventory`
+    // left it open. Two holes — the ownership check was switched off entirely in `legacy`, and
+    // in `required` it was written `env.AUTH_MODE === 'required' && req.account && …`, so an
+    // anonymous caller short-circuited the whole condition in the one mode meant to refuse it.
+    const victim = await Volunteer.create({
+      name: 'Bag Bea', email: `bb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    const path = `/api/v1/pokeshift/inventory/${victim.id}`;
+
+    // Anonymous, in the strict mode. This was 200 before the route was gated.
+    const originalMode = env.AUTH_MODE;
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'required';
+    try {
+      expect((await request(app).get(path)).status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = originalMode;
+    }
+
+    // And a claimed identity in the open-demo mode.
+    (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = 'legacy';
+    try {
+      expect((await request(app).get(`${path}?volunteerId=${victim.id}`)).status).toBe(401);
+    } finally {
+      (env as { AUTH_MODE: 'legacy' | 'required' }).AUTH_MODE = originalMode;
+    }
+
+    // A signed-in stranger is refused; the owner is answered.
+    const stranger = await Volunteer.create({
+      name: 'Nosy Ned', email: `nn2-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
+    });
+    expect((await (await signIn(stranger.id)).agent.get(path)).status).toBe(403);
+    expect((await (await signIn(victim.id)).agent.get(path)).status).toBe(200);
+  });
+
   it('refuses DELETE /presence to a claimed identity', async () => {
     // The PATCH beside this was fixed for exactly this attack; the DELETE does the same
     // thing more directly — drop them from the store, drop their SSE session — and was left.

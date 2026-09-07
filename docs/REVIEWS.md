@@ -1082,3 +1082,92 @@ test-only. My own pass verified the same and two things beyond it — the presen
 exactly one database write (a mute row, carrying no coordinates), and opt-out symmetry is
 enforced explicitly at two levels rather than emerging by accident: opting out removes the store
 entry, which nulls the cohort, which returns an empty frame.
+
+---
+
+## Round fifteen — the last two siblings, and a fix I wired into the wrong method, 2026-09-06
+
+The final round. The brief did not describe the code; it described **the one failure mode that
+had recurred in every previous round** — a disclosure decided on a claimed identity, fixed in one
+branch and left in a sibling — listed the five places it had already been found, and said:
+*assume there is one more; find it, or tell me you looked and there isn't.*
+
+There were two more.
+
+### The sixth: an inventory addressed by path parameter
+
+`GET /pokeshift/inventory/:volunteerId` answers "what is in that named person's bag". The round
+that put `requireSession` on `GET /me/inventory`, `/quests` and `/stickers` never reached it,
+because this route takes the account id as a **path** parameter rather than as the caller's
+identity — so a search for the pattern did not look like a search for this.
+
+Two holes, not one. The ownership check read
+`env.AUTH_MODE === 'required' && req.account && …`, so it was switched off entirely in the
+shipped default mode — and in `required`, an **anonymous** caller short-circuited the whole
+condition on `req.account` and read any inventory in the one mode that exists to refuse them.
+That second half is the more embarrassing: the strict mode was the more open of the two.
+
+### The seventh: the lifecycle answers
+
+`redactedTicket()` was introduced last round and reached `dispatch` and `listTickets`. It did not
+reach `transition()` or `resolveTicket()` — so `acknowledge`, `arrive`, `cancel`, `reassign` and
+`resolve` each still answered with the **whole ticket document**, gated only by a claimed id or a
+claimed role.
+
+`POST /tickets/:id/acknowledge?volunteerId=<the assignee>` from an anonymous caller in `legacy`
+passed the assignee check and was handed the coordinates, the hacker's name, the table text and
+the medical category. Naming any lead's public id passed every lead override as well.
+
+The distinction that resolves it is the one this project keeps relearning: **acknowledging is an
+action and `legacy` may believe it; the ticket that comes back is a disclosure and may not.** The
+action still succeeds for a claimed caller. The answer is now a receipt unless they proved who
+they are. `ticketFor()` and `viewerOf()` exist side by side with `actorOf()` so that the
+difference is visible at every call site.
+
+### The fix I wired into the wrong method
+
+Last round's `evictRevoked()` — the fix for a revoked session keeping its live map — was
+inserted after `await this.refreshMutes(nowMs);`, a line that appears in **`factsFor()`**, not in
+`tick()`. `factsFor` is reached when an account *samples* or says hello. So a revoked
+**publisher** was evicted, and a revoked **watcher** — a lead with the map open who sends
+nothing — never called it and kept receiving everybody's positions indefinitely. That watcher is
+the half of the bug that mattered.
+
+Worse: the commit message said "called from the tick", and the `AccountFacts.sessionVersion`
+docblock said "See the eviction in `tick()`". Both were false, written in the same commit that
+the previous round's log describes as fixing false claims. opencode caught it by grepping for
+call sites rather than believing either sentence.
+
+### Closed
+
+| Finding | Source | Severity |
+|---|---|---|
+| SOS lifecycle responses (`acknowledge`, `arrive`, `cancel`, `reassign`, `resolve`) returned the full ticket — coordinates, name, table, medical category — to a claimed identity, and `reassign` to an anonymous one. | opencode | P0 |
+| `GET /pokeshift/inventory/:volunteerId` disclosed any account's inventory to a claimed identity in `legacy`, **and to an anonymous caller in `required`**, because the guard short-circuited on `req.account`. | muse | P1 |
+| `evictRevoked()` was called from `factsFor()` rather than `tick()`, so a revoked but idle watcher was never evicted — and two comments plus a commit message said otherwise. | opencode | P1 |
+| `avatar.routes.ts`'s header comment still described the old unconditional `private, max-age=60`. | muse, opencode | P1 |
+
+### The sweep that came back clean
+
+muse produced a table of **every** place in the request surface whose output shape depends on who
+is asking — the SSE hub's four decisions, SOS dispatch and listing, both avatar branches, the
+volunteer projection and `kind=ALL`, the shift roster and detail, beacon cooldowns, announcements,
+`/me`'s email, the eleven `requireSession` routes, claim-code issuance, and the presence WebSocket
+upgrade — and, for each, what it checks and whether a claimed identity satisfies it. One row said
+yes. It is fixed above.
+
+agy swept the routes nobody had looked at (volunteers, registrations, swaps, game, stats,
+pokestop, content, checkin, auth, adonix) and returned clean with the same per-method reasoning.
+
+opencode verified the previous round's fixes in both directions and confirmed the entitled paths
+still work: a proved lead still gets the full ticket, exact distance, live position source and the
+candidate list; a proved owner still gets their unpublished avatar bytes; the shipped client still
+publishes presence, because it always establishes a real session at boot.
+
+### The state at the end
+
+Unit suite 308 across 29 files. `npm run e2e` **83 assertions against a live server, 0 failed** —
+run against the final code, not an earlier commit. 58 plan gates, and the CSP, props,
+event-bridge, shell and docs gates. Docker image builds and boots in production against a real
+replica set, with every claimed-identity read re-probed against the running container in both
+auth modes.

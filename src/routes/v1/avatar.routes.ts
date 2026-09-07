@@ -7,7 +7,7 @@
  *   POST   /avatars/:hash/review  lead+: approve or reject
  *   POST   /avatars/:hash/flag    any account: report it
  *
- * The bytes are served `private, max-age=60, must-revalidate` with an ETag — deliberately
+ * An approved, shared avatar is served `private, max-age=60, must-revalidate`; an unpublished one is `no-store`, because `private` does not partition by account and a shared browser would hand the previous occupant's face photo to the next with an ETag — deliberately
  * not `immutable`, because the same URL becomes a 404 once the avatar is unpublished. That
  * makes 60 seconds the worst case for a browser that has the file cached and is not
  * connected: a connected renderer drops the texture immediately on `AVATAR_UNPUBLISHED`,
