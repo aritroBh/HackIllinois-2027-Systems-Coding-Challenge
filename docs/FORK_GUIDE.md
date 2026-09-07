@@ -96,9 +96,18 @@ browser console visible while you do it. You are looking for two things:
    identical to a reader and are not the same thing at all.
 
    The one you *should* see before you have done §3 is
-   `Campus renderer failed: Error: campus model 404`. Your pack has no baked campus yet, the
-   Campus tab shows a **RENDERER FAILED** badge, and that is the honest degraded state rather
-   than a bug. It goes away when you bake. Every other red line is a finding.
+   `Campus renderer failed: Error: campus model 404`. Your pack has no baked campus yet, so
+   there is nothing to draw. On screen the Campus tab says **No campus model** in amber and
+   puts a notice in the viewport naming your pack and the exact command to fix it
+   (`CONTENT_PACK=<your-pack> npm run campus`); every other panel keeps working. That is the
+   honest degraded state, not a bug, and it goes away when you bake. Every other red line is a
+   finding.
+
+   The console line and the on-screen text are worth reading as a pair, because the on-screen
+   half used to read "Renderer failed" over an empty grid — which names the renderer, the one
+   part that was working fine. Somebody looked at that and concluded the 3D campus had been
+   deleted. If your fork's UI ever tells you a component failed, check whether it means "this
+   component broke" or "nobody gave it anything to do"; they look identical and are not.
 
    That exception is spelled out because a check that cries wolf on step one is a check
    people learn to skip, which would defeat the point of this whole section.
