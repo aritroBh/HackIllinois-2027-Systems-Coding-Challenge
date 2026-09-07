@@ -515,9 +515,34 @@ async function fetchVolunteers() {
   }
 }
 
+/**
+ * The caller's own registrations, by shift id, so the board can stop offering what they have.
+ *
+ * The quest board rendered "Accept quest" on every shift including the ones the signed-in
+ * account is already confirmed for — the seeded demo account opens on exactly that state —
+ * and pressing it answered `409 ALREADY_REGISTERED` into a console panel on a different tab.
+ * A control offering something you already have, refusing in a place you cannot see.
+ *
+ * `/me/shifts` is the same endpoint the Me tab reads; this is a second reader of it rather
+ * than a second source of truth, and it fails soft because the board is still useful without
+ * it — an unknown registration renders exactly the label it rendered before.
+ */
+let myRegistrations = new Map();
+
+async function loadMyRegistrations() {
+  try {
+    const res = await Nexus.api('/api/v1/me/shifts', { lenient: true });
+    const rows = res?.success ? (res.data?.shifts || []) : [];
+    myRegistrations = new Map(rows.map((r) => [String(r.shiftId || r._id), String(r.status || '')]));
+  } catch {
+    myRegistrations = new Map();   // no session, or the call failed: fall back to the old labels
+  }
+}
+
 async function fetchShifts() {
   try {
-    shiftsCache = await apiGet('/api/v1/shifts');
+    const [shifts] = await Promise.all([apiGet('/api/v1/shifts'), loadMyRegistrations()]);
+    shiftsCache = shifts;
     renderShifts(shiftsCache);
     syncCampusActors();
   } catch (err) {
@@ -686,7 +711,17 @@ function renderShifts(shifts) {
             <div class="big-num" style="color:var(--harvest)">+${num(karma)}<span class="hud-label" style="display:block;text-align:right">karma</span></div>
           </div>
           <div class="btn-row">
-            <button class="pb ${full ? 'pb-ghost' : ''} pb-sm" data-action="claim" data-id="${esc(shift._id)}">${full ? 'Join waitlist' : 'Accept quest'}</button>
+            ${(() => {
+              // Already on it: say so, and do not offer a button that can only be refused.
+              const mine = myRegistrations.get(String(shift._id));
+              if (mine === 'CONFIRMED' || mine === 'CHECKED_IN') {
+                return `<button class="pb pb-ghost pb-sm" type="button" disabled title="You are already on this quest">${mine === 'CHECKED_IN' ? 'Checked in' : "You're on this"}</button>`;
+              }
+              if (mine === 'WAITLISTED') {
+                return '<button class="pb pb-ghost pb-sm" type="button" disabled title="You are on the waitlist for this quest">On the waitlist</button>';
+              }
+              return `<button class="pb ${full ? 'pb-ghost' : ''} pb-sm" data-action="claim" data-id="${esc(shift._id)}">${full ? 'Join waitlist' : 'Accept quest'}</button>`;
+            })()}
             <button class="link" data-action="details" data-id="${esc(shift._id)}">Details</button>
           </div>
         </div>
@@ -1356,11 +1391,16 @@ async function quickSignUp(shiftId, btn) {
       logChaosTerminal(`[EVENT] ${vol.name} claimed a slot (status ${json.status})`);
       window.fx?.burstAt(btn, json.status === 'CONFIRMED' ? '#34f5a0' : '#ffb020', 26);
       fetchShifts();
+      loadMyRegistrations().then(() => renderShifts(shiftsCache));
     } else {
+      // Said where the user is, not only in the War Room console. This refusal was invisible
+      // on every tab that carries the quest board, which is every tab that has one.
       logChaosTerminal(`[ERROR] Sign-up rejected: ${json.message}`);
+      window.game?.toast?.(json.message || 'That quest could not be claimed.');
     }
   } catch (err) {
     logChaosTerminal(`[ERROR] ${err.message}`);
+    window.game?.toast?.(err.message);
   }
 }
 
