@@ -154,8 +154,19 @@ function applyBranding(content) {
   setAll('event-chip', [eventName, tagline].filter(Boolean).join(' · '));
   setAll('campus-label', ev.campus?.label);
   setAll('sticker-title', ev.branding?.stickerBookTitle);
+  // Two keys for one number, because the two sentences need different nouns.
+  //
+  // `monument-count` writes "N landmarks" for the Campus intro. The Turf Wars intro says
+  // "Fourteen monuments are strongholds" and had no span at all, so a fork with a different
+  // pack read its real count on one page and a hardcoded fourteen on the other — the
+  // mechanism that fixes it sitting one file away and already working. Reusing
+  // `monument-count` there would have produced "14 landmarks are strongholds"; a bare-number
+  // key keeps the sentence.
   const n = Array.isArray(content.monuments) ? content.monuments.length : 0;
-  if (n) setAll('monument-count', `${n} landmarks`);
+  if (n) {
+    setAll('monument-count', `${n} landmarks`);
+    setAll('monument-number', String(n));
+  }
   if (Number.isFinite(ev.campus?.geofenceMeters)) setAll('geofence', `${ev.campus.geofenceMeters} m`);
   return true;
 }

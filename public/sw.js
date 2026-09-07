@@ -109,7 +109,9 @@
   //        readout honours them, and a handover resets faction and position provenance.
   // `v46`: the Privacy panel no longer tells you presence is symmetric. It is not: a lead
   //        reads your exact position whether or not they have switched themselves on.
-  const VERSION = 'v46';
+  // `v47`: the Turf Wars intro's monument count comes from the pack instead of the word
+  //        "Fourteen", which the Campus intro had already been rewriting for months.
+  const VERSION = 'v47';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
