@@ -193,12 +193,16 @@ const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
 /**
  * A refusal the player can actually see.
  *
- * Every server "no" on this screen used to go to `logChaosTerminal` alone. That panel is a
- * scrolling log on one tab; a player who taps Spin on the map and gets nothing back reads
- * the silence as a dropped tap and taps again. These are the three refusals the economy
- * turns on — the battle, the spin, the item — and they now surface the same way the
- * position and quest-claim refusals do, in the toast, while still leaving the full text in
- * the log for anyone reading it.
+ * Three server refusals on this screen went to `logChaosTerminal` alone: the gym command, the
+ * spin and the item. (Not all of them — the quest-claim and shift-load refusals already
+ * toasted, and an earlier version of this note claimed "every", which was wrong.) That panel
+ * is a scrolling log on one tab; a player who taps Spin on the map and gets nothing back reads
+ * the silence as a dropped tap and taps again. These three now surface the way those others
+ * already did, while still leaving the full text in the log for anyone reading it.
+ *
+ * `what` names the command, not the verb: `battleOrFortifyGym` serves both Contest and
+ * Reinforce, so it passes "Gym" rather than "Battle" — telling somebody reinforcing an ally
+ * that their *battle* was refused names an action they did not take.
  */
 function refuse(what, message) {
   const text = String(message || 'That did not go through.');
@@ -705,11 +709,17 @@ async function fetchLeaderboard() {
  *
  * The panel is built here rather than shipped in `index.html` simply because it exists only
  * while it is open. (An earlier note here justified that with `scripts/checkShell.mjs` gating
- * hidden elements in that file. It does not: the script scans for `registerTab` calls and
- * hashes the shell. The reason was invented to dress up a choice that needed no defending.)
- * `Nexus.dialog` supplies the focus trap and Escape; `returnFocus` and `onClose` are passed
- * below, as the encounter stage does — without them the dialog closed and dropped focus to
- * the document, stranding anyone on a keyboard at the top of the page.
+ * hidden elements in that file. It has no such gate — it reads `index.html` closely, for
+ * script and link targets, the fallback nav, the tablist and the tab order, and it hashes the
+ * shell, but nothing there objects to a hidden element. The reason was invented to dress up a
+ * choice that needed no defending.)
+ *
+ * `Nexus.dialog` supplies the focus trap and Escape, and defaults `returnFocus` to whatever
+ * held focus at open time. `opener` is captured before the fetch instead, because by the time
+ * the panel opens focus may have moved — so this restores the control that was pressed rather
+ * than whatever happened to be focused a network round-trip later. On re-opening while a
+ * Details panel is already stacked, `dialogOpen` keeps the first opener; that is its rule, not
+ * this function's.
  *
  * The field names are `baseKarma`, `surge.karmaAward` and `requiredSkills`, taken from the
  * live payload rather than from memory. The first draft guessed `karmaValue`/`karma` and
@@ -771,7 +781,10 @@ async function viewShiftDetails(shiftId) {
     Nexus.dialog.open(host, {
       returnFocus: opener,
       initialFocus: host.querySelector('button'),
-      onClose: () => { host.remove(); },
+      // Deliberately no `onClose` teardown: the host is looked up by id and reused, and
+      // removing it made a later close re-resolve to `null` — which `dialogClose` reads as
+      // "close the topmost dialog", so a stale close could shut the encounter stage instead.
+      // There is no per-open state to clear here, unlike the encounter's `state.encounter`.
     });
   } else host.classList.add('open');
 }
@@ -1834,7 +1847,7 @@ async function battleOrFortifyGym(gymId, btn) {
   // stop, which is what a geofence is for.
   const gym = gymsCache.find((g) => g._id === gymId);
   if (!gym) {
-    logChaosTerminal('[ERROR] Gym not in cache — refresh the territory list.');
+    refuse('Gym', 'That stronghold is not loaded yet. Refresh the territory list and try again.');
     return;
   }
   const at = requirePlayerCoords('Contesting a gym');
@@ -1872,9 +1885,9 @@ async function battleOrFortifyGym(gymId, btn) {
       fetchStats();
       return json.data;
     }
-    refuse('Battle', json.message);
+    refuse('Gym', json.message);
   } catch (err) {
-    refuse('Battle', err.message);
+    refuse('Gym', err.message);
   }
   return null;
 }
@@ -2086,7 +2099,7 @@ async function deployPowerUp(itemType, btn) {
     if (!at) return;
     const placed = gymsCache.filter((g) => Number.isFinite(g.latitude) && Number.isFinite(g.longitude));
     if (!placed.length) {
-      logChaosTerminal('[BLOCKED] No gyms loaded — refresh the territory list.');
+      refuse('Item', 'No strongholds are loaded yet. Refresh the territory list and try again.');
       return;
     }
     targetGym = placed.reduce((best, g) => (metresBetween(at, g) < metresBetween(at, best) ? g : best), placed[0]);
@@ -2149,13 +2162,15 @@ async function bootCampus() {
   const canvas = document.getElementById('campus-3d-canvas');
   if (!canvas) { campusBooting = false; return; }
 
-  // `bootCampus` runs again on every return to the tab, and both failure notices below are
-  // appended to the viewport rather than owning an element in the markup. Appending is what
-  // stacked a second copy of the message under the first. Replace the previous one instead.
+  // A failed boot leaves `campus` null, so the early return above does not catch it and the
+  // next visit to the tab boots again. A *successful* boot is a no-op on return. So this only
+  // repeats while it is failing — which is exactly when it appends a notice, and appending is
+  // what stacked a second copy under the first. Clear all of them, not one: removing a single
+  // node and appending a new one leaves any count above one unchanged for ever.
   const showCampusNotice = (html) => {
     const host = document.getElementById('campus-viewport');
     if (!host) return;
-    host.querySelector('.campus-notice')?.remove();
+    host.querySelectorAll('.campus-notice').forEach((n) => n.remove());
     host.insertAdjacentHTML('beforeend',
       `<div class="empty-state campus-notice" style="position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px">${html}</div>`);
   };
@@ -2214,7 +2229,7 @@ async function bootCampus() {
 
     setGlStatus('WebGL2 · live', 'c-mint');
     // A boot that succeeds clears whatever the last failed one left on screen.
-    document.getElementById('campus-viewport')?.querySelector('.campus-notice')?.remove();
+    document.getElementById('campus-viewport')?.querySelectorAll('.campus-notice').forEach((n) => n.remove());
     // The bake time is a boot fact; the counts live in the telemetry strip.
     const stats = document.getElementById('gl-stats');
     if (stats) stats.innerText = `baked in ${ms}ms`;
@@ -2230,15 +2245,19 @@ async function bootCampus() {
     window.game?.onCampusReady();
   } catch (err) {
     console.error('Campus renderer failed:', err);
-    // A missing model is the one failure that is a *setup* problem rather than a bug, and it
-    // is the one that looked exactly like the campus having been deleted: an empty grid, no
+    // A missing model is a *setup* problem rather than a bug — as is the absent WebGL2 handled
+    // above — and it is the one that looked exactly like the campus having been deleted: an
+    // empty grid, no
     // buildings, no monuments, and a status chip reading "Renderer failed" — which names the
     // renderer, the one part that was working. A pack only has a campus once `npm run campus`
     // has baked one, and a pack that ships without it (example-campus does) hits this on
     // every load. Say which pack, and say what to run.
     const missingModel = /campus model 40\d/.test(err.message || '');
     if (missingModel) {
-      const pack = window.Nexus?.content?.event?.id || 'this pack';
+      // `pack` is the descriptor's documented id field; `event.id` also carries it, but this
+      // is the handle nexus.js names. Quoted in the command below because the fallback string
+      // contains a space and an unquoted `CONTENT_PACK=this pack` is a broken shell line.
+      const pack = window.Nexus?.content?.pack || window.Nexus?.content?.event?.id || 'this-pack';
       setGlStatus('No campus model', 'c-amber');
       logSosTerminal(`[ERROR] Content pack "${pack}" has no baked campus model. Run: CONTENT_PACK=${pack} npm run campus`);
       showCampusNotice(

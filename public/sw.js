@@ -126,7 +126,11 @@
   //        spoken where you are instead of only in the War Room console.
   // `v54`: the missing-model notice stacked a second copy on every return to the tab, and a
   //        later successful boot left the old one on screen.
-  const VERSION = 'v54';
+  // `v55`: round twenty-five — the jacket now rebakes instead of being repainted (a repaint
+  //        cannot change a colour baked into pixels), the missing-model notice converges to
+  //        one from any count, a Reinforce refusal no longer calls itself a battle, and the
+  //        Details panel stopped removing a host that other dialogs' close path resolves.
+  const VERSION = 'v55';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

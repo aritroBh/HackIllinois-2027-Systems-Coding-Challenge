@@ -414,6 +414,7 @@
     if (!head) return;
     state.head = head;
     state.palette = creator.palette;
+    state.cap = creator.cap;
     state.sheet = creator.sheet || A.sprite(head, { faction: state.faction, cap: creator.cap });
     A.saveAvatar({ head, faction: state.faction, cap: creator.cap, palette: A.PALETTES[creator.palette] });
     applyPlayerSprite();
@@ -460,6 +461,27 @@
       note = `Saved on this device, but the organisers did not get it: ${err.message}`;
     }
     toast(note);
+  }
+
+  /**
+   * Rebake the trainer's sheet, which is the only way the jacket colour can change.
+   *
+   * `factionColour` is read exactly once, inside `avatar.sprite()`, and the result is painted
+   * into the sheet's pixels. `applyPlayerSprite` below re-sends that finished canvas, so a
+   * repaint — however many times it runs — cannot recolour a jacket. An earlier version of
+   * this fix called `onFactionChange()` on every content settle and believed that rebuilt the
+   * sprite; it does not, and the fork whose pack arrived late kept the default jacket anyway.
+   */
+  async function rebuildSheet() {
+    if (!state.head) return;
+    try {
+      const A = await avatar();
+      state.sheet = A.sprite(state.head, { faction: state.faction, cap: state.cap !== false });
+      applyPlayerSprite();
+      renderTrainer();
+    } catch (err) {
+      console.error('Could not rebuild the trainer sheet:', err);
+    }
   }
 
   function applyPlayerSprite() {
@@ -741,10 +763,14 @@
       // into NEUTRAL, which is its own lie: every stronghold reported unclaimed.
       const tally = {};
       for (const id of Object.keys(factionTable())) tally[id] = 0;
-      // Unclaimed is a state a gym can be in, not a faction a pack has to declare. A pack that
-      // lists only its own teams left no `NEUTRAL` bucket, so every unheld gym fell to the
-      // fallback key, `undefined++` produced `NaN`, and the strip drew `width: NaN%` — no bars
-      // at all — for the one case the fallback exists to handle.
+      // The fallback bucket has to exist before anything falls into it. `undefined++` is `NaN`,
+      // and one `NaN` here drew `width: NaN%` for every bar — an empty strip.
+      //
+      // A valid pack always has NEUTRAL: `crossValidate` in src/content/schema.ts rejects a
+      // factions.json without one. So this fires only on a descriptor that validation would
+      // have refused — a partial or hand-edited payload — and it is defence, not a live path.
+      // Said plainly because the previous note here claimed a pack need not declare NEUTRAL,
+      // which contradicted app.js's own (correct) comment twenty lines from the same fact.
       if (tally.NEUTRAL == null) tally.NEUTRAL = 0;
       for (const g of gyms) tally[tally[g.controllingFaction] != null ? g.controllingFaction : 'NEUTRAL']++;
       const total = Math.max(1, gyms.length);
@@ -1172,15 +1198,12 @@
     applyGeofence(window.Nexus?.content);
     window.Nexus?.onEvent?.('content', (content) => {
       applyGeofence(content);
-      // The jacket is painted into the sprite sheet at build time, and `factionColour` reads
-      // the pack's palette. A pack that settles *after* the sheet was built therefore left a
-      // fork's trainer wearing this repository's default cyan — the one team colour a fork is
-      // guaranteed not to have chosen. `onFactionChange` rebuilds the sheet and repaints; it
-      // is the same path a faction pick already takes, so the colour has one source either way.
-      // Called through the export because it is a method on `window.game`, not a binding in
-      // this scope — a bare call here threw `ReferenceError` and took the geofence update
-      // above down with it.
-      window.game?.onFactionChange?.();
+      // The jacket is painted into the sprite sheet at bake time, and `avatar.sprite` reads
+      // the pack's palette through `factionColour`. A pack that settles *after* the sheet was
+      // baked therefore leaves the trainer in whatever colour the pre-pack default gave it —
+      // this repository's cyan if the stored side is TEAM_KERNEL, otherwise NEUTRAL grey.
+      // Only a rebake changes those pixels; a repaint re-sends the same canvas.
+      void rebuildSheet();
     });
     try {
       const A = await avatar();
@@ -1188,6 +1211,7 @@
       if (saved?.head) {
         state.head = saved.head;
         state.palette = saved.palette?.name || 'SNES16';
+        state.cap = saved.cap !== false;
         state.sheet = A.sprite(saved.head, { faction: saved.faction || state.faction, cap: saved.cap !== false });
       }
     } catch (err) { console.warn('avatar unavailable:', err.message); }
