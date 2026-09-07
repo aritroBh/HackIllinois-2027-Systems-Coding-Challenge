@@ -24,7 +24,7 @@ import mongoose from 'mongoose';
 import '../models';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { Shift, ShiftCategory } from '../models/shift.model';
-import { Volunteer, VolunteerRole, PrestigeTier } from '../models/volunteer.model';
+import { Volunteer, VolunteerRole, computePrestigeTier } from '../models/volunteer.model';
 import { Registration, RegistrationStatus } from '../models/registration.model';
 import { ShiftSwap, SwapStatus } from '../models/swap.model';
 import { Gym, Faction } from '../models/gym.model';
@@ -68,7 +68,13 @@ export async function seedDatabase(): Promise<void> {
   baseTime.setHours(12, 0, 0, 0);
 
   // 1. Create Volunteers with Certifications & Prestige
-  const volunteers = await Volunteer.create([
+  // `prestigeTier` is NOT written here. It is a projection of `karmaPoints`
+  // (`computePrestigeTier`), and typing it by hand let the two disagree: the demo's own
+  // sign-in, Nexus Ops, sat on 4,200 karma wearing SIEBEL_GUARDIAN — the band for
+  // 1,000-1,999 — so the leaderboard showed rank 1 with a *lower* tier than rank 2, who had
+  // 600 fewer points. Deriving it below means the seed cannot restate the rule and get it
+  // wrong; there is only one place the rule lives.
+  const volunteerSeeds = [
     {
       // The demo's own sign-in: `npm run demo` auto-logs the dashboard in as the
       // highest-ranked seeded account so every organiser tool (Chaos Lab, Adonix
@@ -80,7 +86,6 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['DRIVERS_LICENSE', 'FOOD_HANDLING', 'CPR'],
       karmaPoints: 4200,
       hoursServed: 42,
-      prestigeTier: PrestigeTier.SIEBEL_GUARDIAN,
       badges: ['SIEBEL_GUARDIAN', 'SWAG_VANGUARD', 'FIRST_RESPONDER'],
     },
     {
@@ -96,7 +101,6 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['DRIVERS_LICENSE', 'FOOD_HANDLING', 'HARDWARE_EXPERIENCE'],
       karmaPoints: 1250,
       hoursServed: 10.5,
-      prestigeTier: PrestigeTier.SIEBEL_GUARDIAN,
       badges: ['SIEBEL_GUARDIAN', 'SWAG_VANGUARD'],
     },
     {
@@ -109,7 +113,6 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['HARDWARE_EXPERIENCE', 'FIRST_AID', 'DRIVERS_LICENSE'],
       karmaPoints: 2400,
       hoursServed: 18.0,
-      prestigeTier: PrestigeTier.MIDNIGHT_KRAKEN,
       badges: ['MIDNIGHT_KRAKEN', 'HARDWARE_HERO'],
     },
     {
@@ -120,7 +123,6 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['DRIVERS_LICENSE', 'FIRST_AID', 'FOOD_HANDLING'],
       karmaPoints: 3600,
       hoursServed: 32.0,
-      prestigeTier: PrestigeTier.LEVIATHAN_PRIME,
       badges: ['LEVIATHAN_PRIME', 'MIDNIGHT_KRAKEN', 'SIEBEL_GUARDIAN'],
     },
     {
@@ -131,7 +133,6 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['FOOD_HANDLING'],
       karmaPoints: 450,
       hoursServed: 4.0,
-      prestigeTier: PrestigeTier.CURRENT_RIDER,
       badges: ['CURRENT_RIDER'],
     },
     {
@@ -142,10 +143,13 @@ export async function seedDatabase(): Promise<void> {
       certifications: ['DRIVERS_LICENSE', 'HEAVY_LIFTING'],
       karmaPoints: 150,
       hoursServed: 1.5,
-      prestigeTier: PrestigeTier.NEOPHYTE_PLANKTON,
       badges: [],
     },
-  ]);
+  ];
+
+  const volunteers = await Volunteer.create(
+    volunteerSeeds.map((v) => ({ ...v, prestigeTier: computePrestigeTier(v.karmaPoints) })),
+  );
 
   const [ops, alice, bob, charlie, dana, evan] = volunteers;
 

@@ -72,9 +72,27 @@
 
   const clockOf = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+  /**
+   * A countdown a person can read at a glance.
+   *
+   * The clock format is only meaningful once the thing is close. `raids.json` anchors the
+   * Opening Bell to the real event — 26 February 2027 — so the honest gap from a September
+   * demo is about a hundred and seventy days, and rolling that into hours printed
+   * `4144:51:40`: nine digits that look like a fault, not a date. Nobody counts down five
+   * months in seconds. Past a day the unit becomes days (and hours, while they still say
+   * something), and only inside the last day does it become the clock that the closing half
+   * of a live raid actually needs.
+   */
   function countdownText(ms) {
     const total = Math.max(0, Math.round(ms / 1000));
     const pad = (n) => String(n).padStart(2, '0');
+    const days = Math.floor(total / 86400);
+    if (days >= 1) {
+      const hours = Math.floor((total % 86400) / 3600);
+      // Past a week the hours are noise; a fortnight out, "14d" is the whole answer.
+      if (days >= 7) return `${days}d`;
+      return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    }
     const hours = Math.floor(total / 3600);
     return hours > 0
       ? `${hours}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`
@@ -324,11 +342,17 @@
     }
     const rows = teams.map((f) => ({ f, score: o.scores.get(f.id) || 0 }));
     const total = rows.reduce((sum, r) => sum + r.score, 0);
-    // Nobody has scored yet: equal thirds is the honest picture, not a winner by rounding.
-    const bar = rows.map((r) => {
-      const share = total > 0 ? (r.score / total) * 100 : 100 / rows.length;
-      return `<span style="width:${share.toFixed(2)}%;background:${hex(r.f.color)}"></span>`;
-    }).join('');
+    // Nobody has scored yet.
+    //
+    // Equal thirds was chosen as "the honest picture, not a winner by rounding", and the
+    // arithmetic is honest, but the *drawing* is not: three saturated blocks filling the
+    // whole bar is the same picture this bar paints for a real three-way tie, and it sat
+    // directly above three zeros. It read as a broken widget. An empty track cannot be
+    // misread — there is nothing in it because nothing has been scored — and the legend
+    // underneath still carries the zeros.
+    const bar = total > 0
+      ? rows.map((r) => `<span style="width:${((r.score / total) * 100).toFixed(2)}%;background:${hex(r.f.color)}"></span>`).join('')
+      : '';
     const legend = rows.map((r) => `<div class="stat">
         <div class="v" style="color:${hex(r.f.color)}">${r.score}</div>
         <div class="hud-label">${esc(r.f.short || r.f.label || r.f.id)}</div>
@@ -341,7 +365,9 @@
       ${o.blurb ? `<p>${esc(o.blurb)}</p>` : ''}
       <div style="display:flex;height:16px;margin-top:12px;border:2px solid var(--ink);background:var(--inset)" aria-hidden="true">${bar}</div>
       <div class="vitals-row" style="margin-top:12px">${legend}</div>
-      <p class="ob-hint">Scored from shifts served and strongholds held, not from walking around.</p>`;
+      <p class="ob-hint">${total > 0
+        ? 'Scored from shifts served and strongholds held, not from walking around.'
+        : 'No side has scored yet. Points come from shifts served and strongholds held, not from walking around.'}</p>`;
   }
 
   /* ------------------------------------------------------------------ *

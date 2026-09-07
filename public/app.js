@@ -1453,14 +1453,25 @@ async function battleOrFortifyGym(gymId, btn) {
       window.fx?.burstAt(btn, factionOf(currentVolunteerFaction).color, captured ? 54 : 22);
       logChaosTerminal(`[GYM ${json.data.action}] ${json.data.message}`);
       pulseMonumentFor(gymId);
-      loadGymsData();
+      // Awaited, and the result handed back.
+      //
+      // The encounter overlay read `gymsCache` the instant this function returned, to decide
+      // whether the banner had changed hands. `loadGymsData()` was fire-and-forget, so the
+      // row it read was the *pre-battle* row: a capture compared the old holder against
+      // itself, found no change, and reported "X is at <old CP>" instead of announcing the
+      // capture. The one line in the whole encounter anybody waits for was the one line that
+      // could not be right. `json.data` carries `action`, `controllingFaction`,
+      // `newControlPoints` and `karmaAwarded` from the write itself, which no cache read can
+      // race, so callers that need the outcome take it from here.
+      await loadGymsData();
       fetchStats();
-    } else {
-      logChaosTerminal(`[ERROR] Gym battle failed: ${json.message}`);
+      return json.data;
     }
+    logChaosTerminal(`[ERROR] Gym battle failed: ${json.message}`);
   } catch (err) {
     logChaosTerminal(`[ERROR] ${err.message}`);
   }
+  return null;
 }
 
 async function loadHackStopsData() {

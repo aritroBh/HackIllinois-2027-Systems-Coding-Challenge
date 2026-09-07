@@ -310,6 +310,51 @@
     creatorRender();
   }
 
+  /**
+   * Turn a sprite sheet into the PNG bytes `POST /api/v1/avatars` accepts.
+   *
+   * `AvatarService.upload` reads width and height out of the IHDR before decoding anything
+   * and refuses whatever is not 128x48, 128x32, 32x32 or 32x48, so the pixels are written at
+   * their own size and never scaled.
+   *
+   * Both shapes turn up here. `avatar.js`'s `sprite()` returns a **canvas** — the four-frame
+   * 128x48 walk sheet, with `frameWidth`/`frames` hung off it — while `state.head` and the
+   * creator's per-palette heads are `ImageData`. Handling only one of them is how the first
+   * version of this failed: `putImageData` threw `parameter 1 is not of type 'ImageData'`,
+   * inside a `try` whose whole job was to report upload failures, so it reported a failure
+   * to encode as though the server had refused it.
+   */
+  function sheetToPng(sheet) {
+    return new Promise((resolve) => {
+      if (typeof sheet?.toBlob === 'function') { sheet.toBlob(resolve, 'image/png'); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = sheet.width;
+      canvas.height = sheet.height;
+      canvas.getContext('2d').putImageData(sheet, 0, 0);
+      canvas.toBlob(resolve, 'image/png');
+    });
+  }
+
+  /**
+   * Publish the avatar, then keep it locally whatever the server said.
+   *
+   * This function used to end at `saveAvatar`, which writes to localStorage. Nothing else in
+   * the shipped client ever called `POST /api/v1/avatars` — I checked every file — so the
+   * entire server half of the avatar feature was unreachable: `AvatarService.upload` with its
+   * IHDR bounds check and its re-encode-to-kill-polyglots step, the pending queue, the
+   * lead console's Approve / Reject / Flag buttons, the per-owner deduplication, the takedown
+   * path. The lead's "Avatar queue" panel could never show anything, because nothing could
+   * ever be queued. `players.js` renders other trainers by avatar hash, and no account ever
+   * had one, so every trainer on the map wore the stock sprite for ever.
+   *
+   * Order matters. The local save happens regardless of the upload, because the avatar is
+   * the player's own face on their own map and a server that is down, or a moderator who
+   * later rejects the image, is no reason to hand somebody back a blank trainer. What the
+   * upload buys is everyone *else* seeing it, once a lead approves it.
+   *
+   * The failure is reported rather than swallowed. A silent catch here would recreate the
+   * exact defect this replaces — a feature that looks like it worked and did nothing.
+   */
   async function creatorKeep() {
     const A = await avatar();
     const head = creator.heads[creator.palette];
@@ -321,9 +366,44 @@
     applyPlayerSprite();
     award('lanyard', 'Welcome to the roster.');
     $('cre-step')?.replaceChildren(document.createTextNode('STEP 3 / 3 · SAVED'));
-    toast("Looking sharp. That's you on the map now.");
     renderTrainer();
     updateHud(true);
+
+    // Whether this face is offered to anyone else, and the consent that decides it.
+    //
+    // `?share=1` is not a detail: `AvatarService.pendingQueue` selects on
+    // `{ status: PENDING, shareOptIn: true }`, so an upload without it is stored, is pointed
+    // at by the account, and is invisible to the moderation queue for ever — uploaded and
+    // unreviewable. That filter is right, and deliberately so: it keeps a face its owner
+    // never offered from being put in front of a moderator at all.
+    //
+    // So the flag is tied to the consent the player has already given or withheld — the same
+    // "Show me on the campus map" switch that governs whether other trainers see their
+    // position. Somebody who has chosen to be invisible does not have their face queued for
+    // review as a side effect of making one, and the message below says which of the two
+    // happened rather than leaving them to guess.
+    const share = window.Nexus?.presence?.state?.optIn ?? window.Nexus?.session?.user?.presenceOptIn ?? false;
+
+    let note = "Looking sharp. That's you on the map now.";
+    try {
+      const png = await sheetToPng(state.sheet);
+      if (!png) throw new Error('the browser could not encode the sheet');
+      const res = await window.Nexus.api(`/api/v1/avatars${share ? '?share=1' : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'image/png' },
+        body: png,
+      });
+      // PENDING is the normal answer, not a problem: a face other people will see is held
+      // for a lead to look at first.
+      note = !share
+        ? "Looking sharp. That's you on your own map. Turn on \u201cShow me on the campus map\u201d in Me to let other trainers see it."
+        : res?.data?.status === 'APPROVED'
+          ? "Looking sharp. That's you on the map now."
+          : "Looking sharp. That's you on your map now \u2014 a lead reviews it before other trainers see it.";
+    } catch (err) {
+      note = `Saved on this device, but the organisers did not get it: ${err.message}`;
+    }
+    toast(note);
   }
 
   function applyPlayerSprite() {
@@ -568,6 +648,47 @@
    * Gym encounter (the SNES battle window)
    * ------------------------------------------------------------------ */
 
+  /**
+   * Battle theatrics.
+   *
+   * A stronghold changing hands is the biggest thing that happens in this app, and it used
+   * to be a line of text swapped in a box. Everything below is decoration over an outcome
+   * the server has already decided — it never gates, delays or alters a write — and all of
+   * it is skipped outright under `prefers-reduced-motion`, where the same beats still play
+   * out in the message line with no motion and no waiting.
+   */
+  const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const beat = (ms) => new Promise((resolve) => setTimeout(resolve, REDUCE_MOTION ? 0 : ms));
+
+  /** A number that flies up off the thing it happened to, then removes itself. */
+  function floatOff(el, text, colour) {
+    if (!el || REDUCE_MOTION) return;
+    const box = el.getBoundingClientRect();
+    const node = document.createElement('div');
+    node.className = 'enc-float';
+    node.textContent = text;
+    node.style.left = `${box.left + box.width / 2}px`;
+    node.style.top = `${box.top + box.height * 0.4}px`;
+    node.style.color = colour;
+    document.body.appendChild(node);
+    setTimeout(() => node.remove(), 1000);
+  }
+
+  /**
+   * Restart a CSS animation that may already be on the element.
+   *
+   * Re-adding a class in the same frame it was removed is a no-op — the style never changed
+   * as far as the engine is concerned — so a second hit on an already-shaking stage would
+   * not shake. Reading `offsetWidth` between the two forces the reflow that makes it change.
+   */
+  function replay(el, cls, ms) {
+    if (!el || REDUCE_MOTION) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), ms);
+  }
+
   function openEncounter(gymId) {
     const g = (window.gymsCache || []).find((x) => x._id === gymId);
     if (!g) return;
@@ -588,7 +709,7 @@
     host.innerHTML = `
       <div class="enc-stage">
         <div class="jrpg enemy">
-          <div class="plate">ENEMY GYM</div>
+          <div class="plate">${ally ? (g.controllingFaction === 'NEUTRAL' ? 'UNCLAIMED GYM' : 'ALLIED GYM') : 'ENEMY GYM'}</div>
           <div class="enc-name">${escq(g.locationName)}<small>Lv${Number(g.level) || 1}</small></div>
           <div class="hud-label" style="color:${enemyF.color}">HELD BY ${escq(enemyF.label)} · ${escq(info?.style || 'STRONGHOLD')}</div>
           <div class="hpbar"><span class="hud-label">CP</span><div class="pxbar big"><i style="width:${Math.min(100, (g.controlPoints / g.maxControlPoints) * 100)}%;background:${enemyF.color}"></i></div><span class="mono">${Number(g.controlPoints)}/${Number(g.maxControlPoints)}</span></div>
@@ -640,19 +761,68 @@
     switch (cmd) {
       case 'contest':
       case 'reinforce': {
-        encounterMessage(`${state.name.toUpperCase()} used ${cmd === 'contest' ? 'CONTEST' : 'REINFORCE'}!`);
+        const stage = document.querySelector('.enc-stage');
+        const target = stage?.querySelector('.jrpg.enemy');
+        const art = stage?.querySelector('.enc-art.enemy');
+        const before = Number(g?.controlPoints) || 0;
+        const attacking = cmd === 'contest';
+
+        // Lock the whole command list, not just the button that was pressed.
+        //
+        // Every command here posts, and the request below is not instant. Nothing stopped a
+        // second CONTEST from being sent while the first was still in flight, and each one is
+        // a real write against the gym: an impatient double-click spent 300 CP and two karma
+        // cooldowns on what the player read as one move. `openEncounter` re-renders on the
+        // way out, which is what re-enables them.
+        const cmds = [...(stage?.querySelectorAll('.cmd') || [])];
+        cmds.forEach((b) => { b.disabled = true; });
+
+        encounterMessage(`${state.name.toUpperCase()} used ${attacking ? 'CONTEST' : 'REINFORCE'}!`);
+        await beat(400);
+
         const btn = document.querySelector(`.cmd[data-cmd="${cmd}"]`);
-        if (typeof battleOrFortifyGym === 'function') await battleOrFortifyGym(enc.gymId, btn);
-        const g2 = (window.gymsCache || []).find((x) => x._id === enc.gymId);
-        if (g2 && g && g2.controllingFaction !== g.controllingFaction) {
-          encounterMessage(`It's super effective! ${g2.locationName.toUpperCase()} now flies the ${factionOf(g2.controllingFaction).label} banner.`);
-          const mon = typeof monumentForGym === 'function' ? monumentForGym(g2) : null;
-          const badge = mon && window.Sprites?.gymBadges()[mon.id];
-          if (badge && g2.controllingFaction === state.faction) award(badge, 'A gym badge for the shelf.');
-        } else if (g2) {
-          encounterMessage(`${g2.locationName.toUpperCase()} is at ${g2.controlPoints}/${g2.maxControlPoints} CP.`);
+        // The write's own answer, not a re-read of the cache it just invalidated.
+        const result = typeof battleOrFortifyGym === 'function'
+          ? await battleOrFortifyGym(enc.gymId, btn)
+          : null;
+
+        // Closed mid-flight: the write still happened and still counts, but there is no
+        // longer a stage to play it on, and re-opening one the player dismissed would be
+        // taking the tab back off them.
+        if (!state.encounter) break;
+
+        if (!result) {
+          encounterMessage('That move did not land. The reason is in the console panel.');
+          cmds.forEach((b) => { b.disabled = false; });
+          break;
         }
-        setTimeout(() => state.encounter && openEncounter(enc.gymId), 1400);
+
+        const captured = result.action === 'CAPTURED';
+        const delta = (Number(result.newControlPoints) || 0) - before;
+        const holder = factionOf(result.controllingFaction);
+
+        replay(stage, captured ? 'is-crit' : 'is-hit', captured ? 540 : 300);
+        replay(target, 'is-struck', 540);
+        window.fx?.burstAt(art || target, captured ? '#FCB316' : holder.color, captured ? 64 : 26);
+        if (delta) floatOff(target, `${delta > 0 ? '+' : ''}${delta} CP`, delta < 0 ? '#FF3E8C' : '#7BD88F');
+        if (Number(result.karmaAwarded) > 0) {
+          setTimeout(() => floatOff(stage?.querySelector('.jrpg.you'), `+${result.karmaAwarded} KARMA`, '#FCB316'), 240);
+        }
+        await beat(520);
+        if (!state.encounter) break;
+
+        if (captured) {
+          const g3 = (window.gymsCache || []).find((x) => x._id === enc.gymId);
+          encounterMessage(`A critical hit! ${String(g3?.locationName || g?.locationName || 'The stronghold').toUpperCase()} now flies the ${holder.label} banner.`);
+          const mon = typeof monumentForGym === 'function' && g3 ? monumentForGym(g3) : null;
+          const badge = mon && window.Sprites?.gymBadges()[mon.id];
+          if (badge && result.controllingFaction === state.faction) award(badge, 'A gym badge for the shelf.');
+        } else {
+          // The server writes this line ("Inflicted 150 damage on X! 690 CP remaining."),
+          // and it is the only description of the write that cannot disagree with it.
+          encounterMessage(String(result.message || ''));
+        }
+        setTimeout(() => state.encounter && openEncounter(enc.gymId), captured ? 1800 : 1400);
         break;
       }
       case 'bag':

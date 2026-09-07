@@ -190,8 +190,41 @@ if (!fs.existsSync(lockPath)) {
      * Comments are stripped first, so a commented-out call cannot register a phantom tab.
      */
     const registered = new Map();
-    const TAB_SOURCES = ['public/app.js', 'public/views/me.js', 'public/views/lead.js',
-                         'public/views/sos.js', 'public/views/quests.js'];
+    /**
+     * Every file that can register a tab, discovered rather than listed.
+     *
+     * This was a hard-coded list of five paths, and everything outside it was invisible to
+     * the gate — which is worse than it sounds, because adding `public/views/<name>.js` is
+     * exactly what CONTRIBUTING.md and docs/PLUGINS.md tell a contributor to do. Their tab
+     * went unscanned, so the role-gating check this whole block exists to perform silently
+     * did not run on it; and if they also added it to index.html's fallback nav, the loop
+     * below reported `no registerTab() call declares "tab-x"` — a false statement about
+     * their code that was really a true statement about this scanner's reading list. A
+     * contributor's first meeting with this repository's gates would have been a lie.
+     *
+     * Plugin client assets have the same shape one directory over, so they are globbed too.
+     * The same drift, in `scripts/verify.sh`'s frontend-syntax step, had left it nine files
+     * behind before it was globbed for this reason.
+     */
+    const listJs = (rel) => {
+      try {
+        return fs.readdirSync(path.join(root, rel))
+          .filter((name) => name.endsWith('.js'))
+          .map((name) => `${rel}/${name}`);
+      } catch {
+        return [];   // the directory need not exist; a repo with no plugins is not a fault
+      }
+    };
+    const pluginDirs = (() => {
+      try {
+        return fs.readdirSync(path.join(root, 'plugins'), { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => `plugins/${e.name}/public`);
+      } catch {
+        return [];
+      }
+    })();
+    const TAB_SOURCES = ['public/app.js', ...listJs('public/views'), ...pluginDirs.flatMap(listJs)];
     /** The `{...}` object literal starting at `from`, by brace depth, ignoring quoted braces. */
     const objectAt = (src, from) => {
       let depth = 0, quote = null;
@@ -218,16 +251,27 @@ if (!fs.existsSync(lockPath)) {
         }
         if (!id) continue;
         const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? null;
-        registered.set(id, roles);
+        registered.set(id, { roles, rel });
       }
     }
+    /**
+     * A tab shipped by this repository, as opposed to one a plugin adds.
+     *
+     * The distinction did not exist while `TAB_SOURCES` was five hard-coded core paths. Now
+     * that plugins are scanned it matters twice: an installed plugin must not be able to
+     * satisfy the floor below for a core tab somebody deleted, and it must not be required
+     * to appear in `index.html` (see the fallback rule further down).
+     */
+    const isCore = (rel) => rel.startsWith('public/');
+    const coreTabs = [...registered.values()].filter((t) => isCore(t.rel)).length;
+
     // Every tab this repository actually has. A drop below it means the scan broke, not that
     // tabs were deleted — and this is the number the sos.js miss above slipped past, so it is
     // now the real total rather than a floor low enough to hide one.
     const EXPECTED_TABS = 8;
-    if (registered.size < EXPECTED_TABS) {
+    if (coreTabs < EXPECTED_TABS) {
       problems.push(
-        `checkShell found ${registered.size} registerTab() calls across ${TAB_SOURCES.length} files ` +
+        `checkShell found ${coreTabs} core registerTab() calls across ${TAB_SOURCES.length} scanned files ` +
         `but expects at least ${EXPECTED_TABS}. Either a tab was removed (update EXPECTED_TABS) ` +
         'or the scanner no longer matches how they are written.'
       );
@@ -253,7 +297,14 @@ if (!fs.existsSync(lockPath)) {
       const listed = [...roles.matchAll(/'([^']+)'/g)].map((m) => m[1]);
       return ALL_ROLES.every((r) => listed.includes(r));
     };
-    for (const [id, roles] of registered) {
+    for (const [id, { roles, rel }] of registered) {
+      // Core tabs only. `index.html` is a static file that ships before anyone decides which
+      // plugins are installed, so it cannot carry a button for a tab that may not exist —
+      // requiring one would make the gate fail on a correct plugin, which is the same
+      // "true statement about the scanner reported as a fault in your code" that the
+      // hard-coded source list used to produce. Plugin tabs are still scanned and still
+      // answer the check above: put one in the fallback nav and it must really be declared.
+      if (!isCore(rel)) continue;
       if (openToEveryone(roles) && !fallback.includes(id)) {
         problems.push(`tab "${id}" is open to every role but has no button in index.html's fallback nav`);
       }

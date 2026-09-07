@@ -72,10 +72,25 @@
   }
 
   /** Reports failure in both places a lead might be looking. */
+  /**
+   * Report a refusal in the server's own words.
+   *
+   * Every 403 from this console used to be rewritten as "your account is not a shift lead",
+   * on the assumption that a 403 here could only be a role refusal. It cannot.
+   * `POST /sos/tickets/:id/resolve` answers 403 with "You cannot resolve a ticket you raised
+   * yourself" — a guard against awarding yourself the bounty on your own distress call — and
+   * an ORGANIZER who hit it was told, falsely, that they were not a lead. That sends the one
+   * person who can fix the situation to look for a permissions problem that does not exist,
+   * while the actual reason was already in the response body and was being discarded.
+   *
+   * `session.js` puts the server's `message` on the thrown `ApiError`, so the server's text
+   * is used whenever there is any. The role sentence survives only as the fallback for a 403
+   * that arrived with no message at all, which is the case it was always describing.
+   */
   function failed(what, err) {
-    const message = err?.status === 403
-      ? `${what}: your account is not a shift lead.`
-      : `${what}: ${err?.message || 'request failed'}`;
+    const reason = err?.message
+      || (err?.status === 403 ? 'your account is not a shift lead.' : 'request failed');
+    const message = `${what}: ${reason}`;
     say(message, 'err');
     window.game?.toast?.(message);
   }
@@ -302,9 +317,9 @@
         <img class="lead-avatar-img" src="/api/v1/avatars/${encodeURIComponent(a.hash)}" alt="Avatar sheet awaiting review" width="64" height="64" loading="lazy">
         <div class="hud-label">${esc(String(a.hash).slice(0, 8))} · ${Number(a.width) || 0}×${Number(a.height) || 0}${a.flags ? ` · ${Number(a.flags)} flags` : ''}</div>
         <div class="lead-moves">
-          <button class="pb pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-verdict="approve">Approve</button>
-          <button class="pb pb-danger pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-verdict="reject">Reject</button>
-          <button class="pb pb-ghost pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-verdict="flag">Flag</button>
+          <button class="pb pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-owner="${esc(a.ownerId)}" data-verdict="approve">Approve</button>
+          <button class="pb pb-danger pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-owner="${esc(a.ownerId)}" data-verdict="reject">Reject</button>
+          <button class="pb pb-ghost pb-sm" type="button" data-action="lead-avatar" data-hash="${esc(a.hash)}" data-owner="${esc(a.ownerId)}" data-verdict="flag">Flag</button>
         </div>
       </div>`).join('');
   }
@@ -369,10 +384,26 @@
     }
   });
 
+  /**
+   * Record a verdict on one upload.
+   *
+   * `ownerId` is required by both `reviewSchema` and `flagSchema` and was not being sent, so
+   * **every** Approve, Reject and Flag in this console answered 400 VALIDATION_ERROR. The
+   * whole moderation panel was inert, and nothing said so loudly: the row simply stayed put.
+   *
+   * The server wants it for a reason worth keeping in view here — a hash identifies an
+   * *image*, and two people who upload the same sheet get one row each, so acting on
+   * `{ hash }` alone would act on whichever row the database returned first. Rejecting one
+   * person's avatar could reject another's. `GET /avatars/queue` returns `ownerId` beside
+   * every row, so the queue has always carried the answer; the buttons just did not pass it
+   * on.
+   */
   N.registerAction('lead-avatar', async (el) => {
-    const { hash, verdict } = el.dataset;
+    const { hash, owner, verdict } = el.dataset;
     const path = verdict === 'flag' ? 'flag' : 'review';
-    const body = verdict === 'flag' ? { reason: 'LEAD_REVIEW' } : { approve: verdict === 'approve' };
+    const body = verdict === 'flag'
+      ? { ownerId: owner, reason: 'LEAD_REVIEW' }
+      : { ownerId: owner, approve: verdict === 'approve' };
     el.disabled = true;
     try {
       await N.api(`/api/v1/avatars/${encodeURIComponent(hash)}/${path}`, { method: 'POST', body });

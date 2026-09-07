@@ -50,6 +50,51 @@
 
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /** SIEBEL_GUARDIAN -> "Siebel Guardian". The card printed the raw enum before. */
+  const humanise = (v) => String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+  /**
+   * The karma bands, mirrored from `computePrestigeTier` in src/models/volunteer.model.ts.
+   *
+   * A second copy of a server rule is how this repository grows its favourite bug, so this
+   * one is gated rather than trusted: `tests/prestige.test.ts` parses the thresholds back out
+   * of the model and fails if the two ever disagree. The copy has to exist because the card
+   * draws a *distance* — "you are 1,500 karma short of Leviathan Prime" needs both edges of
+   * the band, and `GET /me/card` sends only the tier the balance landed in, not its bounds.
+   */
+  const TIER_BANDS = [
+    { tier: 'NEOPHYTE_PLANKTON', minKarma: 0 },
+    { tier: 'CURRENT_RIDER', minKarma: 200 },
+    { tier: 'ABYSSAL_VANGUARD', minKarma: 500 },
+    { tier: 'SIEBEL_GUARDIAN', minKarma: 1000 },
+    { tier: 'MIDNIGHT_KRAKEN', minKarma: 2000 },
+    { tier: 'LEVIATHAN_PRIME', minKarma: 3500 },
+  ];
+
+  /** The band a balance sits in, and the one above it — null once there is nothing above. */
+  function bandsFor(karma) {
+    const k = Math.max(0, Number(karma) || 0);
+    let current = TIER_BANDS[0];
+    for (const band of TIER_BANDS) if (k >= band.minKarma) current = band;
+    return { current, next: TIER_BANDS.find((band) => k < band.minKarma) || null };
+  }
+
+  /**
+   * The team the rest of the client believes you are on.
+   *
+   * Deliberately `window.currentVolunteerFaction` first and the card's `faction` second, in
+   * that order. They disagree today: the server stores `null` for every seeded account, and
+   * app.js picks the first playable team so the campus HUD, the gym list and the encounter
+   * all have a colour to work with. Reading the card first would put "Unclaimed" on this
+   * panel while the Campus tab two clicks away said "Team Kernel" about the same person.
+   * One wrong-looking answer is better than two answers.
+   */
+  function myFaction() {
+    const id = window.currentVolunteerFaction || state.card?.faction || 'NEUTRAL';
+    return (N.content?.factions || []).find((f) => f.id === id)
+      || { id, label: humanise(id), short: humanise(id), color: '#7c8daa' };
+  }
+
   /* ------------------------------------------------------------------ *
    * Where things are
    * ------------------------------------------------------------------ */
@@ -299,18 +344,81 @@
       </div>`;
   }
 
+  /**
+   * Who you are, in the game's own terms.
+   *
+   * This panel used to be three numbers and a streak line, and it printed `SIEBEL_GUARDIAN`
+   * — the raw enum, underscore and all — as its heading, while the Ranks table two tabs over
+   * humanised the same value. What it never showed at all was the half of the identity the
+   * player actually picks: the sprite, the team, the level, and which badges the count was
+   * counting. All four were already on the client; nothing here asks the server for anything
+   * it was not already sending.
+   */
   function statsPanel() {
     const u = N.session.user || {};
+    const card = state.card || {};
+    const karma = Number(card.karma ?? u.karmaPoints) || 0;
     const streak = streakDays();
     const carrying = state.inventory.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    const faction = myFaction();
+    const { current, next } = bandsFor(karma);
+
+    // The level curve and the karma bands are two different ladders over the same balance:
+    // levels come from game.js (a square-root curve, no ceiling), tiers from the server's
+    // six named bands. Showing one and not the other is what made "4,200 karma" feel like a
+    // number with nothing attached to it.
+    const level = window.game?.levelFor ? window.game.levelFor(karma) : null;
+    const levelPct = window.game?.levelProgress ? Math.round(window.game.levelProgress(karma) * 100) : 0;
+    const bandSpan = next ? next.minKarma - current.minKarma : 0;
+    const bandPct = next ? Math.round(((karma - current.minKarma) / bandSpan) * 100) : 100;
+
+    // The trainer you made on the Trainer tab, or the stock sprite until you make one.
+    // `Sprites` is a plain script like this one and may not have parsed yet on a cold load;
+    // an empty face is a smaller failure than a thrown render.
+    const S = window.Sprites;
+    const head = window.game?.state?.head;
+    const face = !S ? ''
+      : head ? `<img class="pxi" alt="" src="${S.imageDataURL(head, 4)}">`
+        : S.img('trainer', 5);
+
+    const badges = Array.isArray(u.badges) ? u.badges : [];
+
     return `
-      <div class="px">
-        <div class="panel-head"><div><div class="eyebrow">Standing</div><h3>${esc(state.card?.tier || u.prestigeTier || 'Rookie')}</h3></div></div>
-        <div class="ob-stats">
-          <span><b>${Number(u.karmaPoints) || 0}</b><small>KARMA</small></span>
-          <span><b>${(Number(u.hoursServed) || 0).toFixed(1)}</b><small>HOURS</small></span>
-          <span><b>${(u.badges || []).length}</b><small>BADGES</small></span>
+      <div class="px" id="me-standing">
+        <div class="panel-head">
+          <div><div class="eyebrow">Standing</div><h3>${esc(humanise(card.tier || u.prestigeTier || 'Rookie'))}</h3></div>
+          ${level ? `<span class="sticker">LV ${level}</span>` : ''}
         </div>
+
+        <div class="me-card">
+          <div class="me-face" aria-hidden="true">${face}</div>
+          <div class="me-facts">
+            <div class="me-chips">
+              <span class="tag is-orange">${esc(humanise(u.kind === 'HACKER' ? 'HACKER' : u.role || 'VOLUNTEER'))}</span>
+              <span class="tag" style="border-color:${esc(faction.color)};color:${esc(faction.color)}">${esc(faction.label || faction.id)}</span>
+              ${card.shortId ? `<span class="tag">#${esc(card.shortId)}</span>` : ''}
+            </div>
+            ${level ? `<div class="me-meter">
+              <div class="hud-label">Level ${level} &middot; ${levelPct}% of the way to ${level + 1}</div>
+              <div class="pxbar"><i style="width:${levelPct}%"></i></div>
+            </div>` : ''}
+            <div class="me-meter">
+              <div class="hud-label">${next
+                ? `${next.minKarma - karma} karma to ${esc(humanise(next.tier))}`
+                : 'Top tier &mdash; there is nothing above this'}</div>
+              <div class="pxbar"><i class="is-tier" style="width:${bandPct}%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-stats">
+          <span><b>${karma}</b><small>KARMA</small></span>
+          <span><b>${(Number(u.hoursServed) || 0).toFixed(1)}</b><small>HOURS</small></span>
+          <span><b>${badges.length}</b><small>BADGES</small></span>
+        </div>
+        ${badges.length
+          ? `<div class="me-badges">${badges.map((b) => `<span class="badge-tag">${esc(humanise(b))}</span>`).join('')}</div>`
+          : '<p class="ob-hint">No badges yet. They come from surge shifts, distress calls answered and strongholds held.</p>'}
         <p class="ob-hint">${streak > 0
           ? `${streak} day${streak === 1 ? '' : 's'} in a row. Serve a shift today to keep it.`
           : 'No streak yet. Serve a shift on two days running to start one.'}</p>
@@ -437,6 +545,37 @@
   }
 
   // players.js owns the toggle; repaint so the checkbox agrees with the transport.
+  /**
+   * Repaint the standing panel once the two globals it reads have actually loaded.
+   *
+   * `index.html` loads this file at line 389 and `sprites.js` at 400, `app.js` at 404. They
+   * are plain classic scripts, so by the time anything here runs on a `session:ready` that
+   * resolved early, `window.Sprites` can still be undefined and `currentVolunteerFaction`
+   * has not been reconciled against the content pack. Both were read once, at first paint,
+   * and never again: the trainer's face came out an empty box and the team chip said
+   * "Unclaimed" while the Campus tab, reading the same variable a moment later, said
+   * "Team Kernel" about the same person.
+   *
+   * Only this panel is redrawn, not the tab. `paint()` rebuilds the attendance QR from
+   * scratch, and a token minted thirty seconds ago should not be torn down and redrawn
+   * because a sprite sheet finished decoding.
+   */
+  function repaintStanding() {
+    const el = document.getElementById('me-standing');
+    // Absent when the tab has never been opened, or when nobody is signed in — in both
+    // cases there is nothing to correct and `paint()` will read the settled values.
+    if (el) el.outerHTML = statsPanel();
+  }
+
+  // Whichever arrives last wins; both are cheap and idempotent.
+  window.addEventListener('load', () => {
+    repaintStanding();
+    // `Sprites.ready` settles after the memorabilia fetch. Subscribed here rather than at
+    // module scope because `window.Sprites` does not exist yet when this file is parsed.
+    window.Sprites?.ready?.then?.(repaintStanding, () => {});
+  });
+  N.onEvent('content', repaintStanding);
+
   N.onEvent('presence:transport', () => paint());
   N.onEvent('presence:nack', () => paint());
 })();

@@ -71,7 +71,8 @@
   /**
    * Nexus.api(path, { method = 'GET', body, headers, lenient, signal })
    *
-   * Same-origin fetch that JSON-encodes `body`, adds `X-CSRF-Token` to every
+   * Same-origin fetch that JSON-encodes `body` (binary bodies are passed through
+   * untouched), adds `X-CSRF-Token` to every
    * non-GET, parses the `{ success, data, ... }` envelope and returns it whole
    * (callers read `.data`, and the registration endpoint also puts `.status`
    * beside `.success`). `success:false` or a non-2xx throws an ApiError with
@@ -83,13 +84,20 @@
     const url = path.startsWith('/') ? path : `${API}/${path}`;
     const m = String(method).toUpperCase();
     const h = { Accept: 'application/json', ...headers };
+    // A Blob, an ArrayBuffer or a typed array is sent as itself. `POST /api/v1/avatars`
+    // takes a raw PNG (`express.raw`), and JSON-encoding a Blob yields the string "{}" —
+    // so a binary body had to bypass this wrapper entirely and hand-roll its own CSRF
+    // header, which is the kind of duplication that goes stale in one direction and fails
+    // closed in production. `Content-Type` is left to the caller for these, because the
+    // route matches on it.
+    const binary = body instanceof Blob || body instanceof ArrayBuffer || ArrayBuffer.isView(body);
     if (m !== 'GET' && m !== 'HEAD') {
-      h['Content-Type'] = h['Content-Type'] || 'application/json';
+      if (!binary) h['Content-Type'] = h['Content-Type'] || 'application/json';
       const token = csrfToken();
       if (token) h['X-CSRF-Token'] = token;
     }
     const init = { method: m, credentials: 'same-origin', headers: h, signal };
-    if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
+    if (body !== undefined) init.body = (typeof body === 'string' || binary) ? body : JSON.stringify(body);
 
     const res = await fetch(url, init);
     const text = await res.text();

@@ -63,7 +63,13 @@
   // `v8`: the campus never stands itself down now; low-power is a choice, not a guess.
   // `v9`: contrast and type pass — invisible ink-on-dark text, undefined tokens, 7px Silkscreen.
   // `v10`: destructive demo controls removed from the shipped nav.
-  const VERSION = 'v17';
+  // `v18`: Silkscreen 700 on every pixel caption, the Me tab's trainer card, and a gym
+  //        encounter that plays the hit instead of printing it.
+  // `v19`: the update prompt itself — pwa.js now sends the skip-waiting message this file
+  //        has described since v11, so a new build is reachable without closing every tab.
+  // `v20`: the avatar the trainer creator makes is actually sent to the server, so the
+  //        moderation queue and other trainers' faces stop being unreachable code.
+  const VERSION = 'v23';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
@@ -160,9 +166,16 @@
     );
   });
 
-  // No skipWaiting() here. A new worker waits until the last dashboard tab is
-  // gone so a running shift never has its scripts swapped mid-session; the page
-  // can opt in with a `nexus-sw-skip-waiting` message when it is safe.
+  // No skipWaiting() here. A new worker waits until the last dashboard tab is gone so a
+  // running shift never has its scripts swapped mid-session; the page opts in with a
+  // `nexus-sw-skip-waiting` message when it is safe.
+  //
+  // That opt-in is sent by `pwa.js`, which shows the "a new version is ready" bar and posts
+  // the message when the user accepts. It is named here because the sentence above described
+  // it for eight versions while no client sent it: the escape hatch was documented and
+  // absent, so the only route to a new build was closing every dashboard tab, and a
+  // cache-first shell meant a tab left open served the old bundle for as long as it stayed
+  // open. If that bar is ever removed, this comment is wrong again.
   self.addEventListener('activate', (event) => {
     event.waitUntil(
       (async () => {
