@@ -130,7 +130,10 @@
       button.disabled = select.disabled;
       root.classList.toggle('is-disabled', select.disabled);
       if (select.disabled) close(false);
-      if (select.title) button.title = select.title;
+      // Assigned unconditionally. `if (select.title)` set it and never unset it, so clearing
+      // a select's title left the button quoting the old one — the "set but never cleared"
+      // shape, harmless only while every caller happens to write a non-empty string.
+      button.title = select.title || '';
     }
 
     function paintActive() {
@@ -272,8 +275,22 @@
     // `attributes` as well as `childList`: `lead.js` repaints the shift picker's options, and
     // `app.js` toggles `disabled` on the faction picker. Watching only children would have
     // seen the first and missed the second.
-    new MutationObserver(() => { if (!isOpen(root)) sync(); })
-      .observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'title'] });
+    // `disabled` is honoured even while the listbox is open; everything else waits.
+    //
+    // Skipping `sync()` whenever the list is open is right for an option repaint — rebuilding
+    // the rows under a keyboard user loses their place. It is wrong for `disabled`: a lock
+    // arriving mid-open (the faction PATCH resolving while the picker is still down) was
+    // simply dropped, leaving a live listbox over a control the page had switched off, and a
+    // choice from it fires `change` on a disabled select.
+    new MutationObserver((records) => {
+      const disabledChanged = records.some((r) => r.attributeName === 'disabled');
+      if (disabledChanged || !isOpen(root)) sync();
+    }).observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'title'] });
+
+    // A `value` assignment mutates no attribute and fires no event, so nothing above sees it.
+    // Owning views that set `.value` directly dispatch this to ask for a repaint — cheaper
+    // and far more predictable than observing every attribute and hoping one of them moved.
+    select.addEventListener('pxsel:sync', () => sync());
 
     sync();
   }

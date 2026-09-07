@@ -387,10 +387,13 @@
   /**
    * Publish the avatar, then keep it locally whatever the server said.
    *
-   * This function used to stop at `saveAvatar` — it went on to update the sprite, the sticker
-   * shelf and the HUD, but localStorage was as far as the *image* ever travelled. Nothing in
-   * the shipped client called `POST /api/v1/avatars` at all, so the entire server half of the
-   * avatar feature was unreachable: `AvatarService.upload` with its
+   * Before shell v20 this stopped at `saveAvatar` — it went on to update the sprite, the
+   * sticker shelf and the HUD, but localStorage was as far as the *image* ever travelled, and
+   * no file in the shipped client called `POST /api/v1/avatars`. (The POST itself landed in
+   * v20; this round only split it out. An earlier draft of this paragraph dropped the word
+   * "else" from "nothing else called it" and so claimed the endpoint was unreachable in a
+   * version where this very function was already calling it.) The server half was unreachable
+   * until then: `AvatarService.upload` with its
    * IHDR bounds check and its re-encode-to-kill-polyglots step, the pending queue, the
    * lead console's Approve / Reject / Flag buttons, the per-owner deduplication, the takedown
    * path. The lead's "Avatar queue" panel could never show anything, because nothing could
@@ -576,7 +579,9 @@
       // A measured distance wins over the proximity index, and the index is only consulted
       // when there is no distance to compare.
       //
-      // This read `nearIds.has(id) || d <= radius`, and the index is built at the *campus*
+      // This read nearIds.has(id) || (Number.isFinite(d) && d <= PROX_RADIUS) — unbackticked,
+      // because that line no longer exists and a backtick here is a claim you can find it.
+      // The index is built at the *campus*
       // radius — so for a stop whose own fence is tighter than the campus default, membership
       // of that set short-circuited past the comparison and left the button enabled from
       // outside its geofence. The server refuses that spin, which makes it the enabled button
@@ -723,6 +728,9 @@
    * it is skipped outright under `prefers-reduced-motion`, where the same beats still play
    * out in the message line with no motion and no waiting.
    */
+  /** Gym ids with a battle write in flight. Outlives the stage, which is the point. */
+  const inFlight = new Set();
+
   const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const beat = (ms) => new Promise((resolve) => setTimeout(resolve, REDUCE_MOTION ? 0 : ms));
 
@@ -840,6 +848,19 @@
         // a real write against the gym: an impatient double-click spent 300 CP and two karma
         // cooldowns on what the player read as one move. `openEncounter` re-renders on the
         // way out, which is what re-enables them.
+        // One write per gym at a time, tracked outside the stage.
+        //
+        // Disabling the command list stops a second click on *this* stage. It does not stop
+        // the player closing the encounter mid-flight and reopening the same gym, which
+        // renders a fresh stage with fresh enabled buttons over a request that has not landed
+        // — two concurrent writes, 300 CP, for what read as one move. The stage is the wrong
+        // place to hold that state because the stage is what gets thrown away.
+        if (inFlight.has(enc.gymId)) {
+          encounterMessage('That move is already in flight. Give it a moment.');
+          break;
+        }
+        inFlight.add(enc.gymId);
+
         const cmds = [...(stage?.querySelectorAll('.cmd') || [])];
         cmds.forEach((b) => { b.disabled = true; });
 
@@ -849,16 +870,26 @@
         // The request goes out first and the beat runs beside it, rather than after it.
         //
         // Written the other way round — `await beat(400)` and then the POST — the decoration
-        // was sitting in front of the write, which is precisely what the comment above this
-        // block promises never happens. It also added 400 ms to every battle and widened the
-        // window the command lock exists to close. Starting the promise and then awaiting the
-        // beat keeps the same rhythm on screen and costs the write nothing: by the time the
-        // "used CONTEST!" line has been read, the answer is usually already back.
+        // sat in front of the write, so the server heard about the move 400 ms after the
+        // player made it. The beat still runs and the stage still takes the same time; what
+        // moved is when the request *starts*, which is the difference between the animation
+        // delaying the write and merely accompanying it.
+        //
+        // It does not change the double-submit window: the command list is disabled before
+        // the beat in both versions. That is the lock's job and it was already doing it.
         const pending = typeof battleOrFortifyGym === 'function'
           ? battleOrFortifyGym(enc.gymId, btn)
           : Promise.resolve(null);
         await beat(400);
-        const result = await pending;
+        let result;
+        try {
+          result = await pending;
+        } finally {
+          // `finally`, so a rejection cannot leave the gym permanently unbattleable.
+          // `battleOrFortifyGym` catches internally today and this is belt and braces, but a
+          // lock that can be stranded by an exception is a lock that eventually strands.
+          inFlight.delete(enc.gymId);
+        }
 
         // Still the same encounter?
         //

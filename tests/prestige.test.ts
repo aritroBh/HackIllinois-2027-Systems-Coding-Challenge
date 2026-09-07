@@ -85,13 +85,17 @@ describe('the seed cannot restate the rule and get it wrong', () => {
    */
   it('writes no prestigeTier literal, deriving every one from karma', () => {
     const seed = read('src', 'seed', 'seedData.ts');
-    // Whitespace-tolerant, because `prestigeTier : PrestigeTier.X` is the same defect and a
-    // formatter could introduce it.
-    expect(seed).not.toMatch(/prestigeTier\s*:\s*PrestigeTier\./);
-    // Only that the derivation is called — not the argument name. Asserting on `v.karmaPoints`
-    // would fail a correct refactor that renamed the parameter, which is a gate failing for a
-    // change that fixed nothing and broke nothing.
-    expect(seed).toMatch(/prestigeTier\s*:\s*computePrestigeTier\(/);
+    // Every assignment, not "no enum literal anywhere and at least one derivation somewhere".
+    //
+    // The pair of assertions this replaces could both pass on a seed that derived five tiers
+    // and hard-coded the sixth as a raw string — `prestigeTier: 'SIEBEL_GUARDIAN'` names no
+    // enum, and the compliant five satisfied the "is derived" half on their own. That is the
+    // original defect wearing quotes.
+    const assignments = [...seed.matchAll(/prestigeTier\s*:\s*([^,\n]+)/g)].map((m) => m[1].trim());
+    expect(assignments.length).toBeGreaterThan(0);   // a parser that matches nothing is not a pass
+    for (const value of assignments) {
+      expect(value).toMatch(/^computePrestigeTier\(/);
+    }
   });
 
   /**

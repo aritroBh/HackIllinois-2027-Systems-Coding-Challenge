@@ -24,9 +24,13 @@ let volunteersCache = [];
  * cache, so it is not only the bag that would be wrong.
  */
 let handoverGeneration = 0;
-// The session user's faction when signed in. The picker overrides it in this
-// tab only: no endpoint writes an account's faction, so a reload or the
-// `session` event below puts the server's value back.
+// The session user's faction when signed in.
+//
+// This used to say the picker overrode it "in this tab only: no endpoint writes an account's
+// faction". `PATCH /me/faction` exists now and `changeUserFaction` calls it, so the value
+// here is written through and survives a reload. Until an account binds a side the server
+// stores null, and `applyFactions` puts a playable team here so the map has colours — that
+// default is a display choice, not an allegiance, and the picker says so.
 let currentVolunteerFaction = window.Nexus?.session?.user?.faction || 'TEAM_KERNEL';
 let gymsCache = [];
 let hackStopsCache = [];
@@ -820,6 +824,18 @@ function renderGymsList() {
   }).join('');
 }
 
+/**
+ * The campus geofence from the pack, for callers with no specific stop or venue.
+ *
+ * A literal 75 sat in the HackStop list as the fallback for a stop with no radius of its own,
+ * next to a button that falls back to `PROX_RADIUS` — so on a pack whose campus radius is not
+ * 75 the label and the control beside it disagreed. Same number, same source, one place.
+ */
+function packGeofenceMetres() {
+  const m = Number(Nexus.content?.event?.campus?.geofenceMeters);
+  return Number.isFinite(m) && m > 0 ? m : 75;
+}
+
 function renderHackStopsList() {
   const markup = hackStopsCache.length === 0
     ? `<div class="empty-state">${icon('radio')}<div>No beacons deployed.</div></div>`
@@ -830,7 +846,7 @@ function renderHackStopsList() {
             <div class="name">${esc(stop.name)}</div>
             <div class="where">${esc(stop.locationName)}</div>
           </div>
-          <span class="dist" data-dist>${Number(stop.geofenceRadiusMeters) || 75} m</span>
+          <span class="dist" data-dist>${Number(stop.geofenceRadiusMeters) || packGeofenceMetres()} m</span>
           <button class="pb pb-ghost pb-sm" data-action="spin" data-beacon="${esc(stop.beaconId)}" data-lat="${Number(stop.latitude)}" data-lon="${Number(stop.longitude)}" data-radius="${Number(stop.geofenceRadiusMeters) || ''}" disabled title="Walk closer to spin">Spin</button>
         </div>`).join('');
 
@@ -1397,7 +1413,13 @@ async function triggerAdonixSync() {
 function paintFactionPicker(faction, locked) {
   const sel = document.getElementById('user-faction-selector');
   if (!sel) return;
-  if (faction && [...sel.options].some((o) => o.value === faction)) sel.value = faction;
+  if (faction && [...sel.options].some((o) => o.value === faction)) {
+    sel.value = faction;
+    // `.value` is a property assignment: no attribute mutation, no `change` event, so the
+    // pixel dropdown in front of this select has no way to notice. Without this the button
+    // kept showing the side a failed PATCH had just rolled back from.
+    sel.dispatchEvent(new CustomEvent('pxsel:sync'));
+  }
   sel.style.borderColor = factionOf(faction || currentVolunteerFaction).color;
   sel.disabled = !!locked;
   sel.title = locked
@@ -1429,8 +1451,32 @@ async function changeUserFaction(faction) {
     paintFactionPicker(res?.data?.faction || faction, true);
     logChaosTerminal(`[FACTION] ${factionOf(faction).label}${res?.data?.bound ? ' — allegiance bound.' : ''}`);
   } catch (err) {
-    currentVolunteerFaction = previous;
-    paintFactionPicker(previous, err.status === 409);
+    // A 409 means the server holds a side this browser did not know about — the account
+    // bound it somewhere else, another tab or another device. Rolling back to `previous` and
+    // locking *that* would pin this tab to a faction the server will refuse on every battle
+    // until the page is reloaded, which is worse than the disagreement it is reacting to. So
+    // the server's answer is fetched and adopted; `previous` is only restored when the write
+    // failed for some other reason and the old value is still the truth.
+    if (err.status === 409) {
+      try {
+        const card = await Nexus.api('/api/v1/me/card');
+        const held = card?.data?.faction;
+        if (held && held !== 'NEUTRAL') {
+          currentVolunteerFaction = held;
+          paintFactionPicker(held, true);
+        } else {
+          currentVolunteerFaction = previous;
+          paintFactionPicker(previous, false);
+        }
+      } catch {
+        // Could not ask. Leave the picker unlocked rather than lock in a guess.
+        currentVolunteerFaction = previous;
+        paintFactionPicker(previous, false);
+      }
+    } else {
+      currentVolunteerFaction = previous;
+      paintFactionPicker(previous, false);
+    }
     renderGymsList();
     window.game?.onFactionChange();
     // The server's own words: a 409 names the side they are actually on, which is the one
@@ -2194,9 +2240,14 @@ async function init() {
   // `applyBranding` writes the geofence into three `data-brand` spans, and `game.js` and
   // `views/me.js` now take the same number from the same place. Those two follow the event;
   // this ran once and did not, so a re-settled pack would have left three spans quoting a
-  // radius the rest of the page had stopped using. Branding only sets text and is safe to
-  // repeat; `applyFactions` is not — it rebuilds the faction table and the picker, which
-  // would undo a bound allegiance — so only this half re-runs.
+  // radius the rest of the page had stopped using.
+  //
+  // Only branding re-runs, and the honest reason is that nothing needs the other half yet —
+  // not, as this comment previously claimed, that `applyFactions` "would undo a bound
+  // allegiance". It would not: it preserves a non-NEUTRAL `currentVolunteerFaction`, re-sets
+  // `sel.value` to it, and never touches `sel.disabled`, so both the value and the lock
+  // survive. A pack that renames its factions mid-session would genuinely need it re-run,
+  // and that false reason would have talked the next reader out of doing so.
   Nexus.onEvent('content', (content) => applyBranding(content));
   loadMonumentInfo(); // independent of the API; no need to await
   hydrateSprites();
@@ -2237,8 +2288,27 @@ async function init() {
   Nexus.onEvent('session:handover', () => {
     handoverGeneration += 1;
     userInventoryCache = [];
-    currentVolunteerFaction = 'NEUTRAL';
     renderUserInventory();
+
+    // The incoming account's side, re-derived — not a blanket NEUTRAL.
+    //
+    // This line was `currentVolunteerFaction = 'NEUTRAL'` and it was wrong in both
+    // directions. `session` fires before this and has already set the new account's faction,
+    // so blanking it here threw away a side the server *does* hold: their battles then went
+    // out as NEUTRAL and were refused until a reload — an entitled user losing the feature.
+    // And for an account with no side, the picker was never repainted, so it went on
+    // displaying the *previous* account's team, unlocked, while this variable said NEUTRAL.
+    // A control showing a team the page does not believe in.
+    const incoming = Nexus.session.user?.faction;
+    if (incoming && incoming !== 'NEUTRAL') {
+      currentVolunteerFaction = incoming;
+      paintFactionPicker(incoming, true);
+    } else {
+      // Unbound: the same display default boot uses, and explicitly not locked.
+      const playable = Object.keys(FACTION).filter((id) => id !== 'NEUTRAL');
+      currentVolunteerFaction = playable[0] || 'NEUTRAL';
+      paintFactionPicker(currentVolunteerFaction, false);
+    }
     // And load the new account's own things.
     //
     // `setUser` emits `session` and then `session:handover` synchronously, so the sign-in

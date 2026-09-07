@@ -48,10 +48,11 @@
   /**
    * Ask for the update, then reload when the new worker is actually in charge.
    *
-   * The reload is driven by `controllerchange` rather than by a timer: the swap is what has
-   * to finish before a reload is worth anything, and a reload issued too early is served by
-   * the *old* worker out of the *old* cache — the same stale bundle, with the prompt now
-   * gone and no way to ask again.
+   * The reload is driven by `controllerchange`, with a timer only as a backstop: the swap is
+   * what has to finish before a reload is worth anything, and a reload issued too early is
+   * served by the *old* worker out of the *old* cache — the same stale bundle, with the
+   * prompt now gone and no way to ask again. The 5 s fallback below exists because nothing
+   * in the specification promises the event ever arrives, not because time is the signal.
    */
   function apply(worker) {
     const go = () => { if (!reloading) { reloading = true; location.reload(); } };

@@ -80,7 +80,9 @@
   //        a client-side literal 75 that could disagree with the server in either direction.
   // `v30`: each Spin button and the token hint use the radius the server resolved for that
   //        stop or venue, instead of one campus number for everything.
-  const VERSION = 'v31';
+  // `v32`: round-nineteen review — a 409 no longer locks the picker to the stale side, and a
+  //        handover no longer wipes the incoming account's faction.
+  const VERSION = 'v32';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

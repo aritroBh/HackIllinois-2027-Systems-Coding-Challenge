@@ -256,8 +256,14 @@ if (!fs.existsSync(lockPath)) {
         // fallback-nav requirement the core tab is subject to — turning this gate off for one
         // tab by adding a file, which is the failure this whole block exists to prevent.
         const clash = registered.get(id);
-        if (clash && clash.rel !== rel) {
-          problems.push(`tab id "${id}" is registered by both ${clash.rel} and ${rel}; ids must be unique`);
+        if (clash) {
+          // Not `clash.rel !== rel`. That enforced "unique across files" while the message
+          // said "unique", so two `registerTab({ id: 'tab-x' })` calls in one file — the
+          // likeliest way to get a duplicate, by copying the one above — last-won in silence
+          // with the roles taken from the second and the count unchanged.
+          problems.push(clash.rel === rel
+            ? `tab id "${id}" is registered twice in ${rel}; ids must be unique`
+            : `tab id "${id}" is registered by both ${clash.rel} and ${rel}; ids must be unique`);
         }
         registered.set(id, { roles, rel });
       }

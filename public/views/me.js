@@ -133,7 +133,14 @@
     const upper = raw.toUpperCase();
     let best = null;
     for (const venue of Object.values(venues)) {
-      for (const hint of venue.hints || []) {
+      for (const raw2 of venue.hints || []) {
+        // Upper-cased here, not trusted from the pack — the same reason `geo.ts` gives on the
+        // server: this is a substring test against an upper-cased input, so a lower-case hint
+        // would never fire. The server does it and this did not, which meant a mixed-case
+        // hint resolved server-side and silently missed here, and a venue that cannot be
+        // resolved falls back to the campus default without saying so. The shipped pack has
+        // no such hint today; a fork's would have been the first to find out.
+        const hint = String(raw2).toUpperCase();
         if (upper.includes(hint) && (!best || hint.length > best.score)) best = { venue, score: hint.length };
       }
     }
