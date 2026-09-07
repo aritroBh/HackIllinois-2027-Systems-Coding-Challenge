@@ -200,11 +200,27 @@ function playerCoords() {
  * One message for both economy actions, because the remedy is the same: the map has to know
  * where you are before it can tell the server you are somewhere.
  */
+/**
+ * The player's position, or null having *said so where they can see it*.
+ *
+ * This is the gate in front of Spin, gym Contest and a gym-targeted Deploy, and its only
+ * visible feedback was `window.Nexus?.toast?.(…)`. **`Nexus.toast` does not exist** — nothing
+ * in `nexus.js` or anywhere else defines it — so the optional call swallowed the message and
+ * the three actions it guards failed in complete silence. The other half, `logChaosTerminal`,
+ * writes to the console panel on the War Room tab, which is not the tab you are on when you
+ * press Spin.
+ *
+ * `game.toast` is the one that exists and the one every other caller in this file uses. The
+ * grep that found this checked every optional call on `Nexus`, `game` and `fx` against the
+ * members those objects actually carry at runtime; this was the only one missing, so it is a
+ * defect rather than a class — but the shape is worth remembering, because `?.` on a name
+ * that was never defined is indistinguishable from a call that chose to do nothing.
+ */
 function requirePlayerCoords(what) {
   const at = playerCoords();
   if (at) return at;
   logChaosTerminal(`[BLOCKED] ${what} needs your position — open Campus and place your trainer first.`);
-  window.Nexus?.toast?.('Place your trainer on the map first.');
+  window.game?.toast?.(`${what} needs your position. Open Campus and place your trainer first.`);
   return null;
 }
 
