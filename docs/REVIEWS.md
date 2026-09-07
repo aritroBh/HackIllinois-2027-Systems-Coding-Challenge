@@ -1430,7 +1430,7 @@ the ratio, ~2.7x scattered over clustered, which is the claim that survives bein
 machine.
 
 `src/config/env.ts` said trusted egress gets a 10x allowance on "the two per-IP limiters that
-consult them ... never an exemption". Three consult it, and the third — `StreamLimiter`'s `PER_IP`
+consult them ... never an exemption". Three consult it, and the third — `StreamLimits`'s `PER_IP`
 ceiling — skips the check outright. So an operator tuning `TRUSTED_EGRESS_CIDRS` from the env
 contract expects a bounded stream ceiling at 10x and has none. **That comment has now been wrong
 twice in the same spot**: it first said the ceilings "do not apply", and the correction introduced

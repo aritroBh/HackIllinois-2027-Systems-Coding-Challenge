@@ -16,7 +16,10 @@
  *      two claim-code issuance routes, which take the organiser secret instead.
  *  (c) **Anonymous everything else** → 600/min/IP (`anonymousLimiter`). In `legacy` mode
  *      this is what the open dashboard reads use; in `required` mode only `ANONYMOUS_ALLOW`
- *      (`/auth/providers`, `/content`, `/announcements`, `/plugins`) gets past the gate
+ *      gets past the gate — thirteen entries, not the four an earlier version of this line
+ *      listed as though they were all of them: the public reads (`/content`, `/announcements`,
+ *      `/plugins`, `/auth/providers`), every sign-in POST, and the two claim-code bootstrap
+ *      routes. `src/middleware/identity.ts` holds the authoritative set; do not re-list it here
  *      behind it, though note the limiter runs *before* `enforceAuthMode`, so a request the
  *      gate is about to 401 is counted here first.
  *  (d) **IP ceiling**, 3,000/min over anonymous traffic only (`ipCeilingLimiter`) — the

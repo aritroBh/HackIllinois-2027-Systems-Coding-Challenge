@@ -161,7 +161,7 @@ figure is the one a demo audience will write down.
 
 The slice budget is 8 ms and the longest contiguous hold measured is **12.2 ms**. Both are true
 and the second is not a violation of the first: the tick checks the clock every thirty-second
-session rather than every one (`src/presence/service.ts:608`), because reading it five thousand
+session (that is, every 32nd) rather than every one (`src/presence/service.ts:620`), because reading it five thousand
 times would cost a measurable share of the budget it is policing — so a slice can run past 8 ms
 before the next check sees it. Slicing bounds the block; it does not pin it under the budget.
 

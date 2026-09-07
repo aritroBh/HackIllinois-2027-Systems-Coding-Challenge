@@ -71,7 +71,7 @@ const envSchema = z.object({
   //
   //   - `authExchangeLimiter` (`middleware/rateLimiter.ts`) — 10x allowance, never an exemption.
   //   - `ipCeilingLimiter`    (`middleware/rateLimiter.ts`) — 10x allowance, never an exemption.
-  //   - `StreamLimiter`'s PER_IP ceiling (`common/streamLimits.ts`) — a full **exemption**. The
+  //   - `StreamLimits`'s PER_IP ceiling (`common/streamLimits.ts`) — a full **exemption**. The
   //     per-IP stream check is skipped outright for a trusted address, so one venue NAT address
   //     can hold stream slots up to the global and per-account caps with no per-IP bound at all.
   //     The separate anonymous ceiling (`ANON_PER_IP`) still applies to it.

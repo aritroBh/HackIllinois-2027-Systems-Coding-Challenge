@@ -512,7 +512,7 @@ export class PresenceService {
    * unrelated request is a slice rather than a tick.
    *
    * **Roughly, not exactly, and the difference is measurable.** The elapsed check runs once
-   * every thirty-second session rather than every one (see the loop below) because `hrtime` is
+   * every thirty-two sessions rather than every one (see the loop below) because `hrtime` is
    * syscall-shaped and reading it five thousand times a tick would cost a real share of the
    * budget it polices. So a slice can run past 8 ms before the next check sees it: the longest
    * contiguous block measured is 12.2 ms scattered and 9.4-10.8 ms clustered, recorded in

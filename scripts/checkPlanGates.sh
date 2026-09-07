@@ -30,8 +30,10 @@ pass=0; fail=0
 # so a service-worker version mismatch was reported as a geometry failure and sent the reader
 # into `public/gl/` to look for a triangle that was wound the right way all along.
 #
-# Output is captured rather than streamed so a passing gate stays silent — the value of this
-# list is that it is scannable.
+# A gate's own output is captured rather than streamed, so a passing gate prints its `ok` line
+# and nothing else — the value of this list is that it is scannable. (An earlier version of this
+# sentence said a passing gate "stays silent", which it plainly is not: it prints one line per
+# gate, about forty of them.)
 #
 # Which lines to show is the part that was wrong on the first attempt. That version took
 # `tail -8`, on the stated premise that "the failure is almost always at the end". For anything
@@ -41,16 +43,26 @@ pass=0; fail=0
 # — a failure printer that printed everything except the failure, inside a comment block whose
 # own anecdote is about a gate that sent the reader to the wrong file.
 #
-# Two changes. Wrapper chatter is dropped outright, since `npm ERR!` never carries the cause.
-# And rather than betting on which end holds it, long output is shown from both ends with the
-# middle elided — the error is at the top for a compiler and at the bottom for a shell script,
-# and eight lines of context either way costs nothing.
+# Two changes. npm's own epilogue is dropped, and long output is shown from both ends with the
+# middle elided rather than betting on which end holds the cause — it is at the top for a
+# compiler and at the bottom for a shell script, and six lines either way costs nothing.
+#
+# The pattern must match `npm error`, lowercase. npm has emitted that since v7 and this repo is
+# on 11.19.0; a filter written as `npm ERR!` matches nothing npm currently prints, which is what
+# the first version of this line did while claiming chatter was "dropped outright".
+#
+# And the justification needs stating properly, because it is conditional. When a *script*
+# fails, the cause is the tool's own output (`src/foo.ts:42 - error TS...`) and the trailing
+# `npm error code 2 / path / command failed` lines are pure noise worth dropping. When *npm
+# itself* fails — a missing script — `npm error Missing script: "x"` is the only line there is,
+# and the filter would eat the entire message. That is what the all-noise fallback below exists
+# for, and it is the reason the fallback is not merely defensive.
 check() { # name, command
   local out body n
   if out=$(eval "$2" 2>&1); then printf '  ok    %s\n' "$1"; pass=$((pass+1)); return; fi
   printf '  FAIL  %s\n' "$1"; fail=$((fail+1))
 
-  body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | grep -vE '^npm (ERR!|WARN|notice)')
+  body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | grep -vE '^npm (error|ERR!|WARN|warn|notice)')
   # Everything the command said was wrapper noise: better the noise than nothing at all.
   [ -z "$body" ] && body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$')
   [ -z "$body" ] && body='(the command failed and printed nothing)'
