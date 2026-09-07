@@ -97,6 +97,11 @@ flowchart TD
 
 ## 2. Database Schema & Entity-Relationship Architecture (ERD)
 
+> The diagram below covers the scheduling and game core. **[docs/DATA-MODEL.md](docs/DATA-MODEL.md)
+> is the complete reference** — all twenty-three collections including the four economy ledgers,
+> the two auth tables and the audit tables this ERD does not draw — and explains why each one is
+> a separate collection rather than a field on something else.
+
 The domain data model enforces strict data integrity, foreign key references, compound uniqueness constraints, and optimistic version tokens directly within MongoDB:
 
 ```mermaid
@@ -862,7 +867,7 @@ encounter with no keyboard exit, 7 px labels, and unvalidated content.
 
 ```text
 ========================================================================================
-VERIFICATION MATRIX — 23 suites, 231 tests
+VERIFICATION MATRIX — 29 suites, 306 tests
 ========================================================================================
 Run `npm test` for the authoritative figure; the numbers above are a snapshot, not a claim.
 

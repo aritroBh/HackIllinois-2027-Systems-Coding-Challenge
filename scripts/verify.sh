@@ -121,6 +121,9 @@ node scripts/checkShell.mjs
 step "props vocabulary in lockstep (props.overpass.tpl ⇔ props.py ⇔ props.js)"
 node scripts/checkProps.mjs
 
+step "documentation resolves (links, npm scripts, repo paths)"
+node scripts/checkDocs.mjs
+
 step "geometry winding audit"
 node --input-type=module -e "
 import * as G0 from '$ROOT/public/gl/glx.js';

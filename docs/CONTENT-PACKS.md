@@ -182,7 +182,7 @@ What is checked, beyond each file's own shape:
   consecutive in, and no two quests share an id.
 
 A quest naming a domain event the server does not emit is *not* a pack error — the pack is
-not allowed to depend on the server's build — but `npm run check:events` reports it.
+not allowed to depend on the server's build — but `npm run events:check` reports it.
 
 ## What the boot-time cross-validation rejects
 

@@ -211,6 +211,10 @@
 
   async function loadRoster() {
     if (!state.shiftId) { state.roster = null; paintRoster(); return; }
+    // Both paths carry the guard. The success path had it and the failure path did not, so a
+    // roster request that was still in flight when the device changed hands could clear state
+    // and paint an error into the new occupant's console — the one case where the departed
+    // lead's request is still able to write to the screen.
     const mine = generation;
     try {
       const { data } = await N.api(`/api/v1/shifts/${encodeURIComponent(state.shiftId)}/roster`);
@@ -218,6 +222,7 @@
       state.roster = data || null;
       paintRoster();
     } catch (err) {
+      if (mine !== generation) return; // as above: a late failure is not this account's
       state.roster = null;
       paintRoster();
       failed('Could not load the roster', err);
@@ -422,12 +427,23 @@
    * memory, and repainting is what takes them off the screen — the tab is hidden by the role
    * gate, not unmounted, so unpainted DOM survives in place.
    *
-   * Reloaded afterwards rather than left empty, because the new account may also be a lead
-   * and the server decides that: `/roster` and the unredacted ticket list both answer to the
-   * session, so what comes back is what this account is actually entitled to.
+   * **Not** reloaded from here, and the poll timer is stopped.
+   *
+   * The first version of this called `refreshAll()` unconditionally, which bypassed the gate
+   * this tab already has: `registerTab` declares `roles: ['SHIFT_LEAD','ORGANIZER','ADMIN']`
+   * and every existing load runs through `onShow`, so the console only ever fetches for
+   * somebody entitled to it. Reloading here meant that when the device passed to an ordinary
+   * volunteer, `/roster` answered 403 and `failed()` raised a **toast** — a global popup
+   * telling a user who had never opened this tab that their account is not a shift lead.
+   *
+   * Stopping the timer is the other half, and that one was wrong before this handler existed:
+   * the interval belongs to the departing lead's `onShow` and kept polling under the new
+   * account, so the same 403 toast would have arrived a few seconds later anyway. An entitled
+   * account gets everything back through `onShow` the next time the tab is opened.
    */
   N.onEvent('session:handover', () => {
     generation += 1;
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
     state.roster = null;
     state.tickets = [];
     state.avatars = [];
@@ -439,6 +455,6 @@
     paintTickets();
     paintAvatars();
     paintAnnouncements();
-    void refreshAll();
+    say('');
   });
 })();

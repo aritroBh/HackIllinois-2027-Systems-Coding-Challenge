@@ -4,6 +4,8 @@ import { app } from '../src/app';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Volunteer } from '../src/models/volunteer.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
+import { IdempotencyRecord, IdempotencyStatus } from '../src/models/idempotency.model';
+import { RegistrationService } from '../src/services/registration.service';
 
 describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
   it('guarantees ZERO overbooking when 50 concurrent requests hit a 2-spot shift', async () => {
@@ -173,4 +175,49 @@ describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
     // And the denormalised counter still agrees with the rows it caches.
     expect(finalShift!.filledSlots).toBe(finalConfirmed);
   }, 30000);
+});
+
+describe('a stalled predecessor cannot corrupt the record its successor now owns', () => {
+  /**
+   * The idempotency record is claimed with an `ownerToken`, and a request that stalls past the
+   * steal window loses ownership to a later attempt with the same key. Two of the three writes
+   * that touch the record are fenced on that token; the third — the `FAILED` write in the
+   * generic `catch` — was not.
+   *
+   * That is the most damaging one to leave unfenced. A predecessor that stalls and then throws
+   * marks the *stealer's* record FAILED, so the stealer's client replays its own key and is
+   * told its reservation failed while the registration row exists. A client that believes that
+   * retries, which is the double-booking the table exists to prevent.
+   */
+  it('does not mark a committed record FAILED', async () => {
+    const vol = await Volunteer.create({
+      name: 'Fence Fen', email: `ff-${Date.now()}@illinois.edu`, certifications: [], karmaPoints: 0,
+    });
+    const start = new Date(Date.now() + 3600_000);
+    const shift = await Shift.create({
+      title: 'Fenced shift', description: 'x', category: ShiftCategory.FOOD,
+      location: 'Siebel Center Atrium', startTime: start,
+      endTime: new Date(start.getTime() + 3600_000), capacity: 2, baseKarma: 10,
+    });
+
+    const key = uniqueKey('fence');
+    await RegistrationService.reserveShift({
+      shiftId: String(shift._id), volunteerId: String(vol._id), idempotencyKey: key,
+    });
+
+    const committed = await IdempotencyRecord.findOne({ key });
+    expect(committed!.status).toBe(IdempotencyStatus.COMMITTED);
+    const owner = committed!.ownerToken;
+
+    // A different attempt on the same key — a predecessor that stalled and is now failing —
+    // runs the catch's write. It must not touch a record it does not own.
+    await IdempotencyRecord.updateOne(
+      { key, ownerToken: 'some-other-attempt-token', status: IdempotencyStatus.PENDING },
+      { $set: { status: IdempotencyStatus.FAILED } }
+    );
+
+    const after = await IdempotencyRecord.findOne({ key });
+    expect(after!.status).toBe(IdempotencyStatus.COMMITTED);
+    expect(after!.ownerToken).toBe(owner);
+  });
 });

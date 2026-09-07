@@ -106,9 +106,16 @@ Mint a token from the Trainer QR panel. Scan it. Scan it again.
 - Bound to a shift *and* a person, and the binding is re-queried rather than trusted from
   the payload, so a token for shift A cannot be replayed on shift B.
 
-**Volunteer the gap:** there is no shift time-window check. A volunteer confirmed for
-tomorrow can mint a token today and check in at the venue. The geofence and the registration
-status are enforced; "is this shift happening now" is not.
+**Volunteer the gap:** the geofence cannot tell a spoofed GPS fix from a real one. A scanner
+that sends the venue's published coordinates satisfies it from anywhere, so the geofence is a
+convenience check against honest mistakes, not an attestation. Binding a scan to the scanner's
+own attested position is the fix, and it is not built.
+
+*(This section used to say there was no shift time-window check. There is one:
+`src/services/checkin.service.ts` refuses a check-in more than thirty minutes either side of
+the shift, and `docs/WORKFLOWS.md` §4 describes it. The gap was real when this page was
+written and the sentence outlived the fix — exactly the failure this document exists to avoid
+on stage.)*
 
 ## 5. Distress
 
@@ -122,7 +129,7 @@ non-answer, so it is nearest *qualified*.
 The lifecycle is a real state machine with a transition table, and each move is a
 compare-and-set against the status that was read, so two responders acknowledging produce
 one winner and one clean 409. A ticket nobody acknowledges within three minutes escalates to
-the floor — by a database sweep, not a timer, so it survives a restart and cannot double-fire
+the floor — by a database sweep on the scheduler's tick rather than a per-ticket timer, so it survives a restart and cannot double-fire
 — and the public copy of that escalation carries the building and never the table, the name
 or the coordinates.
 
@@ -167,7 +174,7 @@ and lidar is a step you run yourself. The README used to imply the good sources 
 
 ## What to say about how it was built
 
-The suite is 29 files and 305 tests, and the interesting ones are invariants rather than
+The suite is 29 files and 306 tests, and the interesting ones are invariants rather than
 coverage: fifty racing registrations against two seats, ten concurrent bounty reservations
 against a budget for three granting exactly three, twenty phones on one sponsor poster
 producing one winner and nineteen refusals, a lead who cannot spin another player's

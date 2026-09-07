@@ -478,9 +478,23 @@ export class RegistrationService {
 
       return responsePayload;
     } catch (error) {
-      // Mark idempotency key as FAILED on error
+      // Mark this attempt's idempotency record FAILED — fenced, like its two siblings.
+      //
+      // The claim at step 3 and the commit at step 8 are both predicated on
+      // `ownerToken: attemptToken`, each with a comment explaining that an unfenced write lets
+      // a stalled predecessor corrupt the record a later attempt now owns. This write was the
+      // one that did not carry the fence, and it is the most damaging place to omit it: a
+      // predecessor that stalled past the steal window and then threw would mark the
+      // *stealer's* record FAILED. The stealer's client, replaying its own key, would be told
+      // its reservation failed when the row exists — and a client that believes that retries,
+      // which is the double-booking this whole table exists to prevent.
+      //
+      // `status: PENDING` is the second half. The broadcast and the domain event at step 9 run
+      // *after* the commit, so an exception there would otherwise let this line walk a record
+      // that is already COMMITTED back to FAILED — the same corruption, from the same attempt
+      // rather than a different one.
       await IdempotencyRecord.updateOne(
-        { key: idempotencyKey },
+        { key: idempotencyKey, ownerToken: attemptToken, status: IdempotencyStatus.PENDING },
         { $set: { status: IdempotencyStatus.FAILED } },
       );
       throw error;

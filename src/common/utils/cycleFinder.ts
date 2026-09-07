@@ -1,7 +1,18 @@
 /**
- * Directed Graph Cycle Finder for Multi-Party Shift Swaps.
- * Implements bounded elementary cycle discovery with canonical rotation hashing
- * to discover 2-way, 3-way, and 4-way shift trade rings (Alice -> Bob -> Charlie -> Alice).
+ * Directed graph cycle finder for multi-party shift swaps.
+ *
+ * Bounded elementary-cycle discovery: 2-, 3- and 4-way trade rings
+ * (Alice -> Bob -> Charlie -> Alice), found by depth-limited DFS from every node.
+ *
+ * **There is no rotation hash.** This header used to claim "canonical rotation hashing", and
+ * it was wrong in the way that matters most — it named a mechanism the file does not contain,
+ * while `ARCHITECTURE.md` §6 and `docs/DEMO.md` both correctly say there is no such hash.
+ *
+ * Deduplication is cheaper than hashing and falls out of the traversal instead: a search
+ * started at node S refuses to visit any node ordering below S (`next < startNode` is skipped),
+ * so every elementary cycle is discovered exactly once, from its lexicographically smallest
+ * member, and the same ring cannot be reported three times under three rotations. That is the
+ * whole of the "canonical" claim — canonical *ordering*, not a canonical hash.
  */
 
 /**

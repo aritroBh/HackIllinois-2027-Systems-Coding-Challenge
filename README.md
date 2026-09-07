@@ -25,7 +25,7 @@ That is the intended way to see this running, including at an interview: it need
 
 **A campus you can walk.** Five by five kilometres of Urbana-Champaign, nine thousand buildings, baked from OpenStreetMap into five-hundred-metre tiles that stream as the camera moves. Fourteen landmarks are territory gyms with hand-written silhouettes. Heights come from OSM tags where they exist (292 buildings), from surveyed levels otherwise (773), and from a per-type default for the remaining 88% — with lidar available when you run that step yourself. It renders at sixty frames a second on a laptop and degrades to thirty on a phone by dropping quality tiers rather than detail you would notice.
 
-**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it — about 115 ms when the crowd is artificially scattered, which is the layout that sharing cannot help. It is sliced against an 8 ms budget, measured at about 11 ms in the worst hold; `docs/PRESENCE.md` records both runs. Positions are fuzzed, published one tick late, and never stored. Exactly three things read an exact position — a lead's roster, a lead's `GET /presence`, and SOS dispatch — and every one of them writes an audit row. Opting out stops you appearing to other players and stops you seeing them; a lead reading the roster still counts you, which is what `docs/PRESENCE.md` calls the one asymmetry.
+**Live multiplayer presence, at five thousand people.** Everyone who opts in appears on the map, moving with their GPS, over a WebSocket with an SSE fallback for networks that block it. The tick that builds those frames costs about fifty milliseconds of CPU a second at full attendance, because the expensive part is computed once per fifty-metre cell and shared by everybody standing in it — about 115 ms when the crowd is artificially scattered, which is the layout that sharing cannot help. It is sliced against an 8 ms budget, measured at about 11 ms in the worst hold; `docs/PRESENCE.md` records both runs. Positions are fuzzed, published one tick late, and never stored. Exactly three things read an exact position — a lead's roster, a lead's `GET /presence`, and SOS dispatch — and every one of them writes an audit row. Opting out stops you appearing to other players and stops you seeing them; a lead reading the roster still counts you, which is the one asymmetry and is spelled out in `docs/PRESENCE.md`.
 
 **Distress calls that reach someone.** A hacker raises a ticket from their phone. Dispatch prefers a live position under thirty seconds old, falls back to the responder's shift venue, and keeps candidates with neither rather than silently skipping them. The ticket moves through a guarded lifecycle, and one nobody acknowledges within three minutes escalates to the floor with no location in the public copy.
 
@@ -47,6 +47,8 @@ A pack that does not validate does not start the server. That is deliberate: a t
 
 | Document | What it covers |
 |---|---|
+| [DATA-MODEL.md](docs/DATA-MODEL.md) | All twenty-three collections, and why each is its own |
+| [LIMITATIONS.md](docs/LIMITATIONS.md) | What is not solved, and why every constant is the number it is |
 | [WORKFLOWS.md](docs/WORKFLOWS.md) | The six end-to-end journeys, from first tap to last write |
 | [FORK_GUIDE.md](docs/FORK_GUIDE.md) | Running this for a different event, in order |
 | [CONTENT-PACKS.md](docs/CONTENT-PACKS.md) | Every pack file, field by field |
@@ -89,8 +91,11 @@ because the interesting engineering in a volunteering system is what makes peopl
 first: `src/services/registration.service.ts` (the atomic capacity guard and the waitlist
 cascade), `src/common/utils/cycleFinder.ts` and `src/services/swap.service.ts` (three-way trade
 rings), and `src/services/checkin.service.ts` (the ordering of the check-in gates, and why each
-one is where it is). `ARCHITECTURE.md` explains the primitives; `docs/WORKFLOWS.md` walks the
-journeys end to end.
+one is where it is). `ARCHITECTURE.md` explains the primitives; `docs/DATA-MODEL.md` is the
+schema reference and starts with the three database mechanisms every collection is built from;
+`docs/WORKFLOWS.md` walks the journeys end to end. **`docs/LIMITATIONS.md` is the page to read
+if you want to find the holes** — it lists what is unsolved and justifies every tuned constant,
+because the interesting question about a system like this is what it does not handle.
 
 **On tooling.** This was built with AI assistance — Claude Code, used throughout for
 implementation and for adversarial review. The review process is not hidden: `docs/REVIEWS.md`

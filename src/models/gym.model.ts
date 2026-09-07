@@ -30,11 +30,21 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
  * A volunteer's allegiance is bound on their first non-neutral battle and locked
  * thereafter, so one account cannot reinforce as an ally and attack as a rival.
  */
+/*
+ * Ids only. **Colours, labels and HQ venues live in the content pack**
+ * (`content/<pack>/factions.json`), which is what the map, the HUD and the sticker tints read.
+ *
+ * These comments used to carry hex values, and they had gone stale — they still named the
+ * pre-redesign palette (`#00F2FE`/`#FF007F`/`#FFB300`) while everything that actually renders
+ * used the pack's (`#22d3ee`/`#a78bfa`/`#fbbf24`). Duplicating a pack value in a source comment
+ * makes it a second source of truth that nothing checks, so the theme is named here and the
+ * value is not.
+ */
 export enum Faction {
-  TEAM_KERNEL = 'TEAM_KERNEL',   // #00F2FE (Systems & Infrastructure - Siebel HQ)
-  TEAM_TENSOR = 'TEAM_TENSOR',   // #FF007F (AI & ML - ECEB)
-  TEAM_SILICON = 'TEAM_SILICON', // #FFB300 (Hardware & Robotics - Kenney Gym)
-  NEUTRAL = 'NEUTRAL',
+  TEAM_KERNEL = 'TEAM_KERNEL',   // Systems & Infrastructure
+  TEAM_TENSOR = 'TEAM_TENSOR',   // AI & ML
+  TEAM_SILICON = 'TEAM_SILICON', // Hardware & Robotics
+  NEUTRAL = 'NEUTRAL',           // Unclaimed; must exist, per factions.json
 }
 
 export interface IGymDefender {

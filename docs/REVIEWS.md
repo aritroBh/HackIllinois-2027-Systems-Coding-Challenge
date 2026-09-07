@@ -854,3 +854,132 @@ All three were read-only, proved by comparing every tracked file in each scratch
 local runtime state, including a terminal token, into three directories handed to external
 review CLIs. Nothing appears to have read them, and they were scrubbed, but the exclude list
 should have had `.gstack` and `.claude` in it from the start.
+
+---
+
+## Rounds twelve and thirteen — reviewing the fixes, then the prose, 2026-09-06
+
+Two rounds run back to back, both prompted by the same question: the previous round's *fixes*
+had never been reviewed by anyone, and the fix set was nine authorisation changes of exactly the
+kind that had already gone wrong once.
+
+### Round twelve — the fixes, checked in both directions
+
+The brief named the failure mode instead of describing the code: two rounds earlier,
+`isProvenLead()` had been introduced and the controller never passed `source`, so the predicate
+was false for **every** caller including a real lead. It failed *closed*, so nothing leaked and
+nothing errored — the lead console silently lost its data and it shipped. Reviewers were asked
+to check every changed gate twice: can the entitled caller still pass, and is the unentitled one
+actually blocked.
+
+**muse found the P0 the fix set had left behind, and it is the same shape as round ten's.**
+`AvatarService.fetch` has two branches that hand over an unpublished face photo: a *lead* branch
+and an *owner* branch. Round eleven tightened the lead branch to require a proved session and
+left the owner branch matching on `ownerId === viewer.id` — a bare id comparison, and in
+`legacy` the id is claimed. So `GET /avatars/<hash>?volunteerId=<victim>` still returned the
+victim's unpublished photograph with no cookie: identical outcome, identical attacker cost, one
+`if` earlier. opencode traced the same file and did not find it.
+
+Both reviewers independently found the client bug I had already found and fixed while they read:
+`views/lead.js`'s new handover handler called `refreshAll()` unconditionally, so a lead→volunteer
+device handover fired a 403 and raised a **global toast** — "your account is not a shift lead" —
+at somebody who had never opened that tab. The tab was already role-gated through `onShow`; the
+handler had bypassed the gate the file already had. Both also found the roster error path missing
+the generation guard its success path had.
+
+**agy produced nothing this round.** Headless mode auto-denies the `command` permission and it
+chose to run a shell command anyway, despite a prompt that forbade it — the same failure as
+rounds ten and eleven, now three for three.
+
+### What running the review found that no reviewer did
+
+The browser used to verify the `lead.js` fix kept serving the *old* file. That was not a product
+bug — the service worker precaches the shell and serves it **cache-first** — but chasing it
+surfaced one: `sw.js` said to bump `VERSION` "whenever the shell list or the caching rules
+change", and that is not the rule. The list can be identical while every file in it is
+different, which is the ordinary shape of a release. Any shipped JS change, including a security
+fix, would keep reaching returning users' old bundle until somebody remembered.
+
+`scripts/checkShell.mjs` now hashes the precached bytes against a committed `public/sw-shell.lock`
+and fails when they move without a bump. Proven by tampering with a precached file and watching
+it fail, and it runs inside `verify.sh quick`, which CI runs — checked, because this repository
+has twice shipped a gate that could not fail.
+
+### Round thirteen — can the author explain it out loud?
+
+The challenge brief says the organisers want to see that the author *"can discuss/explain your
+code"*. So the third round judged the prose by that standard, with a different angle each:
+muse on **accuracy** (find statements that are false), opencode as **the interviewer** (what
+would you ask that this repository cannot answer?), agy on **cross-document consistency**.
+
+**muse: nine findings, all P0, all false statements.** Three had already been fixed while it
+read. Six were real, and two of those I had written myself earlier the same session — a README
+sentence attributing a phrase to a file that does not contain it, and a new `docs/DATA-MODEL.md`
+that inherited a stale four-reader claim from the model comment it was written from, then
+contradicted itself two paragraphs later. Also: `docs/PRESENCE.md` still said "two readers" and
+called the roster audit a future arrival that had already shipped; the avatar `status` list
+omitted `REJECTED`; the check-out clamp was described as symmetric when the grace applies only at
+the far end; and `gym.model.ts` carried the pre-redesign faction hex values in comments while
+everything that renders reads the pack's. That last one is instructive — the fix was not to
+correct the hexes but to delete them, because a pack value duplicated in a source comment is a
+second source of truth that nothing checks.
+
+**opencode, as the interviewer: ten findings, three P0 contradictions.** The worst was
+`docs/DEMO.md` instructing the author to volunteer, on stage, that *"there is no shift
+time-window check"* — a check that has existed for several rounds. The demo script would have
+had them state a falsehood about their own code. It also caught `cycleFinder.ts`'s header
+claiming "canonical rotation hashing" for a file containing no hash, while two documents
+correctly denied the hash existed.
+
+Its most useful output was not a defect but a list of **questions the repository could not
+answer**: how would counter drift be detected in production; why is the rest buffer 30 minutes
+and not 15; what breaks for an event outside `America/Chicago`; and where is the consolidated
+list of what is still broken. Those became `docs/LIMITATIONS.md`.
+
+**One of its P1s was a real bug, not a documentation gap.** The `FAILED` write in
+`reserveShift`'s generic `catch` was unfenced, while both sibling writes carry
+`ownerToken: attemptToken` with comments explaining that an unfenced write corrupts the record a
+later attempt now owns. A predecessor that stalled past the steal window and then threw would
+mark its *stealer's* record `FAILED` — and a client told its reservation failed, when the row
+exists, retries. Fenced on owner **and** status, since the broadcast runs after the commit and
+could otherwise walk a `COMMITTED` record back to `FAILED`. There is a test.
+
+**agy: the cross-document check, and a warning about my own harness.** It found the
+`PRESENCE.md` contradiction independently. Its report also revealed that it had resolved to the
+**real repository** rather than the scratch copy it was launched in — everything it names is
+consistent with a read-only pass and `git status` shows no file I did not edit myself, but the
+isolation those copies exist to provide was not actually in force for that run.
+
+### Closed
+
+| Finding | Source | Severity |
+|---|---|---|
+| `AvatarService.fetch`'s **owner** branch matched a claimed id, so an unpublished face photo was still readable with no cookie — the lead branch had been fixed and its sibling left. | muse | P0 |
+| `docs/DEMO.md` told the author to state that there is no shift time-window check. There is one. | opencode | P0 |
+| `cycleFinder.ts`'s header claimed "canonical rotation hashing"; the file contains no hash, and two docs said so. | opencode, muse | P0 |
+| `docs/PRESENCE.md` and `docs/WORKFLOWS.md` said two exact-position readers; there are three, and PRESENCE called the third a future arrival. | muse, agy, opencode | P0 |
+| `docs/DATA-MODEL.md` (new this session) inherited a stale fourth reader, omitted the `REJECTED` avatar state, and mis-stated both the transaction count and the check-out clamp. | muse | P0 |
+| `README.md` attributed "the one asymmetry" to a file that never uses the word. | muse | P0 |
+| `gym.model.ts` carried stale faction hex values that nothing renders. | muse | P0 |
+| `views/lead.js` fetched lead-only data on every handover, raising a global "not a shift lead" toast at ordinary volunteers. | opencode, muse, self | P1 |
+| The unfenced `FAILED` idempotency write let a stalled predecessor corrupt its stealer's record. | opencode | P1 |
+| `loadRoster`'s failure path lacked the generation guard its success path had. | muse, opencode | P2 |
+| `docs/CONTENT-PACKS.md` told the reader to run `npm run check:events`; the script is `events:check`. | self (new gate) | P2 |
+| `ARCHITECTURE.md`'s verification matrix and `docs/DEMO.md` both carried stale suite counts. | opencode | P2 |
+| `SECURITY.md` invited geofence-bypass reports for a limitation now documented as accepted. | self | P2 |
+
+### Two new documents and one new gate
+
+`docs/DATA-MODEL.md` — all twenty-three collections, grouped by concern, each explaining why it
+is a separate collection rather than a field. Thirteen of them appeared nowhere in
+`ARCHITECTURE.md`, including all three ledgers and both auth tables, which is a gap worth
+closing in a challenge that names database modelling as one of the things it assesses.
+
+`docs/LIMITATIONS.md` — what is not solved, and why every tuned constant is the number it is.
+Written because "what would you do differently?" should not have to be assembled live from
+twelve scattered comments.
+
+`scripts/checkDocs.mjs` — the machine-checkable subset of documentation accuracy: every relative
+link resolves, every `npm run` script named exists, every repository path named exists. It found
+the `check:events` typo on its first run. It cannot check whether a true-looking sentence is
+true, which is what these rounds are for.

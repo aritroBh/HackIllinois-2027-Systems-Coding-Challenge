@@ -691,7 +691,9 @@ export class PresenceStore {
           const ageMs = nowMs - e.t;
           if (ageMs > maxAgeMs) continue;
           // Ranking uses the EXACT position, never the fuzzed one the grid indexes by. The
-          // cell is only a search structure; dispatch is one of the two audited exact reads.
+          // cell is only a search structure; dispatch is one of the three audited exact reads
+          // (the others are a lead's `GET /presence` and a lead's roster — see
+          // `models/presenceAudit.model.ts`, which enumerates all three and their writers).
           //
           // `publishedDistanceM` is the same measurement taken against the position everybody
           // else already sees. It exists because a *range* to an exact position is an exact

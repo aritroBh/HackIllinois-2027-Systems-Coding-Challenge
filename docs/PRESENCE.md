@@ -33,16 +33,20 @@ In order, and each for a reason:
 - **rate** — one accepted sample every 2 s.
 - **speed** — over 15 m/s (campus buses do about 10) three times in a row is a 60 s mute, recorded in `presenceMutes` with a TTL index. The store re-reads it before `hello_ack`, so reconnecting does not clear it.
 
-Published positions are snapped to a 20 m grid, jittered by a per-hour stable offset of up to 8 m, and released one tick late. The exact position exists only in memory, and only two things read it.
+Published positions are snapped to a 20 m grid, jittered by a per-hour stable offset of up to 8 m, and released one tick late. The exact position exists only in memory, and only three things read it.
 
 ## Who can see an exact position
 
-Two readers, both audited once per read in `presenceAudit` (30-day TTL):
+Three readers, each audited once per read in `presenceAudit` (30-day TTL) — the set is
+enumerated beside its reasons in `src/models/presenceAudit.model.ts`, which is the file to trust
+if this list ever drifts again:
 
 - **SOS dispatch**, which prefers a live fix under 30 s old over the shift-venue estimate. Candidates with neither are kept and ranked last with `positionSource: "unknown"`, so the lead queue shows them greyed rather than silently dropping them.
 - **A lead**, through `GET /api/v1/presence` (one call per 5 s per lead, one audit document per call, never one per row).
 
-Aggregates are not exact reads: cluster counts name nobody and are not audited. The roster is not an aggregate, though — its per-volunteer presence age and distance buckets are a disclosure about named people, so a roster view is audited once per view (plan §A4). It arrives with M5.
+- **A lead's shift roster**, `GET /api/v1/shifts/:id/roster`, audited once per view rather than once per volunteer listed.
+
+Aggregates are not exact reads: cluster counts name nobody and are not audited. The roster is not an aggregate, though — its per-volunteer presence age and distance buckets are a disclosure about named people, which is why it is the third reader above rather than a footnote to it. (This section previously called the roster a future arrival and counted only two readers; it shipped, and `src/controllers/shift.controller.ts` has written its audit row since.)
 
 Dispatch reads only opted-in, on-duty volunteers. Hackers are never dispatch candidates, and an opted-out volunteer falls back to their venue estimate, so opting out is honoured by dispatch too. The one exception to all of this is an SOS ticket's own coordinates: raising a ticket is the hacker's explicit request to share where they are.
 

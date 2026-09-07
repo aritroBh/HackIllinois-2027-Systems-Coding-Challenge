@@ -14,11 +14,15 @@
  *   - The shell (HTML, CSS, the classic scripts, the vendored fonts) is
  *     precached on install and served cache-first. It is versioned bytes; the
  *     network is only the fallback.
- *   - GET /api/v1/me/card is the single cacheable API response. The server marks
- *     it `private, max-age=86400` and it carries only a short id, a display name,
- *     a faction and counts (see src/routes/v1/me.routes.ts). It is served
- *     network-first so a signed-in volunteer always sees the live values, with
- *     the stored copy used only when the network is gone.
+ *   - GET /api/v1/me/card is the single cacheable API response, and this worker
+ *     is the *only* thing that keeps a copy. The server sends `no-store`: it used
+ *     to send `private, max-age=86400`, which put the card in the browser's own
+ *     HTTP cache keyed on the URL and not partitioned by cookie, so on a shared
+ *     laptop the next account's request was answered from disk with the previous
+ *     account's card (see src/routes/v1/me.routes.ts). The copy here is purged on
+ *     logout and on handover, which is what makes it the safe one. It carries only
+ *     a short id, a display name, a faction and counts, and is served network-first
+ *     so a signed-in volunteer always sees live values.
  *   - Every other /api/ request, and every non-GET request, is left alone. The
  *     fetch handler returns without calling respondWith, which hands the request
  *     back to the browser untouched.
@@ -31,16 +35,26 @@
 (function () {
   'use strict';
 
-  // Bump VERSION whenever the shell list or the caching rules change. Old caches
-  // are deleted on activate, so a bump is also the eviction mechanism.
+  // Bump VERSION whenever the **contents** of any precached file change — not only when the
+  // shell list or the caching rules do. Old caches are deleted on activate, so a bump is also
+  // the eviction mechanism.
+  //
+  // The narrower rule this comment used to state is what made the trap below reachable: the
+  // list can be identical while every file in it is different, and that is the ordinary shape
+  // of a release. `scripts/checkShell.mjs` now hashes the precached bytes against
+  // `public/sw-shell.lock` and fails the build if they moved without a bump, because a rule
+  // that has to be remembered is one this repository has repeatedly found rots.
+  //
+  // Not bumping is not cosmetic — the shell is served cache-first, so an installed worker
+  // keeps handing the page the JS it cached at install time, and a `fetch(url, {cache:
+  // 'reload'})` does not get past it either. That is how it should behave for a user on a
+  // train; it is also how a developer spends twenty minutes testing code the browser is not
+  // running, and how a shipped security fix reaches nobody who already has the tab open.
   //
   // `v2`: the shell list gained the nine scripts the per-tab split had left out, and the
-  // clear-card handler learned to acknowledge. Not bumping is not cosmetic — the shell is
-  // served cache-first, so an installed worker keeps handing the page the JS it cached at
-  // install time, and a `fetch(url, {cache: 'reload'})` does not get past it either. That is
-  // how it should behave for a user on a train; it is also how a developer spends twenty
-  // minutes testing code the browser is not running.
-  const VERSION = 'v2';
+  // clear-card handler learned to acknowledge.
+  // `v3`: the handover teardown in views/lead.js and app.js, and the SOS cache it clears.
+  const VERSION = 'v3';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

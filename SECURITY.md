@@ -25,7 +25,12 @@ Anything that breaks a boundary the system claims to hold:
 * Signing in as somebody else, or acting as somebody else: session forgery, claim-code
   weaknesses, CSRF, the SSO trust boundary, role escalation across the lead and organiser
   ranks.
-* Forging attendance: QR token forgery, replay, or bypassing the geofence.
+* Forging attendance: QR token forgery, replay, or reaching a check-in without satisfying the
+  geofence at all. **A spoofed coordinate is not a finding** — the check compares a
+  client-supplied position against a venue, so sending the venue's published latitude and
+  longitude satisfies it from anywhere. That is a known and documented limitation
+  ([docs/LIMITATIONS.md](docs/LIMITATIONS.md)); closing it needs the scan bound to the scanner,
+  not a better radius. A way *around* the check is in scope; lying to it is not.
 * Reading an exact position you should not see, or otherwise defeating the presence privacy
   gates described in [docs/PRESENCE.md](docs/PRESENCE.md).
 * Cross-account data disclosure through any API route, including through plugin routes.
@@ -48,6 +53,9 @@ Anything that breaks a boundary the system claims to hold:
 * Missing hardening headers with no demonstrated impact, and scanner output without one.
 * Social engineering of organisers or volunteers.
 * Licensing or accuracy problems in third-party map data. Those belong in an issue.
+* Anything already listed in [docs/LIMITATIONS.md](docs/LIMITATIONS.md). Those are known,
+  written down before anybody asked, and unfixed on purpose — a report restating one is
+  welcome as an issue but is not a vulnerability disclosure.
 
 ## Supported versions
 

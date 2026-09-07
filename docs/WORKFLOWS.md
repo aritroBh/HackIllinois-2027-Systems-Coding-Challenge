@@ -189,10 +189,18 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
    fifty-metre cell, and sends each client the nearest sixty players as eight-byte rows plus
    crowd counts for the rest. At five thousand clients that is about fifty milliseconds of CPU
    a second, sliced so it never holds the event loop for more than about ten.
-5. **Privacy is symmetric.** Opting out hides you and stops your map showing others. Exactly
-   two things read an exact position — a lead looking at a named person, and SOS dispatch —
-   and both write an audit row that is deleted after thirty days. Positions themselves are
-   never written to disk at all.
+5. **Privacy is symmetric between players, with one exception.** Opting out hides you from
+   other players and stops your map showing them. A lead's roster still counts you, which is
+   the one asymmetry and is stated in `docs/PRESENCE.md`.
+
+   Exactly **three** things read an exact position, and each writes an audit row that is
+   deleted after thirty days: a lead's roster (`GET /shifts/:id/roster`), a lead's
+   `GET /presence`, and SOS dispatch. `src/models/presenceAudit.model.ts` enumerates all three
+   beside the reasons they log, and is the file to trust if these ever disagree again — this
+   list previously said "two" and named a per-player lead view that was designed and never
+   built, while omitting the roster, which is real.
+
+   Positions themselves are never written to disk at all.
 
 ---
 

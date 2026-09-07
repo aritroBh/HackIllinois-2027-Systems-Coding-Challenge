@@ -16,11 +16,22 @@
  *   1. every script index.html loads is in SHELL or SHELL_OPTIONAL;
  *   2. every SHELL entry exists on disk (a missing one fails the install, and `sw.js` says
  *      so — the previous worker stays in charge and the new shell never lands);
- *   3. every SHELL entry is reachable under /dashboard, i.e. really is a file we serve.
+ *   3. every SHELL entry is reachable under /dashboard, i.e. really is a file we serve;
+ *   4. `VERSION` in sw.js was bumped if the *contents* of any precached file changed.
+ *
+ * The fourth is the one that cost real time. The shell is served **cache-first**, so an
+ * installed worker keeps handing the page the JS it cached at install and only a `VERSION`
+ * bump evicts it. sw.js's own comment said to bump "whenever the shell list or the caching
+ * rules change" — which is not the rule. The rule is that a released byte change to any
+ * precached file needs a bump, or returning users keep running the old code indefinitely,
+ * including through a security fix. The list can be unchanged while every file in it is
+ * different. `public/sw-shell.lock` records the pairing so this is checked rather than
+ * remembered.
  *
  * Deliberately a text scan rather than an import: `sw.js` is a service worker and cannot be
  * loaded in Node, and the point is to compare what the two files *say*.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -88,10 +99,59 @@ for (const entry of [...shell, ...optional]) {
   }
 }
 
+/*
+ * Contents against VERSION.
+ *
+ * The hash covers every precached file plus the shell list itself, so a byte change anywhere
+ * in the offline bundle moves it. `sw-shell.lock` holds the VERSION that hash was released
+ * under; if the hash has moved and VERSION has not, the deploy would leave returning users on
+ * the previous JS and this fails instead. Updating the lock is deliberate work: bump VERSION
+ * in sw.js, then run `node scripts/checkShell.mjs --write-lock`.
+ */
+const versionMatch = sw.match(/const VERSION = '([^']+)'/);
+if (!versionMatch) throw new Error('checkShell: sw.js has no VERSION constant');
+const version = versionMatch[1];
+
+const digest = crypto.createHash('sha256');
+for (const entry of [...shell, ...optional].sort()) {
+  digest.update(entry);
+  const file = path.join(root, 'public', entry.slice('/dashboard/'.length));
+  if (fs.existsSync(file)) digest.update(fs.readFileSync(file));
+}
+const shellHash = digest.digest('hex').slice(0, 16);
+const lockPath = path.join(root, 'public/sw-shell.lock');
+
+if (process.argv.includes('--write-lock')) {
+  fs.writeFileSync(lockPath, `${version} ${shellHash}\n`);
+  console.log(`checkShell: lock written — ${version} ${shellHash}`);
+  process.exit(0);
+}
+
+if (!fs.existsSync(lockPath)) {
+  problems.push('public/sw-shell.lock is missing; run `node scripts/checkShell.mjs --write-lock`');
+} else {
+  const [lockVersion, lockHash] = fs.readFileSync(lockPath, 'utf8').trim().split(/\s+/);
+  if (lockHash !== shellHash && lockVersion === version) {
+    problems.push(
+      `the precached shell changed but sw.js VERSION is still '${version}'. The shell is served ` +
+      'cache-first, so returning users would keep the old bundle. Bump VERSION in public/sw.js, ' +
+      'then run `node scripts/checkShell.mjs --write-lock`.'
+    );
+  } else if (lockHash !== shellHash) {
+    problems.push(
+      `VERSION moved to '${version}' but public/sw-shell.lock still records '${lockVersion}'. ` +
+      'Run `node scripts/checkShell.mjs --write-lock`.'
+    );
+  }
+}
+
 if (problems.length) {
   console.error('checkShell: FAIL');
   for (const p of problems) console.error(`  - ${p}`);
   process.exit(1);
 }
 
-console.log(`checkShell: OK — ${loaded.length} scripts loaded, ${shell.length} precached, ${optional.length} optional`);
+console.log(
+  `checkShell: OK — ${loaded.length} scripts loaded, ${shell.length} precached, ` +
+  `${optional.length} optional, shell ${version}/${shellHash}`
+);

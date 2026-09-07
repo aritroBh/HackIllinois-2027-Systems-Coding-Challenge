@@ -154,7 +154,14 @@ export class AvatarService {
     // to a caller with no cookie. `flag()` in this same service already checks both; `fetch()`
     // is the one that hands over the image.
     const isLead = !!viewer && viewer.source === 'session' && /SHIFT_LEAD|ORGANIZER|ADMIN/.test(viewer.role);
-    const own = viewer ? rows.find((d) => String(d.ownerId) === viewer.id) : undefined;
+    // Proved, like the lead branch below — and this is the branch the first fix missed.
+    //
+    // Tightening only `isLead` moved the disclosure one branch up rather than closing it,
+    // which is the same mistake the SOS ticket list made two rounds ago: the *owner* test is
+    // an id comparison, and in `legacy` the id is claimed. `?volunteerId=<victim>` therefore
+    // matched the victim's own row and returned their unpublished photograph to a caller with
+    // no cookie — the identical outcome, at the identical cost, one `if` earlier.
+    const own = viewer?.source === 'session' ? rows.find((d) => String(d.ownerId) === viewer.id) : undefined;
     if (own) return own;
     if (isLead) return rows[0];
     throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);

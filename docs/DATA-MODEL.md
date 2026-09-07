@@ -1,0 +1,277 @@
+# The data model
+
+Twenty-three collections. `ARCHITECTURE.md` §2 draws the entity-relationship diagram for the
+scheduling core; this page is the complete list, including the ledgers, the auth tables and the
+audit tables that the ERD does not draw, and it explains *why each one exists as its own
+collection* rather than as a field on something else.
+
+If you only read one section, read **[The three primitives](#the-three-primitives)**. Almost
+every design decision below is one of those three, and knowing which one a collection is makes
+the rest of it predictable.
+
+## The three primitives
+
+Multi-document transactions are used in exactly **three** places, and everywhere else is built
+from three single-document mechanisms that MongoDB guarantees on its own. The three are
+`SwapService`'s bilateral swap and its cyclic rotation (`session.withTransaction` directly), and
+SOS ticket creation, which goes through `withTransactionRetry` so that reserving the bounty
+against the daily budget and inserting the ticket either both happen or neither does. Those
+three are why `docs/DEPLOYMENT.md` insists on a replica set: MongoDB offers transactions only
+there, and a standalone `mongod` boots cleanly and then fails exactly these paths at runtime.
+
+The mechanisms everything else uses:
+
+| Primitive | What it buys | Where you see it |
+|---|---|---|
+| **A unique compound index** | "at most one of these, ever" — enforced by the database, not by a check in application code that two concurrent requests can both pass | `boothScan(accountId, boothId)`, `stickerLedger(accountId, stickerId)`, `karmaLedger(accountId, source, day)`, `questProgress(accountId, questId, windowKey)`, `raidJoin(raidId, accountId)`, `powerup(volunteerId, itemType)` |
+| **A conditional update (CAS)** | "change this only if it is still in the state I read" — the check and the write are one operation, so there is no window between them | `Shift.filledSlots` against `capacity`, every `Registration` status transition, `PowerUpInventory.quantity >= 1`, `BountyLedger.spent` against the daily budget |
+| **A TTL index** | "this row deletes itself" — no sweeper job, no cleanup bug, no unbounded growth | `claimCode`, `authToken`, `reservationLock`, `idempotency`, `announcement`, `presenceMute`, `presenceAudit` |
+
+The recurring reason for a separate collection is the first one. A cap, a cooldown or a
+once-ever rule expressed as a field is a read-then-write; expressed as a unique index it is a
+fact the database refuses to duplicate. That is the difference between "we check whether they
+already scanned this booth" and "they cannot scan this booth twice".
+
+---
+
+## Identity and sessions
+
+### `volunteer`
+The account. One document per person, whether they staff shifts or attend the hackathon —
+`kind` (`VOLUNTEER` | `HACKER`) is the axis that separates them, and `role`
+(`VOLUNTEER` | `SHIFT_LEAD` | `ORGANIZER` | `ADMIN` | `HACKER`) is what authorisation gates read.
+
+Carries the denormalised counters the leaderboard and the offline card read without a join:
+`karmaPoints`, `hoursServed`, `prestigeTier`, `badges`, `faction`, `avatarHash`.
+`sessionVersion` is the revocation lever — bumping it invalidates every session cookie ever
+minted for the account, because each cookie carries the version it was signed for and every
+request compares them.
+
+**Interview-relevant:** the counters are denormalised copies. The ledgers below are the record
+of truth, which is what makes a disputed balance reconstructable rather than a matter of trust.
+
+### `claimCode`
+The badge adapter. An organiser mints one code per account; entering it once mints a session and
+burns the code. **Only the SHA-256 of the code is stored**, so a leaked database yields nothing
+typeable into the login screen. Codes are 10 characters of Crockford base32 — 50 bits, which at
+the limiter's 30 guesses a minute puts the expected time to a hit around 10⁷ years. That is also
+why there is no per-code attempt counter: a wrong guess matches no document at all, so there is
+nothing to decrement. TTL on `expiresAt`.
+
+### `authToken`
+The email magic-link adapter, same storage discipline: only the hash is stored, 15-minute TTL,
+burned on use (`usedAt`). The token travels in the URL **fragment** (`#magic=…`) and never in a
+query string, so it does not reach server or proxy logs.
+
+---
+
+## Scheduling — the core of the challenge
+
+### `shift`
+A slot of work: time window, `location` (free text, resolved to a venue by a gazetteer),
+`capacity`, `filledSlots`, `requiredSkills`, `baseKarma`, `manualSurgeMultiplier`.
+
+`filledSlots` is a counter on the shift rather than a `count()` over registrations, and that is
+deliberate: it lets the capacity guard be a single conditional update
+(`$expr: filledSlots < capacity` with `$inc`), which is what makes fifty simultaneous requests
+for two seats produce exactly two confirmations. A `count()` would be a read followed by a
+write, and every one of the fifty would read the same number.
+
+### `registration`
+One person's claim on one shift, and the state machine that governs it:
+`CONFIRMED` → `CHECKED_IN` → `COMPLETED`, with `WAITLISTED`, `CANCELLED` and `SWAP_PENDING` off
+to the side. Every transition is a conditional update predicated on the state being left, never
+a read-modify-save — a cancellation landing mid-flight then loses the race instead of being
+silently overwritten.
+
+The model file groups the statuses three ways, and the grouping matters more than the list:
+**index-active** (occupies a row), **schedule-occupying** (`CONFIRMED`, `CHECKED_IN`,
+`SWAP_PENDING` — the three that block a conflicting shift), and terminal.
+
+`SWAP_PENDING` is defined but never written today: swaps rewrite the registration in place.
+Whoever wires it up must change `CheckInService.generateToken` and `verifyAndCheckIn` at the
+same time, which accept only `CONFIRMED` and `CHECKED_IN`.
+
+### `swap`
+A proposed trade. Bilateral swaps and three-way (or longer) rings both live here. The cycle
+finder keys its graph on **offers** (`volunteerId::shiftId`), not on volunteers: a person with
+two pending proposals had the first one's edges overwritten by the second's when it was keyed by
+volunteer, so the edge that formed the ring and the shift that got rotated came from different
+proposals. Two of the three transactional paths in the system live here — the bilateral swap and
+the cyclic rotation — which is part of why the deployment docs insist on a replica set.
+
+### `reservationLock`
+A short-lived per-volunteer mutex, held for the duration of a reservation. The rest-buffer and
+fatigue checks are read-then-act, so two concurrent `reserveShift` calls for overlapping shifts
+by one person could both pass validation before either wrote. The lock lives in MongoDB rather
+than process memory so it holds across replicas. TTL on `expiresAt` is the safety net: a process
+that dies holding one does not deadlock the volunteer.
+
+### `idempotency`
+Exactly-once semantics for reservations. Phones on congested event wifi produce requests that
+succeed server-side and time out client-side; the natural client behaviour is to retry, and
+without this table a retry double-books. A repeat carrying the same `Idempotency-Key` replays the
+stored `responseStatusCode` / `responseBody` instead of re-executing. `requestHash` catches a key
+reused for a *different* body, and `ownerToken` stops one account replaying another's. 24h TTL.
+
+---
+
+## Attendance
+
+### `checkin`
+One attendance record per registration: `checkInTime`, `checkOutTime`, `durationMinutes`,
+`karmaAwarded`, `nonce`, `verifiedBy` and `verifiedByAccountId`.
+
+Two unique indexes, and they mean different things. On `nonce`: a QR token is single-use, so a
+photograph of one in a group chat is worthless. On `registrationId`: ten scanners racing with ten
+*distinct* tokens would pass the nonce index and become ten attendances and ten payouts — this is
+the index that stops that, and losing that race is not an attack, so the loser is handed the row
+that won rather than an error.
+
+The paid interval is clamped at **both** ends, though not symmetrically: the start is floored at
+the shift's `startTime` exactly, and the end is capped at `endTime` **plus** the check-in grace.
+That asymmetry is deliberate — arriving early is not work, but a shift that overruns by twenty
+minutes is — so neither the early scan nor the forgotten tap-out is paid.
+
+---
+
+## The economy — why there are four ledgers
+
+The README's claim is that karma is minted in exactly one place, capped per source per day, and
+recorded so a disputed balance can be reconstructed. These collections are that claim.
+
+### `karmaLedger`
+One row per **(account, source, day)** holding what that source has already paid that account
+today. The unique compound index is what makes the cap enforceable rather than advisory: two
+concurrent awards cannot both pass a conditional `$inc` against one unique row, whereas both
+would read the same total if the cap were a query.
+
+`day` is a calendar key (`YYYY-MM-DD`) in the **event's** timezone, not UTC and not a timestamp.
+A hackathon runs through the small hours; a UTC boundary would reset everyone's allowance in the
+middle of the night.
+
+The design note worth stating out loud: gyms had a per-volunteer cooldown, HackStops a per-beacon
+one, check-out a time factor — three defences in three places, none of which stopped someone
+walking a loop of twelve beacons all night. One spent-from row states the rule once, and the
+per-feature cooldowns go back to being about pacing rather than about solvency.
+
+### `bountyLedger`
+One row per **(account, day)** holding karma committed to SOS bounties. Same argument, different
+resource: the ceiling lives in the update predicate and the uniqueness in the index, so two
+tickets raised at the same instant cannot both spend the last of the budget.
+
+### `stickerLedger`
+One row per **(account, sticker)**, plus *when* and *what earned it*. `Volunteer.badges` is the
+denormalised copy the card and leaderboard read; this is the record behind it. Awarding is an
+upsert against the unique index, so "give this hacker the Alma Mater pin" is safe to run twice,
+from two rules, concurrently — the second is a no-op and the service reports it as not-new rather
+than announcing the same sticker again.
+
+### `boothScan`
+One row per **(account, booth)**. The rule is "once per account per booth, **ever**" — not a
+cooldown and not a daily cap, so neither the HackStop map nor the karma ledger can express it:
+both forget. This collection is the memory and the unique index is the enforcement.
+
+### `questProgress`
+One row per **(account, quest, window)**. The window key is what makes a repeating quest
+repeatable: "spin two beacons this hour" is not one quest with a timer, it is a new row every
+hour — so yesterday's finished row stays finished and today's starts at zero with nothing having
+to reset it. Event-long quests use the single key `event`.
+
+### `raidJoin`
+One row per **(raid, account)**. Nobody presses a join button: a raid is joined by doing the thing
+the raid asks for while the window is open, so the row is written by a domain-bus listener rather
+than by a request. That is the difference between a raid roster and a scoreboard filter — the
+roster is a fact recorded at the time, so it survives the window closing, the account changing
+faction, and the karma being spent.
+
+### `powerup`
+Consumable items. Stacked rather than row-per-item: one document per **(volunteer, itemType)**
+with a `quantity`. Awarding is an upsert with `$inc`; consuming is a conditional decrement
+(`quantity: { $gte: 1 }`), so a double-tap cannot spend an item the account no longer has.
+
+---
+
+## Operations
+
+### `sosTicket`
+A distress call: `hackerName`, `tableLocation`, `coordinates`, `category`, `urgency`,
+`description`, `karmaBounty`, and a guarded lifecycle
+(`OPEN` → `DISPATCHED` → `ACKNOWLEDGED` → `ON_SCENE` → `RESOLVED`, plus `CANCELLED`) with a
+transition table rather than free assignment. `escalatedAt` is set once by the scheduler when
+nobody acknowledges in time.
+
+Creating one is the **third** transactional path: reserving the bounty against the day's budget
+in `bountyLedger` and inserting the ticket go through `withTransactionRetry` together, so a
+ticket never exists with budget uncommitted and budget is never spent on a ticket that failed to
+insert.
+
+**This is the most privacy-sensitive collection in the system.** It says where a named person is
+and what is wrong with them. Reads are redacted for anyone who is not a proved lead or a party to
+the ticket — and "proved" is load-bearing: see `docs/IDENTITY.md` and the review log, because the
+sibling branches of that check have been the source of more findings than anything else here.
+
+### `announcement`
+A lead's broadcast to the floor. `audience` (everyone / volunteers / hackers / staff) is filtered
+**on delivery by the server**, not by the client, so a staff-only message never reaches a hacker's
+stream. TTL on `expiresAt`, because a stale "pizza is here" banner is worse than no banner.
+
+---
+
+## The game world
+
+### `gym`
+One of fourteen campus landmarks held as territory. `faction`, `defenders`, control points, and a
+`version` field used for optimistic concurrency so two simultaneous captures cannot both win.
+
+### `hackstop`
+A supply beacon with a 75 m geofence. Spinning one grants a power-up, rate-limited per beacon per
+account, with the daily solvency ceiling enforced by `karmaLedger` rather than by the cooldown.
+
+---
+
+## Presence, media and audit
+
+### `presenceAudit`
+**Positions are never stored.** This collection is the record of *who read an exact position,
+whose, and why* — one document per read, never one per row read. Deleted after 30 days by TTL.
+
+Exactly three code paths can read an exact position (a lead's roster, a lead's `GET /presence`,
+and SOS dispatch) and every one of them writes a row here. That pairing is the privacy claim the
+README makes, and this collection is what makes it checkable instead of aspirational.
+
+### `presenceMute`
+The only place a mute lives. A sender whose samples exceed the speed gate three times running is
+muted for 60 seconds; the TTL on `until` makes the document vanish on its own, and the presence
+store re-reads it before `hello_ack` so a reconnect cannot dodge it.
+
+### `avatar`
+The pixel-art trainer face: `bytes`, `ownerId`, `status` (`PENDING` / `APPROVED` / `REJECTED` — the third set both by a
+reviewer and by a flag takedown), `shareOptIn`,
+`flags`. Several rows can share a `hash` (same pixels, different owners), so publication is
+per-row. An unpublished avatar is readable only by its owner or a lead — **both proved by
+session**, because the hash is broadcast publicly on the presence wire and account ids are public,
+so an id-only check is not a check at all.
+
+---
+
+## What is deliberately not a collection
+
+- **Live positions.** They are held in memory, fuzzed, published one tick late, and never
+  written. There is no table to subpoena, leak or forget to purge.
+- **Sessions.** The cookie is a signed token; validity is `sessionVersion` on the account,
+  compared per request. Revocation is a counter bump, not a delete across a session store.
+- **The campus geometry.** Baked into tiles under `content/<pack>/campus/` at build time and
+  served as static files. It is content, not state.
+
+## Where to look next
+
+| Question | File |
+|---|---|
+| How does the capacity guard actually work? | `ARCHITECTURE.md` §3, `src/services/registration.service.ts` |
+| Why is the waitlist a cascade? | `ARCHITECTURE.md` §4 |
+| How do three-way swaps resolve? | `ARCHITECTURE.md` §6, `src/common/utils/cycleFinder.ts` |
+| What stops a screenshotted QR code? | `ARCHITECTURE.md` §7, `src/services/checkin.service.ts` |
+| Who can see whose position? | `docs/PRESENCE.md` |
+| What does `AUTH_MODE=legacy` permit? | `docs/IDENTITY.md` |
+| What did external review find, and what was wrong? | `docs/REVIEWS.md` |
