@@ -29,7 +29,7 @@ import { Registration, RegistrationStatus } from '../models/registration.model';
 import { ShiftSwap, SwapStatus } from '../models/swap.model';
 import { Gym, Faction } from '../models/gym.model';
 import { HackStop } from '../models/hackstop.model';
-import { HACKILLINOIS_VENUES } from '../common/utils/geo';
+import { pack } from '../content/loader';
 
 export async function seedDatabase(): Promise<void> {
   // ponytail: seed wipes every collection — refuse against a real database unless
@@ -38,7 +38,7 @@ export async function seedDatabase(): Promise<void> {
     console.error('❌ Refusing to seed in production without FORCE_SEED=true (seed wipes all collections).');
     process.exit(1);
   }
-  console.log('🌱 [SEED] Starting database hydration with HackIllinois scenarios...');
+  console.log(`🌱 [SEED] Hydrating from content pack "${pack.event.id}" (${pack.event.name})...`);
   // Only when nobody has connected for us. `connectDatabase()` with no `MONGODB_URI` starts
   // a *new* in-memory replica set and repoints mongoose at it, so calling it unconditionally
   // from a caller that already holds a connection — the test suite, most of all — silently
@@ -380,30 +380,20 @@ export async function seedDatabase(): Promise<void> {
     { id: alice._id, name: 'Alice Chen' },
   ];
 
-  const TERRITORIES: Array<{
-    name: string;
-    locationName: string;
-    venue: keyof typeof HACKILLINOIS_VENUES;
-    faction: Faction;
-    cp: number;
-    max: number;
-    level: number;
-  }> = [
-    { name: 'Siebel Core Coliseum', locationName: 'Siebel Center for CS', venue: 'SIEBEL_ATRIUM', faction: Faction.TEAM_KERNEL, cp: 1680, max: 2000, level: 5 },
-    { name: 'ECEB Silicon Bastion', locationName: 'ECE Building (ECEB)', venue: 'ECEB_LOBBY', faction: Faction.TEAM_TENSOR, cp: 1240, max: 2000, level: 4 },
-    { name: 'Kenney Thunderdome', locationName: 'Kenney Gym Annex', venue: 'KENNEY_GYM', faction: Faction.TEAM_SILICON, cp: 950, max: 2000, level: 3 },
-    { name: 'DCL Relay Keep', locationName: 'Digital Computer Laboratory', venue: 'DCL_BRIDGE', faction: Faction.TEAM_KERNEL, cp: 780, max: 2000, level: 3 },
-    { name: 'Grainger Archive Vault', locationName: 'Grainger Engineering Library', venue: 'GRAINGER_LIBRARY', faction: Faction.TEAM_KERNEL, cp: 1420, max: 2000, level: 4 },
-    { name: 'Beckman Deep Lab', locationName: 'Beckman Institute', venue: 'BECKMAN_INSTITUTE', faction: Faction.TEAM_TENSOR, cp: 1580, max: 2000, level: 5 },
-    { name: 'Alma Mater Shrine', locationName: 'Alma Mater Plaza', venue: 'ALMA_MATER', faction: Faction.NEUTRAL, cp: 500, max: 2500, level: 2 },
-    { name: 'Union Grand Hall', locationName: 'Illini Union', venue: 'ILLINI_UNION', faction: Faction.TEAM_SILICON, cp: 1310, max: 2000, level: 4 },
-    { name: 'Altgeld Chime Tower', locationName: 'Altgeld Hall', venue: 'ALTGELD_HALL', faction: Faction.TEAM_TENSOR, cp: 690, max: 2000, level: 3 },
-    { name: 'Foellinger Rotunda', locationName: 'Foellinger Auditorium', venue: 'FOELLINGER_AUDITORIUM', faction: Faction.TEAM_SILICON, cp: 1120, max: 2000, level: 4 },
-    { name: 'Main Library Stacks', locationName: 'Main Library', venue: 'MAIN_LIBRARY', faction: Faction.NEUTRAL, cp: 400, max: 2000, level: 2 },
-    { name: 'Krannert Stage Nexus', locationName: 'Krannert Center', venue: 'KRANNERT_CENTER', faction: Faction.TEAM_TENSOR, cp: 860, max: 2000, level: 3 },
-    { name: 'Memorial Stadium Bowl', locationName: 'Memorial Stadium', venue: 'MEMORIAL_STADIUM', faction: Faction.TEAM_SILICON, cp: 1940, max: 2500, level: 6 },
-    { name: 'State Farm Dome', locationName: 'State Farm Center', venue: 'STATE_FARM_CENTER', faction: Faction.TEAM_KERNEL, cp: 1050, max: 2500, level: 4 },
-  ];
+  /*
+   * Territories come from the pack, not from this file.
+   *
+   * There used to be a fourteen-entry literal here, and `content/<pack>/territories.json`
+   * held the same fourteen entries with the same names, factions, control points and levels.
+   * The pack's copy was parsed, cross-validated and served to browsers, and read by nothing —
+   * so a fork could edit `territories.json`, watch it validate, and get HackIllinois's gyms.
+   * `territories.json`'s own `_about` said "Read by src/seed/seedData.ts". It was not.
+   *
+   * `crossValidate` already refuses a pack whose territory names an unknown venue, an unknown
+   * monument, an unknown faction, or `cp` above `max`, so nothing below needs to re-check any
+   * of that: a pack that reaches this line has been checked.
+   */
+  const TERRITORIES = pack.territories;
 
   await Gym.create(
     TERRITORIES.map((t, i) => {
@@ -412,8 +402,8 @@ export async function seedDatabase(): Promise<void> {
       return {
         name: t.name,
         locationName: t.locationName,
-        latitude: HACKILLINOIS_VENUES[t.venue].latitude,
-        longitude: HACKILLINOIS_VENUES[t.venue].longitude,
+        latitude: pack.venues[t.venue].latitude,
+        longitude: pack.venues[t.venue].longitude,
         controllingFaction: t.faction,
         controlPoints: t.cp,
         maxControlPoints: t.max,
@@ -425,28 +415,25 @@ export async function seedDatabase(): Promise<void> {
   );
 
   // 6. Seed HackStop Beacons across campus
-  const BEACONS: Array<{ id: string; name: string; where: string; venue: keyof typeof HACKILLINOIS_VENUES }> = [
-    { id: 'BEACON_SIEBEL_ATRIUM', name: 'Siebel Cyber Fountain', where: 'Siebel Center Atrium', venue: 'SIEBEL_ATRIUM' },
-    { id: 'BEACON_SIEBEL_BASEMENT', name: 'Basement Solder Relic', where: 'Siebel Center Basement', venue: 'SIEBEL_BASEMENT' },
-    { id: 'BEACON_ECEB_LOBBY', name: 'ECEB Tesla Coil Relay', where: 'ECEB Main Lobby', venue: 'ECEB_LOBBY' },
-    { id: 'BEACON_KENNEY_GYM', name: 'Kenney Arena Supply Pod', where: 'Kenney Gym Central', venue: 'KENNEY_GYM' },
-    { id: 'BEACON_DCL_BRIDGE', name: 'DCL Nexus Transceiver', where: 'DCL Bridge Walkway', venue: 'DCL_BRIDGE' },
-    { id: 'BEACON_GRAINGER', name: 'Grainger Reading Cache', where: 'Grainger Library Rotunda', venue: 'GRAINGER_LIBRARY' },
-    { id: 'BEACON_ALMA_MATER', name: 'Alma Mater Reliquary', where: 'Green & Wright', venue: 'ALMA_MATER' },
-    { id: 'BEACON_UNION', name: 'Union Courtyard Dispenser', where: 'Illini Union Courtyard', venue: 'ILLINI_UNION' },
-    { id: 'BEACON_ALTGELD', name: 'Altgeld Chime Resonator', where: 'Altgeld Hall Steps', venue: 'ALTGELD_HALL' },
-    { id: 'BEACON_FOELLINGER', name: 'Foellinger Colonnade Drop', where: 'Foellinger Portico', venue: 'FOELLINGER_AUDITORIUM' },
-    { id: 'BEACON_KRANNERT', name: 'Krannert Stage Door Crate', where: 'Krannert Terrace', venue: 'KRANNERT_CENTER' },
-    { id: 'BEACON_STADIUM', name: 'Stadium Tunnel Locker', where: 'Memorial Stadium Gate 4', venue: 'MEMORIAL_STADIUM' },
-  ];
+  /*
+   * Beacons likewise. `beacons.json` was the other dead pack file: validated at boot, unique
+   * ids enforced, venue keys checked — and never read, while this file built twelve beacons of
+   * its own from the same data.
+   *
+   * `cooldownSeconds` and `geofenceRadiusMeters` keep their defaults here rather than moving
+   * into the pack schema, because both are already per-beacon columns on the model and
+   * `spinBeacon` reads them off the document. Making them pack fields is a schema change worth
+   * doing deliberately, not a side effect of this one.
+   */
+  const BEACONS = pack.beacons;
 
   await HackStop.create(
     BEACONS.map((b) => ({
       beaconId: b.id,
       name: b.name,
       locationName: b.where,
-      latitude: HACKILLINOIS_VENUES[b.venue].latitude,
-      longitude: HACKILLINOIS_VENUES[b.venue].longitude,
+      latitude: pack.venues[b.venue].latitude,
+      longitude: pack.venues[b.venue].longitude,
       cooldownSeconds: 300,
       geofenceRadiusMeters: 75,
     }))
@@ -457,8 +444,17 @@ export async function seedDatabase(): Promise<void> {
   console.log(`   - 6 Shifts (Pizza, Hardware, Shuttle, 3:30 AM Surge Emergency, Swag, Info Desk running now)`);
   console.log(`   - 1 Contested Shift with 1 Waitlisted Candidate`);
   console.log(`   - 1 3-Way Circular Trade Demand Ring (Alice -> Bob -> Charlie -> Alice)`);
-  console.log(`   - ${TERRITORIES.length} Campus Territory Gyms (Alma Mater, Foellinger, Altgeld, Memorial Stadium, ...)`);
-  console.log(`   - ${BEACONS.length} Campus Supply HackStops with 75m Geofencing`);
+  // Named from the pack, not from a literal.
+  //
+  // These two lines used to end "(Alma Mater, Foellinger, Altgeld, Memorial Stadium, ...)"
+  // beside a count that was already `TERRITORIES.length`. Once the territories came from the
+  // pack, that made the seed report a fork's one territory and then name four buildings in
+  // Urbana it had not created — a false line in the first output a fork ever sees from this
+  // system. Three examples and an ellipsis, taken from whatever was actually inserted.
+  const sample = (names: string[]): string =>
+    names.length === 0 ? '' : ` (${names.slice(0, 3).join(', ')}${names.length > 3 ? ', ...' : ''})`;
+  console.log(`   - ${TERRITORIES.length} Campus Territory Gyms${sample(TERRITORIES.map((t) => t.name))}`);
+  console.log(`   - ${BEACONS.length} Campus Supply HackStops${sample(BEACONS.map((b) => b.name))}`);
 }
 
 if (require.main === module) {

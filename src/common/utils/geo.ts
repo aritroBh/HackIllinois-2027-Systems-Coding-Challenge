@@ -14,16 +14,26 @@
  * a map (SOS dispatch ranking, the escalation notice) use it and read the flag rather than
  * inventing a coordinate of their own.
  *
- * **Known gap: this gazetteer is a second copy of the content pack.** `HACKILLINOIS_VENUES`
- * and `VENUE_KEYWORDS` below hold the same fifteen keys, the same coordinates and the same
- * hints as `content/hackillinois-2027/venues.json`, and nothing checks that they still agree.
- * The pack's copy is what `BoothService` and `RaidService` validate against and what the
- * client renders; this copy is what the check-in geofence and SOS dispatch actually measure
- * from. So a fork that edits `venues.json` — which the fork guide says is the way to move a
- * venue — moves the map pin and not the geofence. Reading the pack here is the fix; it is
- * recorded rather than done because it changes what boots when a pack is missing a venue the
- * seed data names.
+ * **The gazetteer is the content pack.** It used to be a second copy: a `HACKILLINOIS_VENUES`
+ * literal and a `VENUE_KEYWORDS` table in this file, holding the same fifteen keys, the same
+ * coordinates and the same hints as `content/hackillinois-2027/venues.json`, with nothing
+ * checking that they still agreed. The pack's copy was what `BoothService` and `RaidService`
+ * validated against and what the client rendered; this copy was what the check-in geofence and
+ * SOS dispatch actually measured from. A fork that edited `venues.json` — which the fork guide
+ * says is how you move a venue — moved the map pin and not the geofence, so its check-ins
+ * failed against buildings in Urbana.
+ *
+ * The two were diffed before they were merged, and they were byte-identical: all fifteen keys,
+ * both coordinates each, every hint list. So this change moved nothing for the shipped pack and
+ * it is the reason it could be made at all. `CONTRIBUTING.md` has always said that nothing in
+ * `src/` names a building; `scripts/checkPackDriven.mjs` now enforces it.
+ *
+ * The deferral recorded here previously — that reading the pack "changes what boots when a pack
+ * is missing a venue the seed data names" — was true when it was written and is not any more.
+ * The seed reads the pack too, so it cannot name a venue the pack lacks, and `crossValidate`
+ * already refuses a pack whose territories or beacons point at an unknown venue key.
  */
+import { pack } from '../../content/loader';
 
 export interface IGeoCoordinates {
   latitude: number;
@@ -31,34 +41,20 @@ export interface IGeoCoordinates {
 }
 
 /**
- * Campus gazetteer. Coordinates for the landmark venues were cross-checked
- * against OpenStreetMap building centroids (ODbL) when the territory map was
- * built — see design/build-campus.py, which resolves the same set of landmarks
- * into the 3D model the war-room renders. Keeping the two lists agreeing is
- * what lets a shift at "Foellinger" light up the right monument on the map.
+ * Every venue the active pack declares, as bare coordinates.
+ *
+ * Derived once at import, like every other `pack.*` read in `src/`. `loader.ts` guarantees the
+ * pack is whole before anything can import it, so there is no half-loaded state to guard
+ * against.
+ *
+ * Coordinates in the shipped pack were cross-checked against OpenStreetMap building centroids
+ * (ODbL) when the territory map was built — see `design/pipeline/`, which resolves the same
+ * landmarks into the 3D model the war room renders. That is what lets a shift at "Foellinger"
+ * light up the right monument.
  */
-export const HACKILLINOIS_VENUES: Record<string, IGeoCoordinates> = {
-  // Engineering campus
-  SIEBEL_ATRIUM: { latitude: 40.113812, longitude: -88.224937 },
-  SIEBEL_BASEMENT: { latitude: 40.113725, longitude: -88.224810 },
-  ECEB_LOBBY: { latitude: 40.114828, longitude: -88.228056 },
-  KENNEY_GYM: { latitude: 40.113054, longitude: -88.228012 },
-  DCL_BRIDGE: { latitude: 40.113215, longitude: -88.226500 },
-  GRAINGER_LIBRARY: { latitude: 40.112400, longitude: -88.226870 },
-  BECKMAN_INSTITUTE: { latitude: 40.115620, longitude: -88.227480 },
-
-  // The Main Quad and its monuments
-  ALMA_MATER: { latitude: 40.109920, longitude: -88.228400 },
-  ILLINI_UNION: { latitude: 40.109540, longitude: -88.227340 },
-  ALTGELD_HALL: { latitude: 40.109370, longitude: -88.228400 },
-  FOELLINGER_AUDITORIUM: { latitude: 40.106030, longitude: -88.227210 },
-  MAIN_LIBRARY: { latitude: 40.104550, longitude: -88.228850 },
-
-  // Outer campus
-  KRANNERT_CENTER: { latitude: 40.108020, longitude: -88.222940 },
-  MEMORIAL_STADIUM: { latitude: 40.099250, longitude: -88.235970 },
-  STATE_FARM_CENTER: { latitude: 40.096220, longitude: -88.235990 },
-};
+export const VENUE_COORDINATES: Record<string, IGeoCoordinates> = Object.fromEntries(
+  Object.entries(pack.venues).map(([key, venue]) => [key, { latitude: venue.latitude, longitude: venue.longitude }])
+);
 
 /**
  * Resolves a free-text shift location ("Siebel Center Atrium", "SIEBEL_ATRIUM",
@@ -70,35 +66,29 @@ export const HACKILLINOIS_VENUES: Record<string, IGeoCoordinates> = {
 export function resolveVenueCoordinates(location: string | undefined | null): IGeoCoordinates | null {
   if (!location) return null;
   const norm = location.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
-  if (HACKILLINOIS_VENUES[norm]) return HACKILLINOIS_VENUES[norm];
+  if (VENUE_COORDINATES[norm]) return VENUE_COORDINATES[norm];
   const resolved = resolveVenue(location);
   return resolved.matched ? resolved.coordinates : null;
 }
 
-/** Keyword hints mapping free-text shift locations to canonical venue keys. */
-// Resolution scores by hint specificity (longest match wins), so this list is
-// order-independent: adding a venue cannot shadow, or be shadowed by, another.
-// Keep hints as specific as the venue they identify.
-const VENUE_KEYWORDS: Array<{ key: string; hints: string[] }> = [
-  { key: 'SIEBEL_BASEMENT', hints: ['BASEMENT', '0220'] },
-  { key: 'SIEBEL_ATRIUM', hints: ['SIEBEL', 'ATRIUM', '1404', '1100'] },
-  { key: 'ECEB_LOBBY', hints: ['ECEB', 'ROOM 1020', 'MICROELECTRONICS'] },
-  { key: 'KENNEY_GYM', hints: ['KENNEY', 'PAVILION', 'MAIN STAGE'] },
-  { key: 'DCL_BRIDGE', hints: ['DCL', 'BRIDGE'] },
-  { key: 'GRAINGER_LIBRARY', hints: ['GRAINGER'] },
-  { key: 'BECKMAN_INSTITUTE', hints: ['BECKMAN'] },
-  { key: 'ALMA_MATER', hints: ['ALMA', 'GREEN & WRIGHT', 'GREEN AND WRIGHT'] },
-  { key: 'ILLINI_UNION', hints: ['UNION', 'COURTYARD CAFE'] },
-  { key: 'ALTGELD_HALL', hints: ['ALTGELD', 'CHIME'] },
-  { key: 'FOELLINGER_AUDITORIUM', hints: ['FOELLINGER'] },
-  { key: 'MAIN_LIBRARY', hints: ['MAIN LIBRARY', 'STACKS'] },
-  { key: 'KRANNERT_CENTER', hints: ['KRANNERT'] },
-  { key: 'MEMORIAL_STADIUM', hints: ['MEMORIAL STADIUM', 'STADIUM', 'ZUPPKE'] },
-  { key: 'STATE_FARM_CENTER', hints: ['STATE FARM CENTER', 'STATE FARM', 'ASSEMBLY HALL'] },
-  // Bare "GYM" is the weakest hint in the table, so any longer phrase — including
-  // "KENNEY" itself — outranks it.
-  { key: 'KENNEY_GYM', hints: ['GYM'] },
-];
+/**
+ * Free-text hints, from the pack's `hints` array on each venue.
+ *
+ * Resolution scores by hint specificity — longest match wins — so this list is
+ * order-independent: a venue cannot shadow, or be shadowed by, another, and a pack may list its
+ * hints in whatever order reads best. That property is what let this become a derived list at
+ * all. The old hand-written table encoded ordering in two places (a duplicate `KENNEY_GYM` row
+ * carrying the deliberately weak bare hint `GYM`, placed last), and with longest-match scoring
+ * that placement was already decorative: `GYM` is three characters and loses to `KENNEY`,
+ * `MAIN STAGE` and everything else regardless of where it sits.
+ *
+ * Hints are upper-cased here rather than trusted from the pack, because the match below is a
+ * substring test against an upper-cased input and a lower-case hint would simply never fire —
+ * a venue that silently cannot be resolved is exactly the failure this file exists to prevent.
+ */
+const VENUE_KEYWORDS: Array<{ key: string; hints: string[] }> = Object.entries(pack.venues).map(
+  ([key, venue]) => ({ key, hints: (venue.hints ?? []).map((hint) => hint.toUpperCase()) })
+);
 
 /**
  * `matched` is the field that matters. `coordinates` is always populated — there is no null
@@ -122,8 +112,8 @@ export interface IVenueResolution {
  */
 export function resolveVenue(location: string | undefined | null): IVenueResolution {
   const raw = (location || '').trim();
-  if (raw && Object.prototype.hasOwnProperty.call(HACKILLINOIS_VENUES, raw)) {
-    return { key: raw, coordinates: HACKILLINOIS_VENUES[raw], matched: true };
+  if (raw && Object.prototype.hasOwnProperty.call(VENUE_COORDINATES, raw)) {
+    return { key: raw, coordinates: VENUE_COORDINATES[raw], matched: true };
   }
   const upper = raw.toUpperCase();
   if (upper) {
@@ -145,10 +135,16 @@ export function resolveVenue(location: string | undefined | null): IVenueResolut
       }
     }
     if (best) {
-      return { key: best.key, coordinates: HACKILLINOIS_VENUES[best.key], matched: true };
+      return { key: best.key, coordinates: VENUE_COORDINATES[best.key], matched: true };
     }
   }
-  return { key: 'SIEBEL_ATRIUM', coordinates: HACKILLINOIS_VENUES.SIEBEL_ATRIUM, matched: false };
+  // The pack's own HQ, not a building named in this file.
+  //
+  // This used to be a hard-coded `SIEBEL_ATRIUM`, which is the one place a fork could not
+  // reach: every unresolvable location fell back to a specific building in Urbana. `hqVenue`
+  // is a required pack field and `crossValidate` refuses a pack whose `hqVenue` is not a real
+  // venue key, so the lookup below cannot miss.
+  return { key: pack.event.hqVenue, coordinates: VENUE_COORDINATES[pack.event.hqVenue], matched: false };
 }
 
 const EARTH_RADIUS_METERS = 6371000; // Earth mean radius in meters

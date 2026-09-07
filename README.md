@@ -33,7 +33,8 @@ That is the intended way to see this running, including at an interview: it need
 
 ## Making it yours
 
-Read [docs/FORK_GUIDE.md](docs/FORK_GUIDE.md). The short version:
+Read [docs/FORK_GUIDE.md](docs/FORK_GUIDE.md) to run it as your event, or
+[docs/EXTENDING.md](docs/EXTENDING.md) to add a feature to it. The short version of the first:
 
 ```sh
 cp -r content/example-campus content/my-event    # then edit event.json
@@ -50,6 +51,7 @@ A pack that does not validate does not start the server. That is deliberate: a t
 | [DATA-MODEL.md](docs/DATA-MODEL.md) | All twenty-three collections, and why each is its own |
 | [LIMITATIONS.md](docs/LIMITATIONS.md) | What is not solved, and why every constant is the number it is |
 | [WORKFLOWS.md](docs/WORKFLOWS.md) | The six end-to-end journeys, from first tap to last write |
+| [EXTENDING.md](docs/EXTENDING.md) | The six seams, in order of blast radius — start here to build on this |
 | [FORK_GUIDE.md](docs/FORK_GUIDE.md) | Running this for a different event, in order |
 | [CONTENT-PACKS.md](docs/CONTENT-PACKS.md) | Every pack file, field by field |
 | [IDENTITY.md](docs/IDENTITY.md) | The two auth modes, the three adapters, the runbook |

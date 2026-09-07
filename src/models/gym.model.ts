@@ -23,28 +23,37 @@
  * this replaced.
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
+import { pack } from '../content/loader';
 
 /**
- * The three competing factions, plus NEUTRAL for an unclaimed control point.
+ * Faction ids the *shipped* pack happens to declare, plus NEUTRAL.
  *
- * A volunteer's allegiance is bound on their first non-neutral battle and locked
- * thereafter, so one account cannot reinforce as an ally and attack as a rival.
- */
-/*
- * Ids only. **Colours, labels and HQ venues live in the content pack**
- * (`content/<pack>/factions.json`), which is what the map, the HUD and the sticker tints read.
+ * **This is a convenience, not the authority.** The authority is
+ * `content/<pack>/factions.json`, and the only member of this enum a fork can rely on is
+ * `NEUTRAL`, which `crossValidate` requires every pack to declare. Nothing in `src/` reads
+ * `Faction.TEAM_KERNEL`, `Faction.TEAM_TENSOR` or `Faction.TEAM_SILICON` — checked, not
+ * assumed — and the three exist only because `tests/` still names them. They should go when
+ * those tests move to reading the pack, and until then they are the last event-specific strings
+ * left in `src/`.
  *
- * These comments used to carry hex values, and they had gone stale — they still named the
- * pre-redesign palette (`#00F2FE`/`#FF007F`/`#FFB300`) while everything that actually renders
- * used the pack's (`#22d3ee`/`#a78bfa`/`#fbbf24`). Duplicating a pack value in a source comment
- * makes it a second source of truth that nothing checks, so the theme is named here and the
- * value is not.
+ * Reading this enum as the set of valid factions is what broke forks: `GymSchema` used to
+ * validate `controllingFaction` against `Object.values(Faction)`, which rejected any faction a
+ * pack declared that was not one of these three. See the comment on that field.
+ *
+ * A volunteer's allegiance is bound on their first non-neutral battle and locked thereafter, so
+ * one account cannot reinforce as an ally and attack as a rival.
+ *
+ * Ids only. **Colours, labels and HQ venues live in the pack**, which is what the map, the HUD
+ * and the sticker tints read. These comments used to carry hex values and had gone stale — they
+ * still named the pre-redesign palette (`#00F2FE`/`#FF007F`/`#FFB300`) while everything that
+ * renders used the pack's. Duplicating a pack value in a source comment makes it a second source
+ * of truth that nothing checks, so the theme is named here and the value is not.
  */
 export enum Faction {
-  TEAM_KERNEL = 'TEAM_KERNEL',   // Systems & Infrastructure
-  TEAM_TENSOR = 'TEAM_TENSOR',   // AI & ML
-  TEAM_SILICON = 'TEAM_SILICON', // Hardware & Robotics
-  NEUTRAL = 'NEUTRAL',           // Unclaimed; must exist, per factions.json
+  TEAM_KERNEL = 'TEAM_KERNEL',   // Systems & Infrastructure. Shipped pack only; see above.
+  TEAM_TENSOR = 'TEAM_TENSOR',   // AI & ML. Shipped pack only.
+  TEAM_SILICON = 'TEAM_SILICON', // Hardware & Robotics. Shipped pack only.
+  NEUTRAL = 'NEUTRAL',           // Unclaimed. Required in every pack, per crossValidate.
 }
 
 /**
@@ -114,20 +123,41 @@ const GymDefenderSchema = new Schema<IGymDefender>(
 
 const GymSchema = new Schema<IGym>(
   {
-    // Unique, although nothing looks a gym up by name. It is a de-duplication guard: the
-    // fourteen territories come from the seeder's own hard-coded array (`pack.territories`
-    // is validated and then not used) and are inserted, not upserted, so a second
-    // seed against a database that was not cleared, or a hand-inserted territory, would
-    // otherwise produce two documents for one landmark — two pins on the map at the same
-    // coordinates, each capturable independently, with a player's karma spent on whichever
-    // one their client happened to render.
+    // Unique, although nothing looks a gym up by name. It is a de-duplication guard: the seed
+    // reads `pack.territories` and *inserts*, it does not upsert, so a second seed against a
+    // database that was not cleared, or a hand-inserted territory, would otherwise produce two
+    // documents for one landmark — two pins on the map at the same coordinates, each capturable
+    // independently, with a player's karma spent on whichever one their client happened to
+    // render. It is also, incidentally, the only thing stopping a pack that lists the same
+    // territory name twice; `crossValidate` checks beacon ids for duplicates but not territory
+    // names, so this index is where that would surface, as a seed failure.
     name: { type: String, required: true, trim: true, unique: true },
     locationName: { type: String, required: true },
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true },
     controllingFaction: {
       type: String,
-      enum: Object.values(Faction),
+      /*
+       * The pack's faction ids, not this file's enum — and this was a real wall, not a tidy-up.
+       *
+       * `enum: Object.values(Faction)` hardcoded HackIllinois's three team ids, so two
+       * validators disagreed about the same value. `crossValidate` checks every territory's
+       * faction against `factions.json` and passes anything the pack declares; Mongoose then
+       * rejected anything that was not one of the three compiled in. A fork naming its own
+       * sides — which every fork does, because `factions.json` is pack-owned — got a green
+       * `npm run content:validate` and then `Gym validation failed … kind: 'enum', value:
+       * 'TEAM_RED'` the moment it seeded.
+       *
+       * That was demonstrated rather than reasoned about: `content/example-campus`, the
+       * template `docs/FORK_GUIDE.md` tells you to copy, declares TEAM_RED and TEAM_BLUE. It
+       * only seeded at all because its single territory happens to be NEUTRAL, which is the one
+       * id both lists share. Setting that territory to TEAM_RED — a faction its own pack
+       * declares — reproduced the failure exactly.
+       *
+       * `crossValidate` requires a NEUTRAL faction in every pack, so the default below is
+       * always a member of this list.
+       */
+      enum: pack.factions.map((faction) => faction.id),
       default: Faction.NEUTRAL,
       index: true,
     },

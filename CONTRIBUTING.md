@@ -60,8 +60,9 @@ One change per pull request, with a description that says what failure it preven
 changes a security boundary, an invariant or the identity model, say so in the description
 and update the doc in `docs/` that covers it in the same change.
 
-If you are adding behaviour specific to one event, it probably belongs in a plugin rather
-than in a service. See [docs/PLUGINS.md](docs/PLUGINS.md).
+If you are adding behaviour specific to one event, it probably belongs in a plugin or a
+content pack rather than in a service. [docs/EXTENDING.md](docs/EXTENDING.md) lists the six
+seams in order of blast radius; work down it and stop at the first that fits.
 
 ## Reporting a vulnerability
 
