@@ -91,7 +91,9 @@
   // `v37`: the map says whether the trainer's position is your GPS or a demo placement, and
   //        how far off-campus a real fix is.
   // `v38`: the faction picker's in-flight state is state, not a paint argument.
-  const VERSION = 'v38';
+  // `v39`: a HackStop on cooldown disables its own Spin button and counts down, instead of
+  //        staying enabled and failing for five minutes after every success.
+  const VERSION = 'v40';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

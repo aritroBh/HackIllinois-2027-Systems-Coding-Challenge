@@ -11,8 +11,15 @@
  *
  * It never loads from another origin. The content security policy is `script-src 'self'`,
  * so a cross-origin plugin script would be blocked anyway, but the loader refuses one
- * before the browser has to, and says why. Plugins are first-party code in this repository
- * or in a content pack, reviewed like the rest of it; see docs/PLUGINS.md.
+ * before the browser has to, and says why. Plugins are first-party code **in this
+ * repository**, reviewed like the rest of it; see docs/PLUGINS.md.
+ *
+ * Not "or in a content pack", which this said until now and which is not a thing that works.
+ * `PluginRegistry`'s `CATALOG` is a literal array of static imports and nothing scans a
+ * filesystem: a pack's `event.json` carries a `plugins` array, but those are *names* selecting
+ * from that catalogue, not code the pack ships. A fork that read this sentence and bundled a
+ * plugin into its pack would get silence — no error, no plugin — which is the worst of the
+ * three possible outcomes.
  *
  * It never retries. A plugin that fails to load leaves the core dashboard exactly as it
  * was, which is the right outcome: an optional feature is not worth a reload loop, and a

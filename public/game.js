@@ -533,11 +533,14 @@
       const y = (lat - at.latitude) * rad;
       const d = Math.round(Math.sqrt(x * x + y * y) * R);
       const radius = Number(btn.dataset.radius) || PROX_RADIUS;
-      const ok = d <= radius;
+      const cool = cooldownLeft(btn.dataset.beacon);
+      const ok = d <= radius && cool === 0;
       if (btn.disabled !== !ok) btn.disabled = !ok;
-      const label = ok ? 'Spin' : `${d} m`;
+      // The label names the actual reason. Showing a distance for a stop the player is
+      // standing on, because it is cooling down, is a lie in three characters.
+      const label = ok ? 'Spin' : cool > 0 ? coolLabel(cool) : `${d} m`;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${radius} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : cool > 0 ? `Cooling down — ${cool}s left` : `Walk to within ${radius} m to spin`;
     });
   }
 
@@ -594,12 +597,16 @@
       // a stop with a tighter one it would answer "near enough" for a distance its own fence
       // rejects — enabling a button the server refuses. A geofence with no measurement fails
       // closed; that is the rule the rest of this file already follows.
-      const ok = Number.isFinite(d) ? d <= radius : (radius >= PROX_RADIUS && nearIds.has(id));
-      const label = ok ? 'Spin' : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
+      const cool = cooldownLeft(id);
+      const inRange = Number.isFinite(d) ? d <= radius : (radius >= PROX_RADIUS && nearIds.has(id));
+      const ok = inRange && cool === 0;
+      const label = ok ? 'Spin'
+        : cool > 0 ? coolLabel(cool)
+          : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
       // Only touch the DOM on change: this runs on a tick while the player walks.
       if (btn.disabled !== !ok) btn.disabled = !ok;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${radius} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : cool > 0 ? `Cooling down — ${cool}s left` : `Walk to within ${radius} m to spin`;
     });
   }
 
@@ -800,6 +807,22 @@
    * is all it needs. A person wants the number: "off campus" reads like a street away, and
    * ten thousand kilometres is a different fact about their evening.
    */
+  /**
+   * Seconds until this stop can be spun again, or 0.
+   *
+   * Distance is not the only thing that disables a Spin button — a stop the player spun four
+   * minutes ago is in range and still refused. `app.js` owns the record because it owns the
+   * request that learns it; this only reads it.
+   */
+  function cooldownLeft(beaconId) {
+    return (typeof window.spinCooldownLeft === 'function' ? window.spinCooldownLeft(beaconId) : 0) || 0;
+  }
+
+  /** A countdown a person can read: "4:12" rather than 252. */
+  function coolLabel(secs) {
+    return secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+  }
+
   function metresOutsideCampus(lat, lng) {
     const box = window.campusMeta?.bbox;
     if (!Array.isArray(box) || box.length !== 4) return 0;

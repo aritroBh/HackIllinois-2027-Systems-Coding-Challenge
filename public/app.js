@@ -1679,6 +1679,32 @@ async function loadHackStopsData() {
   }
 }
 
+/**
+ * When each HackStop is next spinnable, by beacon id.
+ *
+ * A beacon has a `cooldownSeconds` (300 in the shipped pack) and the server refuses an early
+ * spin with `SCHEDULE_CONFLICT — Available again in 279 seconds`. The client tracked none of
+ * it: the Spin button stayed enabled and labelled "Spin" for the whole five minutes, so
+ * every click in that window was a request the server was always going to reject. That is
+ * the labelled-control-that-always-fails shape, and this one lasts five minutes after every
+ * single success — the most reachable instance of it in the app.
+ *
+ * Two writers, because neither is sufficient alone. A success schedules `now + cooldown`,
+ * which covers the normal case. A refusal parses the remaining seconds out of the server's
+ * message, which covers the cases the first cannot know about: a spin from the player's other
+ * device, and a page reload that lost the in-memory record.
+ */
+const spinCooldowns = new Map();
+
+/** Seconds left on a beacon's cooldown, or 0. */
+function spinCooldownLeft(beaconId) {
+  const until = spinCooldowns.get(beaconId);
+  if (!until) return 0;
+  const left = Math.ceil((until - Date.now()) / 1000);
+  if (left <= 0) { spinCooldowns.delete(beaconId); return 0; }
+  return left;
+}
+
 async function spinHackStop(beaconId, lat, lon, btn) {
   const vol = actingVolunteer();
   if (!vol) return;
@@ -1703,7 +1729,18 @@ async function spinHackStop(beaconId, lat, lon, btn) {
       logChaosTerminal(`[HACKSTOP] Spun ${json.data.name} → ${item.name} (+${json.data.awardedKarma} karma)`);
       loadUserInventory();
       fetchStats();
+      const stop = hackStopsCache.find((h) => h.beaconId === beaconId);
+      const secs = Number(stop?.cooldownSeconds) || 0;
+      if (secs > 0) spinCooldowns.set(beaconId, Date.now() + secs * 1000);
+      window.game?.gateSpins?.();
     } else {
+      // The server says how long is left; believe it over any local arithmetic, because it
+      // is the half that knows about the player's other device.
+      const left = Number(/(\d+)\s*seconds?/.exec(json.message || '')?.[1]);
+      if (json.error === 'SCHEDULE_CONFLICT' && Number.isFinite(left)) {
+        spinCooldowns.set(beaconId, Date.now() + left * 1000);
+        window.game?.gateSpins?.();
+      }
       logChaosTerminal(`[ERROR] HackStop spin failed: ${json.message}`);
     }
   } catch (err) {
