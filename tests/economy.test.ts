@@ -6,6 +6,7 @@
  * you cannot quietly fix afterwards, so the tests that matter here run things at once.
  */
 import mongoose from 'mongoose';
+import { HOLDER } from './helpers/factions';
 import { Volunteer, VolunteerRole, AccountKind, computePrestigeTier } from '../src/models/volunteer.model';
 import { KarmaLedger } from '../src/models/karmaLedger.model';
 import { StickerLedger } from '../src/models/stickerLedger.model';
@@ -370,7 +371,7 @@ describe('NEUTRAL is not a side you can fight for', () => {
     await Volunteer.updateOne({ _id: vol._id }, { $set: { faction: 'TEAM_KERNEL' } });
     const gym = await Gym.create({
       name: 'Test Shrine', locationName: 'Somewhere', latitude: 40.10992, longitude: -88.2284,
-      controllingFaction: Faction.TEAM_KERNEL, controlPoints: 100, maxControlPoints: 1000, level: 1,
+      controllingFaction: HOLDER, controlPoints: 100, maxControlPoints: 1000, level: 1,
     });
 
     await expect(
@@ -380,7 +381,7 @@ describe('NEUTRAL is not a side you can fight for', () => {
     ).rejects.toThrow(/NEUTRAL/);
 
     const after = await Gym.findById(gym._id);
-    expect(after!.controllingFaction).toBe(Faction.TEAM_KERNEL);
+    expect(after!.controllingFaction).toBe(HOLDER);
     expect((await Volunteer.findById(vol._id))!.karmaPoints).toBe(0);
   });
 });

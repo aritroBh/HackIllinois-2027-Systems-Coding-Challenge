@@ -3,7 +3,8 @@ import { app } from '../src/app';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Volunteer } from '../src/models/volunteer.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
-import { Gym, Faction } from '../src/models/gym.model';
+import { Gym } from '../src/models/gym.model';
+import { HOLDER, RIVAL } from './helpers/factions';
 import { HackStop } from '../src/models/hackstop.model';
 import { PowerUpInventory } from '../src/models/powerup.model';
 import { SOSTicketCategory, SOSTicketUrgency, SOSTicketStatus } from '../src/models/sosTicket.model';
@@ -326,7 +327,7 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       locationName: 'Siebel Center',
       latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
       longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
-      controllingFaction: Faction.TEAM_KERNEL,
+      controllingFaction: HOLDER,
       controlPoints: 100,
       maxControlPoints: 1000,
       version: 0,
@@ -336,16 +337,16 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
     const battleRes = await GymService.battleOrContribute(
       siebelGym._id.toString(),
       volAda._id.toString(),
-      Faction.TEAM_TENSOR,
+      RIVAL,
       150,
       VENUE_COORDINATES.SIEBEL_ATRIUM
     );
     expect(battleRes.action).toBe('CAPTURED');
-    expect(battleRes.controllingFaction).toBe(Faction.TEAM_TENSOR);
+    expect(battleRes.controllingFaction).toBe(RIVAL);
     expect(battleRes.leaderName).toBe(volAda.name);
 
     const gymInDb = await Gym.findById(siebelGym._id);
-    expect(gymInDb?.controllingFaction).toBe(Faction.TEAM_TENSOR);
+    expect(gymInDb?.controllingFaction).toBe(RIVAL);
     expect(gymInDb?.version).toBeGreaterThan(0); // OCC version incremented!
 
     // =========================================================================

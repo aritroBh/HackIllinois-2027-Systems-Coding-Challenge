@@ -73,7 +73,9 @@
   //        write, the encounter guards check identity, and the face follows the map switch.
   // `v25`: the faction picker writes to the server and locks once allegiance is bound, and
   //        the pixel dropdown honours `disabled` so a locked control looks locked.
-  const VERSION = 'v25';
+  // `v26`: gym defender counts read the projected `defenderCount`, so the compatibility shim
+  //        on the server side can go.
+  const VERSION = 'v26';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

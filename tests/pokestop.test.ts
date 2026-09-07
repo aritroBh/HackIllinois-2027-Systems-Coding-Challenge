@@ -1,4 +1,5 @@
-import { Gym, Faction } from '../src/models/gym.model';
+import { Gym } from '../src/models/gym.model';
+import { HOLDER, RIVAL } from './helpers/factions';
 import { HackStop } from '../src/models/hackstop.model';
 import { Volunteer } from '../src/models/volunteer.model';
 import { PowerUpInventory, PowerUpType } from '../src/models/powerup.model';
@@ -30,7 +31,7 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
         locationName: 'Siebel Center',
         latitude: VENUE_COORDINATES.SIEBEL_ATRIUM.latitude,
         longitude: VENUE_COORDINATES.SIEBEL_ATRIUM.longitude,
-        controllingFaction: Faction.TEAM_KERNEL,
+        controllingFaction: HOLDER,
         controlPoints: 500,
         maxControlPoints: 1000,
       });
@@ -38,13 +39,13 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
       const res = await GymService.battleOrContribute(
         gym._id.toString(),
         volA._id.toString(),
-        Faction.TEAM_KERNEL,
+        HOLDER,
         200
       );
 
       expect(res.action).toBe('CONTRIBUTED');
       expect(res.newControlPoints).toBe(700);
-      expect(res.controllingFaction).toBe(Faction.TEAM_KERNEL);
+      expect(res.controllingFaction).toBe(HOLDER);
 
       const updated = await Gym.findById(gym._id);
       expect(updated?.controlPoints).toBe(700);
@@ -56,7 +57,7 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
         locationName: 'ECEB',
         latitude: VENUE_COORDINATES.ECEB_LOBBY.latitude,
         longitude: VENUE_COORDINATES.ECEB_LOBBY.longitude,
-        controllingFaction: Faction.TEAM_KERNEL,
+        controllingFaction: HOLDER,
         controlPoints: 80,
         maxControlPoints: 1500,
         leaderName: 'Rival Champion',
@@ -66,16 +67,16 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
       const res = await GymService.battleOrContribute(
         gym._id.toString(),
         volB._id.toString(),
-        Faction.TEAM_TENSOR,
+        RIVAL,
         150
       );
 
       expect(res.action).toBe('CAPTURED');
-      expect(res.controllingFaction).toBe(Faction.TEAM_TENSOR);
+      expect(res.controllingFaction).toBe(RIVAL);
       expect(res.leaderName).toBe(volB.name);
 
       const dbGym = await Gym.findById(gym._id);
-      expect(dbGym?.controllingFaction).toBe(Faction.TEAM_TENSOR);
+      expect(dbGym?.controllingFaction).toBe(RIVAL);
       expect(dbGym?.leaderVolunteerId?.toString()).toBe(volB._id.toString());
       expect(dbGym?.leaderName).toBe(volB.name);
     });

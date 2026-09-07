@@ -785,7 +785,16 @@ function renderGymsList() {
     const f = factionOf(g.controllingFaction);
     const pct = Math.max(0, Math.min(100, Math.round((g.controlPoints / (g.maxControlPoints || 1)) * 100) || 0));
     const ally = g.controllingFaction === currentVolunteerFaction || g.controllingFaction === 'NEUTRAL';
-    const defenders = (g.defenders || []).length;
+    // `defenderCount`, not `defenders.length`.
+    //
+    // `GET /pokeshift/gyms` used to return whole gym documents, so `defenders[]` carried a
+    // `volunteerName`, a `contributedPower` and an `assignedAt` for each holder. A gym is a
+    // named building you must be within 75 m of to contest, so that was a named person at a
+    // named place at a stated time, to an unauthenticated caller with no audit row. The route
+    // projects now, and left `defenders` as a length-preserving array of empty objects purely
+    // so this line kept working. Reading the count the server actually publishes is what lets
+    // that shim be deleted.
+    const defenders = Number(g.defenderCount ?? (g.defenders || []).length) || 0;
     const mon = monumentForGym(g);
 
     return `
@@ -1996,7 +2005,7 @@ function renderMonumentDetail(mon) {
         ${facts.length ? `<ul class="mon-facts">${facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : `<div class="mc-text">${esc(mon.blurb || '')}</div>`}
         ${info?.approximate ? '<div class="mc-text">Details from general knowledge — no source article was available.</div>' : ''}
         ${gym ? `
-          <div class="mon-meta" style="--c:${f.color}"><span class="f">${esc(f.short)}</span><span class="dot"></span><span>Lv ${Number(gym.level) || 1}</span><span class="dot"></span><span>${(gym.defenders || []).length} defending</span></div>
+          <div class="mon-meta" style="--c:${f.color}"><span class="f">${esc(f.short)}</span><span class="dot"></span><span>Lv ${Number(gym.level) || 1}</span><span class="dot"></span><span>${Number(gym.defenderCount ?? (gym.defenders || []).length) || 0} defending</span></div>
           <div class="mc-cp"><span>CP</span><div class="pxbar"><i style="width:${pct}%;background:${f.color}"></i></div><span>${num(gym.controlPoints)}/${num(gym.maxControlPoints)}</span></div>
         ` : '<div class="mc-text">Uncontested — no stronghold registered here yet.</div>'}
       </div>
