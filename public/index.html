@@ -26,29 +26,46 @@
         <div class="rule-v" aria-hidden="true"></div>
         <span class="signal" id="sse-status" aria-live="polite">Online</span>
       </div>
-      <div class="hud-metrics">
-        <div class="hud-num metric-item"><b id="hud-total-shifts">--</b><span>Quests</span></div>
-        <div class="hud-num metric-item"><b id="hud-fill-rate">--%</b><span>Coverage</span></div>
-        <div class="hud-num metric-item"><b id="hud-total-karma">--</b><span>Karma</span></div>
+      <!-- These three are event-wide totals, not the signed-in user's: "3.6% coverage" is the
+           whole schedule, not your own. Nothing said so, and read beside a personal profile
+           button they looked personal. The group is labelled once and each figure names its
+           scope in its own title. Your figures live in the Me tab. -->
+      <div class="hud-metrics" role="group" aria-label="Event totals">
+        <div class="hud-num metric-item" title="Quests posted across the whole event"><b id="hud-total-shifts">--</b><span>Event quests</span></div>
+        <div class="hud-num metric-item" title="Share of all quest capacity that is filled"><b id="hud-fill-rate">--%</b><span>Event coverage</span></div>
+        <div class="hud-num metric-item" title="Karma earned by every volunteer combined"><b id="hud-total-karma">--</b><span>Event karma</span></div>
         <div class="rule-v" aria-hidden="true"></div>
-        <button id="adonix-sync-btn" class="pb pb-patina pb-sm" data-action="adonix-sync">Sync Adonix</button>
         <button id="sound-toggle-btn" class="pb pb-ghost pb-sm" aria-label="Toggle audio cues" aria-pressed="true">Audio On</button>
-        <button id="session-btn" class="pb pb-ghost pb-sm" data-action="session" aria-label="Sign in">Sign in</button>
+        <button id="session-btn" class="pb pb-ghost pb-sm" data-action="session" aria-label="Account">Sign in</button>
       </div>
     </div>
   </header>
 
   <!-- ============================== TABS =============================== -->
-  <!-- Rendered from Nexus.registerTab() by nexus.js; these buttons are the pre-script fallback. -->
+  <!--
+    The pre-script fallback nav.
+
+    `nexus.js` replaces every button here from the `registerTab()` registry as soon as it runs,
+    and *that* render is the one that carries roles, badges and the roving tabindex. This
+    markup only ever shows in the gap before scripts execute, or for a reader with JavaScript
+    off — but it had drifted three tabs behind the registry (no Lead, no Me, no Quests, still
+    listing Chaos Lab) and it marked War Room active when Lead sorts first. It also carried
+    none of the ARIA the live nav has, so a screen reader that read the page early got five
+    unlabelled buttons.
+
+    Kept in step with `registerTab()` calls by `scripts/checkShell.mjs`. Order and ids must
+    match the registry; roles cannot, because there is no session yet — so this lists only the
+    tabs every account can see, and the live render adds the rest.
+  -->
   <div id="announce-banner" role="status" aria-live="polite" hidden></div>
 
   <nav class="tabs-nav" aria-label="Sections">
     <div class="inner" role="tablist">
-      <button class="pb tab-btn active" data-action="tab" data-tab="tab-shifts">War Room</button>
-      <button class="pb tab-btn" data-action="tab" data-tab="tab-campus">Campus</button>
-      <button class="pb tab-btn" data-action="tab" data-tab="tab-pokeshift">Turf Wars</button>
-      <button class="pb tab-btn" data-action="tab" data-tab="tab-qr">Trainer</button>
-      <button class="pb tab-btn" data-action="tab" data-tab="tab-leaderboard">Ranks</button>
+      <button class="pb tab-btn active" id="tabbtn-tab-me" role="tab" aria-selected="true" aria-controls="tab-me" tabindex="0" data-action="tab" data-tab="tab-me">Me</button>
+      <button class="pb tab-btn" id="tabbtn-tab-quests" role="tab" aria-selected="false" aria-controls="tab-quests" tabindex="-1" data-action="tab" data-tab="tab-quests">Quests</button>
+      <button class="pb tab-btn" id="tabbtn-tab-campus" role="tab" aria-selected="false" aria-controls="tab-campus" tabindex="-1" data-action="tab" data-tab="tab-campus">Campus</button>
+      <button class="pb tab-btn" id="tabbtn-tab-pokeshift" role="tab" aria-selected="false" aria-controls="tab-pokeshift" tabindex="-1" data-action="tab" data-tab="tab-pokeshift">Turf Wars</button>
+      <button class="pb tab-btn" id="tabbtn-tab-leaderboard" role="tab" aria-selected="false" aria-controls="tab-leaderboard" tabindex="-1" data-action="tab" data-tab="tab-leaderboard">Ranks</button>
     </div>
   </nav>
 
@@ -63,7 +80,13 @@
               <h2>Active quests</h2>
               <p>Fifty volunteers can hit one slot at once — the lock still hands out exactly capacity. Pick a quest, earn karma, hold the campus.</p>
             </div>
-            <div class="actions"><span class="sticker rare" id="venue-count">— venues</span></div>
+            <div class="actions">
+              <span class="sticker rare" id="venue-count">— venues</span>
+              <!-- Was in the global header, where every role saw it and a hacker clicking it
+                   got a 403 from an endpoint they had no business calling. The War Room is
+                   `roles: STAFF`, which is who the schedule import is for. -->
+              <button id="adonix-sync-btn" class="pb pb-patina pb-sm" data-action="adonix-sync" title="Re-import the official schedule from Adonix">Sync Adonix</button>
+            </div>
           </div>
 
           <div id="shifts-grid" class="shifts-grid"></div>
@@ -92,8 +115,6 @@
                 </div>
               </div>
             </div>
-            <!-- coverage-arc kept for the legacy ring writer -->
-            <svg width="0" height="0" aria-hidden="true" style="position:absolute"><circle id="coverage-arc" r="42" cx="48" cy="48"/></svg>
           </div>
 
           <div class="px">
@@ -272,18 +293,12 @@
 
           <div class="px" id="trainer-card"></div>
 
+          <!-- The check-in token lives in the Me tab: it is minted against the signed-in
+               account, so it belongs beside that account and not in a staff-only tab. -->
           <div class="px">
-            <div class="panel-head"><div><div class="eyebrow">Check-in</div><h3>Rotating token</h3></div><span class="sticker flat">HMAC-SHA256</span></div>
-            <div class="qr-container">
-              <div class="qr-box"><div id="qr-local">Token renders here.</div></div>
-              <div>
-                <div class="countdown-bar"><div id="countdown-fill" class="countdown-fill" style="width: 100%;"></div></div>
-                <div class="qr-meta"><span>Replay window sealed</span><span id="countdown-text">Expires in 30s</span></div>
-                <div class="btn-row" style="margin: 14px 0;">
-                </div>
-                <div class="log-terminal" id="qr-terminal" style="max-height: 150px;">Select a shift to generate dynamic tokens.</div>
-              </div>
-            </div>
+            <div class="panel-head"><div><div class="eyebrow">Check-in</div><h3>Your rotating token</h3></div><span class="sticker flat">HMAC-SHA256</span></div>
+            <p class="muted">Your 30-second check-in code is in <b>Me → Check in</b>, minted against your own account. This tab is the desk's side of the same exchange.</p>
+            <div class="btn-row" style="margin-top:12px"><button class="pb pb-sm" type="button" data-action="tab" data-tab="tab-me">Open Me</button></div>
           </div>
         </div>
 

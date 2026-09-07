@@ -606,9 +606,15 @@
         break;
       }
       case 'bag':
+        // The bag is the power-up grid in this same tab's rail, not the sticker book.
+        //
+        // This used to send you to `tab-qr` (Trainer) and scroll to `#sticker-book`, which is
+        // wrong twice: the sticker book is a trophy shelf, not an inventory, and `tab-qr` is
+        // `roles: STAFF`. For a HACKER — the role that plays this the most — `showTab` refused
+        // the switch, logged a warning, and the encounter closed onto the page they were
+        // already looking at. BAG did nothing at all, with no way to tell why.
         closeEncounter();
-        if (window.Nexus) window.Nexus.showTab('tab-qr'); else if (typeof switchTab === 'function') switchTab('tab-qr');
-        setTimeout(() => $('sticker-book')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+        setTimeout(() => $('inventory-list-container')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
         break;
       case 'map':
         closeEncounter();

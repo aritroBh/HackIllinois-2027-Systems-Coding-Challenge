@@ -156,6 +156,70 @@ if (!fs.existsSync(lockPath)) {
   }
 }
 
+/*
+ * The pre-script fallback nav against the tab registry.
+ *
+ * `nexus.js` replaces the nav from `registerTab()` as soon as it runs, so the buttons in
+ * index.html only ever show in the gap before scripts execute or with JavaScript off. That
+ * makes drift invisible in every normal load, and it drifted: three tabs behind the registry,
+ * still listing a tab that had been removed, and marking the wrong one active.
+ *
+ * The registry is the source of truth, so this checks the direction that matters — every
+ * fallback button must name a tab that is actually registered, and every tab open to *every*
+ * role must have a fallback button. Role-gated tabs are deliberately absent: there is no
+ * session yet when this markup renders.
+ */
+{
+  const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
+  const navBlock = html.match(/<div class="inner" role="tablist">([\s\S]*?)<\/div>/);
+  if (!navBlock) {
+    problems.push('index.html has no role="tablist" fallback nav');
+  } else {
+    const fallback = [...navBlock[1].matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
+
+    // Every registerTab() call across the front end, with its roles literal if it has one.
+    const registered = new Map();
+    for (const rel of ['public/app.js', 'public/views/me.js', 'public/views/lead.js',
+                       'public/views/sos.js', 'public/views/quests.js']) {
+      const src = fs.readFileSync(path.join(root, rel), 'utf8');
+      for (const m of src.matchAll(/registerTab\(\{([\s\S]{0,400}?)\}\)/g)) {
+        const body = m[1];
+        // `id:` is a string literal in app.js and a module constant in the view files.
+        let id = body.match(/id:\s*'([^']+)'/)?.[1];
+        if (!id) {
+          const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
+          if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
+        }
+        if (!id) continue;
+        const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? 'EVERYONE';
+        registered.set(id, roles);
+      }
+    }
+    if (registered.size < 5) problems.push(`checkShell could only find ${registered.size} registerTab() calls; the scan is broken`);
+
+    for (const id of fallback) {
+      if (!registered.has(id)) {
+        problems.push(`index.html's fallback nav lists "${id}", which no registerTab() call declares`);
+      }
+    }
+    for (const [id, roles] of registered) {
+      if (roles === 'EVERYONE' && !fallback.includes(id)) {
+        problems.push(`tab "${id}" is open to every role but has no button in index.html's fallback nav`);
+      }
+    }
+    // The fallback marks one tab active; it must be one it actually lists.
+    const active = navBlock[1].match(/class="pb tab-btn active"[^>]*data-tab="([^"]+)"/)?.[1];
+    if (!active) problems.push('index.html\'s fallback nav marks no tab active');
+    else if (!fallback.includes(active)) problems.push(`the fallback nav marks "${active}" active but does not list it`);
+    // ...and carry the ARIA the live render carries, since this is what an early screen
+    // reader gets.
+    for (const attr of ['role="tab"', 'aria-selected', 'aria-controls']) {
+      const n = (navBlock[1].match(new RegExp(attr.replace('=', '='), 'g')) || []).length;
+      if (n < fallback.length) problems.push(`only ${n} of ${fallback.length} fallback nav buttons carry ${attr}`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error('checkShell: FAIL');
   for (const p of problems) console.error(`  - ${p}`);

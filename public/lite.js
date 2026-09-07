@@ -42,7 +42,7 @@
   // evaluated, and is equally safe if app.js never loaded.
   const colorOf = (f) => (typeof factionOf === 'function' ? factionOf(f)?.color : null) || FALLBACK_COLOR[f] || FALLBACK_COLOR.NEUTRAL;
 
-  const state = { active: null, reason: '', panel: null, canvas: null, note: null, timer: null, sig: '' };
+  const state = { active: null, reason: '', panel: null, canvas: null, note: null, timer: null, sig: '', fix: null, geoWatch: null };
 
   const readChoice = () => { try { const v = localStorage.getItem(KEY); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } };
   const writeChoice = (on) => { try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* private mode */ } };
@@ -91,6 +91,91 @@
       if (on) mount(); else unmount();
     });
   }
+
+  /* ------------------------------------------------------------------ *
+   * Where you are
+   * ------------------------------------------------------------------ *
+   *
+   * `game.js` owns the GPS watch in 3D mode, but it gates starting one on
+   * `window.campus.setPlayerLatLng` existing — so in lite mode there was no watch, no player
+   * marker, and no distance to anything. The HackStop "Spin" buttons read those distances, so
+   * a lite-mode user could see the stops and never reach one.
+   *
+   * This is a second watch rather than a refactor of the first because the two modes want
+   * different things: `game.js` drives a camera and a sprite, this drives two numbers. They
+   * never run at once — `mount()` starts this one, `unmount()` stops it — and both hand the
+   * fix to the same presence publisher, which is the only place that decides whether a
+   * position is shared at all.
+   */
+
+  const PROX_M = 75;  // matches game.js's PROX_RADIUS: the radius a HackStop can be spun from.
+
+  /** Metres between two WGS84 points. Equirectangular; exact enough over one campus. */
+  function metresBetween(a, b) {
+    const R = 6371000, rad = Math.PI / 180;
+    const x = (b.lng - a.lng) * rad * Math.cos(((a.lat + b.lat) / 2) * rad);
+    const y = (b.lat - a.lat) * rad;
+    return Math.sqrt(x * x + y * y) * R;
+  }
+
+  function startWatch() {
+    if (state.geoWatch != null || !navigator.geolocation) return;
+    state.geoWatch = navigator.geolocation.watchPosition(
+      (pos) => {
+        state.fix = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        // The presence service decides whether to publish; the opt-in, the cadence and the
+        // accuracy gate all live there, and none of them are this file's business.
+        N.presence?.publish?.(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? 999, pos.coords.heading ?? undefined);
+        paintNearest();
+        draw(true);
+      },
+      // No toast: nothing here asked for a location, so a refusal is an answer, not an error.
+      () => { state.fix = null; paintNearest(); },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+  }
+
+  function stopWatch() {
+    if (state.geoWatch != null) navigator.geolocation?.clearWatch(state.geoWatch);
+    state.geoWatch = null;
+  }
+
+  /**
+   * Write the nearest-HackStop readout.
+   *
+   * Into `#hud-nearest`, the same box the 3D HUD uses, because it is the same fact in the same
+   * place — `body.lite` keeps that corner visible for exactly this. `game.js` only writes it
+   * from the renderer's frame callback, which is not running, so in lite mode this file is the
+   * only writer and there is no race between them.
+   */
+  function paintNearest() {
+    const near = document.getElementById('hud-nearest');
+    if (!near) return;
+    const label = '<div class="hud-label">NEAREST HACKSTOP</div>';
+    if (!state.fix) {
+      near.innerHTML = `${label}<div class="near-dist"><span>${navigator.geolocation ? 'Waiting for a location fix.' : 'No geolocation on this device.'}</span></div>`;
+      return;
+    }
+    const stops = (window.hackStopsCache || []).filter((s) => Number.isFinite(s.latitude));
+    if (!stops.length) {
+      near.innerHTML = `${label}<div class="near-dist"><span>No beacons deployed yet.</span></div>`;
+      return;
+    }
+    let best = null;
+    for (const s of stops) {
+      const d = metresBetween(state.fix, { lat: s.latitude, lng: s.longitude });
+      if (!best || d < best.d) best = { d, name: s.name || 'HackStop' };
+    }
+    const d = Math.round(best.d);
+    const segs = 8, on = Math.max(0, Math.min(segs, Math.round(segs * (1 - Math.min(1, d / 600)))));
+    const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
+    const hint = d <= PROX_M ? 'in range — spin it!' : `walk ${d - PROX_M} m closer to spin`;
+    near.innerHTML = `${label}<div class="near-name">${esc(best.name)}</div>`
+      + `<div class="near-dist"><b>${d} m</b><span>${hint}</span></div><div class="segbar">${bar}</div>`;
+  }
+
+  /** The names come from the API, and this writes into innerHTML. */
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /* ------------------------------------------------------------------ *
    * The flat map
@@ -158,7 +243,24 @@
       return;
     }
     ctx.textAlign = 'left';
-    for (const p of project(list, w, h)) {
+    // The player is projected by the same call as everything else, so it lands in the same
+    // frame. Appended here rather than added to `points()` so it stays out of the change
+    // signature: that signature exists to skip repaints when the campus has not changed, and
+    // a position that moves every second would defeat it. Movement repaints because the watch
+    // callback calls `draw(true)`.
+    const withMe = state.fix
+      ? project([...list, { lat: state.fix.lat, lng: state.fix.lng, r: 4, color: '#FF5F05', name: null, me: true }], w, h)
+      : project(list, w, h);
+    for (const p of withMe) {
+      if (p.me) {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.px - p.r, p.py - p.r, p.r * 2, p.r * 2);
+        ctx.strokeStyle = '#FFF3E0'; ctx.lineWidth = 2;
+        ctx.strokeRect(p.px - p.r - 2.5, p.py - p.r - 2.5, p.r * 2 + 5, p.r * 2 + 5);
+        ctx.fillStyle = '#FFF3E0';
+        ctx.fillText('YOU', p.px + p.r + 5, p.py + 3);
+        continue;
+      }
       ctx.fillStyle = p.color;
       ctx.fillRect(p.px - p.r, p.py - p.r, p.r * 2, p.r * 2);
       if (!p.name) continue;
@@ -214,12 +316,15 @@
 
     state.note.textContent = `The 3D campus is off because ${state.reason}. Every other panel is live.`;
     setDisplay(state.panel, 'grid');
+    startWatch();
+    paintNearest();
     draw(true);
-    if (!state.timer) state.timer = setInterval(() => draw(), REDRAW_MS);
+    if (!state.timer) state.timer = setInterval(() => { draw(); paintNearest(); }, REDRAW_MS);
   }
 
   function unmount() {
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    stopWatch();
     setDisplay(state.panel, 'none');
     setDisplay(document.getElementById('campus-3d-canvas'), 'block');
   }

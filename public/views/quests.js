@@ -216,7 +216,7 @@
   function boardHtml() {
     if (!state.quests.length) {
       return `<div class="panel-head"><div><div class="eyebrow">Quest board</div><h3>Nothing on the board</h3></div></div>
-        <div class="empty-state">This pack ships no quests, or the board has not loaded yet.</div>`;
+        <div class="empty-state">No quests on this board yet. New ones appear here the moment an organiser posts them.</div>`;
     }
     // Open first, and inside that the shortest window first: an hourly quest is the one
     // that is about to expire, so it is the one worth reading first.

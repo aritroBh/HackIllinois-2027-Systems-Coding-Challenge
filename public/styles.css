@@ -195,7 +195,7 @@ img.pxi, canvas.pxi { image-rendering: pixelated; image-rendering: crisp-edges; 
 .pb:hover, .btn:hover { filter: brightness(1.08); }
 .pb:active, .btn:active, .pb.pressed, .btn.pressed { transform: translateY(3px); box-shadow: 0 1px 0 0 var(--base), 0 1px 0 2px var(--ink); }
 .pb:focus-visible, .btn:focus-visible, .tab-btn:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
-.pb:disabled, .btn:disabled { --face: var(--edge); --base: var(--inset); --txt: var(--mute); cursor: not-allowed; filter: none; }
+.pb:disabled, .btn:disabled { --face: var(--edge); --base: var(--inset); --txt: var(--cream-dim); cursor: not-allowed; filter: none; }
 .pb-ghost, .btn-ghost, .btn-secondary { --face: var(--panel); --base: var(--inset); --txt: var(--cream-dim); }
 .pb-danger, .btn-danger { --face: var(--pink); --base: #A31E58; --txt: var(--ink); }
 .pb-patina, .btn-faction { --face: var(--patina-lt); --base: var(--patina); --txt: var(--ink); }
@@ -260,7 +260,7 @@ select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 /* ---------------- Chrome ---------------- */
 
 header { position: sticky; top: 0; z-index: 60; background: var(--ink); border-bottom: 2px solid var(--ink); }
-.hud-container { max-width: var(--shell); margin: 0 auto; padding: 0 28px; height: 64px; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.hud-container { max-width: var(--shell); margin: 0 auto; padding: 0 28px; min-height: 64px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 20px; }
 .logo-group { display: flex; align-items: center; gap: 14px; }
 .logo-mark { width: 48px; height: 48px; display: grid; place-items: center; }
 .wordmark h1 { font-family: var(--f-head); font-size: 20px; color: var(--cream); }
@@ -291,7 +291,7 @@ main { position: relative; z-index: 1; max-width: var(--shell); margin: 14px aut
 
 /* ---------------- Quest board (shifts) ---------------- */
 
-.shifts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 18px; }
+.shifts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
 .quest { display: flex; gap: 12px; align-items: flex-start; padding: 14px; }
 .quest .qicon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; background: var(--inset); border: 2px solid var(--ink); }
 .quest .qbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -339,7 +339,7 @@ main { position: relative; z-index: 1; max-width: var(--shell); margin: 14px aut
 .podium, .ranks { display: flex; flex-direction: column; gap: 6px; }
 .rank-row { display: grid; grid-template-columns: 30px 40px minmax(0,1fr) 120px 70px; gap: 10px; align-items: center; padding: 6px 4px; }
 .rank-row .rk { font-family: var(--f-hud); font-size: 11px; color: var(--mute); }
-.rank-row.is-top .rk { color: var(--orange); }
+.rank-row.is-top .rk { color: var(--harvest); }
 .rank-row .nm { font-family: var(--f-head); font-size: 15px; color: var(--cream); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rank-row .tier { font-family: var(--f-hud); font-size: 11px; color: var(--mute); text-transform: uppercase; }
 .rank-row .kp { font-family: var(--f-num); font-size: 22px; line-height: 0.9; text-align: right; color: var(--cream); }
@@ -396,7 +396,7 @@ tr.is-top .rank-pill { background: var(--orange); color: var(--ink); }
 .ctrl-legend { display: flex; gap: 10px; margin-top: 4px; font-family: var(--f-hud); font-size: 10px; color: var(--mute); }
 .ctrl-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: middle; }
 .compass { font-family: var(--f-hud); font-size: 10px; color: var(--cream-dim); letter-spacing: 2px; background: rgba(8,21,43,0.86); padding: 6px 12px; border: 2px solid var(--ink); }
-.compass b { color: var(--orange); }
+.compass b { color: var(--harvest); }
 #hud-minimap { display: block; width: 160px; height: 120px; image-rendering: pixelated; border: 2px solid var(--ink); background: var(--inset); }
 #hud-nearest { min-width: 240px; }
 #hud-nearest .near-name { font-family: var(--f-head); font-size: 15px; color: var(--cream); margin: 2px 0; }
@@ -493,7 +493,7 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .cmd { background: none; border: 0; text-align: left; font-family: var(--f-body); font-size: 22px; color: var(--cream); padding: 6px 12px 6px 28px; position: relative; cursor: pointer; }
 .cmd small { font-size: 16px; color: var(--mute); }
 .cmd:hover, .cmd:focus-visible, .cmd.first { background: var(--edge); outline: 0; }
-.cmd:hover::before, .cmd:focus-visible::before, .cmd.first::before { content: '▶'; position: absolute; left: 8px; color: var(--orange); }
+.cmd:hover::before, .cmd:focus-visible::before, .cmd.first::before { content: '▶'; position: absolute; left: 8px; color: var(--harvest); }
 .cmd:disabled { color: var(--mute); cursor: not-allowed; }
 .cmd:disabled::before { content: none; }
 .jrpg.msg .cursor { position: absolute; right: 16px; bottom: 10px; color: var(--harvest); animation: blink 800ms steps(2) infinite; }
@@ -563,7 +563,7 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .mon-card .mc-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-family: var(--f-hud); font-size: 10px; }
 .mon-card .mc-foot .pb { margin: 0; }
 .mon-facts { list-style: none; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; font-size: 15px; color: #3A2A1A; }
-.mon-facts li::before { content: '■ '; color: var(--orange); }
+.mon-facts li::before { content: '■ '; color: var(--harvest); }
 .mon-meta { display: flex; gap: 8px; align-items: center; font-family: var(--f-hud); font-size: 10px; color: #5A4634; text-transform: uppercase; margin-bottom: 6px; }
 .mon-meta .f { color: var(--c); } .mon-meta .dot { width: 3px; height: 3px; background: #5A4634; }
 
@@ -604,6 +604,9 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 
 @media (max-width: 1024px) {
   .split, .trainer-grid, .campus-row { grid-template-columns: minmax(0, 1fr); }
+  /* The three event numerals are ambient, not controls: drop them before the header wraps. */
+  .hud-metrics .metric-item, .hud-metrics .rule-v { display: none; }
+  .hud-metrics { gap: 10px; }
   .faction-strip { grid-template-columns: repeat(2, 1fr); }
   .enc-stage { grid-template-columns: 1fr; grid-template-rows: auto; }
   .enc-stage > * { grid-column: 1 !important; grid-row: auto !important; }
@@ -767,7 +770,7 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
   font-family: var(--f-hud); font-size: 10px; line-height: 15px; letter-spacing: 0.5px;
   text-transform: uppercase; color: var(--cream-dim);
 }
-.pxsel-mark { flex: none; width: 10px; color: var(--orange); }
+.pxsel-mark { flex: none; width: 10px; color: var(--harvest); }
 /* Wraps rather than truncates. The closed control can ellipsis a long shift name because you
    have already chosen it; the list is where you are deciding, and a venue and a time cut off
    mid-word is the moment this control fails at its one job. */
@@ -777,7 +780,7 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .pxsel-opt.is-active { background: var(--orange); color: var(--ink); }
 .pxsel-opt.is-active .pxsel-mark { color: var(--ink); }
 .pxsel-opt[aria-disabled="true"] { color: var(--mute); cursor: not-allowed; }
-.pxsel-opt[aria-disabled="true"].is-active { background: var(--edge); color: var(--mute); }
+.pxsel-opt[aria-disabled="true"].is-active { background: var(--edge); color: var(--cream-dim); }
 
 @media (prefers-reduced-motion: reduce) {
   .pxsel-caret { transition: none; }
@@ -842,3 +845,11 @@ body.lite .world-labels { display: none; }
 /* The 3D HUD is hidden rather than merely covered: half of it (FPS, building count, the WASD
    hint, the retro/cinematic toggles) describes a renderer that is not running. */
 body.lite .viewport-hud { display: none; }
+/* ...except the bottom-right corner, which is not renderer telemetry. `#hud-nearest` is the
+   nearest-HackStop readout (populated by `lite.js` itself down here, since `game.js` only
+   writes it from the 3D frame callback) and `#nearby-list` is the presence roster, which
+   never needed the renderer at all. Blanket-hiding the HUD took both away, leaving a
+   lite-mode user with a map of unlabelled dots and no idea who or what was near them.
+   z-index 7 clears the flat map, whose own 6 is set inline in `lite.js`. */
+body.lite .viewport-hud.br { display: flex; z-index: 7; }
+body.lite #hud-hint { display: none; }   /* "WASD to walk" describes the renderer, not this. */

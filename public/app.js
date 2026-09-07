@@ -24,10 +24,6 @@ let volunteersCache = [];
  * cache, so it is not only the bag that would be wrong.
  */
 let handoverGeneration = 0;
-let currentQrToken = null;
-let currentQrVolunteerId = null;
-let currentQrShiftId = null;
-let qrCountdownTimer = null;
 // The session user's faction when signed in. The picker overrides it in this
 // tab only: no endpoint writes an account's faction, so a reload or the
 // `session` event below puts the server's value back.
@@ -346,7 +342,6 @@ function writeTerminal(id, msg) {
 
 const logChaosTerminal = (msg) => { writeTerminal('chaos-terminal', msg); writeTerminal('stream-terminal', msg); };
 const logSosTerminal = (msg) => writeTerminal('sos-terminal', msg);
-const logQrTerminal = (msg) => writeTerminal('qr-terminal', msg);
 
 /* ------------------------------------------------------------------ *
  * Navigation
@@ -372,7 +367,6 @@ Nexus.registerTab({
 });
 Nexus.registerTab({
   id: 'tab-qr', label: 'Trainer', order: 40, roles: STAFF,
-  onShow: () => { if (shiftsCache.length > 0 && !currentQrShiftId) setupDefaultQr(); },
 });
 /*
  * The Chaos Lab is behind `?chaos`, and role-gating was never enough for it.
@@ -446,8 +440,6 @@ const CLICK_ACTIONS = {
   'chaos-bomb': () => runConcurrencyBomb(),
   'chaos-drop': () => simulateDropCascade(),
   'chaos-cycle': () => resolveCyclicTrade(),
-  'qr-scan': () => simulateDeskScan(),
-  'qr-replay': () => simulateReplayAttack(),
   'loot-close': () => closeLootModal(),
   'campus-reset': () => campusResetView(),
   'campus-cinema': () => toggleCinema(),
@@ -781,7 +773,7 @@ function renderGymsList() {
   renderFactionStrip();
 
   if (gymsCache.length === 0) {
-    container.innerHTML = `<div class="empty-state">${icon('flag')}<div>No territory data. Seed the database to start the turf war.</div></div>`;
+    container.innerHTML = `<div class="empty-state">${icon('flag')}<div>No strongholds on the board yet. Organisers add them from the War Room — check back once the event opens.</div></div>`;
     return;
   }
 
@@ -1252,164 +1244,26 @@ async function resolveCyclicTrade() {
  * Rotating check-in token
  * ------------------------------------------------------------------ */
 
-/**
- * Picks a volunteer/shift pair that can actually mint a token.
+/*
+ * The Trainer tab's attendance-token panel used to live here: `setupDefaultQr`,
+ * `refreshQrToken`, `clearQrToken`, `startQrCountdown`, `simulateDeskScan` and
+ * `simulateReplayAttack`, plus four module variables holding a live HMAC credential.
  *
- * Pairing volunteersCache[0] with shiftsCache[0] blindly meant the panel
- * usually opened on "volunteer does not hold a confirmed spot for this shift",
- * because the first volunteer is rarely registered for the first shift. The
- * server only issues tokens against a CONFIRMED registration, so ask it for one.
+ * It is gone because `views/me.js` does the same job better and for everybody. That panel
+ * mints against the *session's own* account — the server derives the volunteer from the
+ * session either way, so this one's "list every CONFIRMED registration and hope one is mine"
+ * lookup was working around a problem it had invented — draws a real QR, runs its own
+ * countdown, clears on handover, and sits in a tab every role can open. This one was behind
+ * `roles: STAFF`, so the volunteers who actually check in could not reach it.
+ *
+ * Two panels minting the same credential is also two places to get the handover wipe right.
+ * Round eight fixed `me.js`; this copy was missed and had to be fixed separately in round
+ * fourteen. There is one now, and `me.js` clears it on `session:handover`.
+ *
+ * `simulateDeskScan` and `simulateReplayAttack` are not replaced. Both performed a real
+ * `POST /attendance/verify` — an actual check-in, and an actual replay of a live credential
+ * — while captioned as a simulation.
  */
-async function setupDefaultQr() {
-  if (volunteersCache.length === 0 || shiftsCache.length === 0) return;
-
-  // Whose lookup this is. See `handoverGeneration`.
-  const mineGen = handoverGeneration;
-  try {
-    const json = await Nexus.api('/api/v1/registrations?status=CONFIRMED', { lenient: true });
-    if (mineGen !== handoverGeneration) return; // the account this was for has left the device
-    // The attendance token is minted for the SESSION's own registration: the server derives
-    // the volunteer from the session, so picking anyone else's row just fails the
-    // "does not hold a confirmed spot" check. Prefer mine, fall back to the first row for
-    // the anonymous legacy demo.
-    const me = window.Nexus?.session?.user?.id;
-    const rows = (json.success && Array.isArray(json.data) ? json.data : []).filter((r) => r.volunteerId && r.shiftId);
-    const mine = me ? rows.find((r) => String(r.volunteerId._id ?? r.volunteerId) === String(me)) : null;
-    const reg = mine || (me ? null : rows[0]);
-    if (reg) {
-      currentQrVolunteerId = reg.volunteerId._id ?? reg.volunteerId;
-      currentQrShiftId = reg.shiftId._id ?? reg.shiftId;
-      await refreshQrToken(mineGen);
-      return;
-    }
-  } catch (err) {
-    logQrTerminal(`[ERROR] Could not look up a confirmed registration: ${err.message}`);
-  }
-
-  logQrTerminal('No confirmed registration yet — claim a shift on Shift Radar, then come back.');
-}
-
-/**
- * `mineGen` is the handover generation this refresh belongs to.
- *
- * `clearQrToken()` closes the *idle* window — the token sitting on screen when the device
- * changes hands. This closes the in-flight one, which is the dangerous half: the countdown
- * fires a refresh, the handover lands while the POST is in flight, and the response then
- * writes the departed account's live HMAC back into `currentQrToken` and into `#qr-local`
- * and restarts the countdown. The new user sits looking at somebody else's credential with
- * the clock running, and a desk scanning it inside the window checks the departed volunteer
- * in and pays them — the exact outcome `clearQrToken()` was written to prevent.
- */
-async function refreshQrToken(mineGen = handoverGeneration) {
-  if (!currentQrVolunteerId || !currentQrShiftId) return;
-  try {
-    const json = await Nexus.api('/api/v1/attendance/token', { method: 'POST', body: { volunteerId: currentQrVolunteerId, shiftId: currentQrShiftId }, lenient: true });
-    if (mineGen !== handoverGeneration) return; // the account this token belongs to has left
-
-    if (json.success) {
-      currentQrToken = json.data.token;
-      // Local-only render: never ship the live HMAC token to a third-party QR API, which is
-      // what every hosted QR image service would require. `qr.js` encodes it in the page.
-      //
-      // This used to print the token as text, which is why the panel that says "show this at
-      // the desk" could not be shown to a desk: no scanner reads base64.
-      const qrBox = document.getElementById('qr-local');
-      // If qr.js did not load, show the token rather than an empty box under a running
-      // countdown: a desk can type a token, it cannot type a blank square.
-      if (window.NexusQR) window.NexusQR.render(qrBox, currentQrToken);
-      else if (qrBox) { qrBox.textContent = currentQrToken; qrBox.classList.add('qr-fallback'); }
-      startQrCountdown(json.data.expiresInSeconds);
-      logQrTerminal(`Token generated (slice ${json.data.timeSlice}) — ${currentQrToken.substring(0, 24)}…`);
-    } else {
-      logQrTerminal(`[ERROR] Token generation failed: ${json.message}`);
-    }
-  } catch (err) {
-    logQrTerminal(`[ERROR] ${err.message}`);
-  }
-}
-
-/**
- * Forget the Trainer tab's attendance token, and take it off the screen.
- *
- * The token is an HMAC over (volunteer, shift, time slice) and a desk scanner accepts it: it
- * checks that volunteer in and pays them. It lived in three module variables and in the text
- * of `#qr-local`, and the handover cleared none of them — so on a shared laptop the next
- * person sat down looking at the previous person's live credential, with the countdown still
- * running. Anyone at the desk within the thirty-second window could scan it and check the
- * departed volunteer in.
- *
- * `me.js` grew a `clearToken()` for exactly this in round eight; the older Trainer path has
- * its own copy of the same credential and was missed. Clearing the DOM text matters as much
- * as clearing the variables: the refresh under the new session fails the "does not hold a
- * confirmed spot" check and leaves whatever was there before untouched.
- */
-function clearQrToken() {
-  if (qrCountdownTimer) { clearInterval(qrCountdownTimer); qrCountdownTimer = null; }
-  currentQrToken = null;
-  currentQrVolunteerId = null;
-  currentQrShiftId = null;
-  window.NexusQR?.render(document.getElementById('qr-local'), '');
-  const text = document.getElementById('countdown-text');
-  if (text) text.innerText = 'No live token';
-  const fill = document.getElementById('countdown-fill');
-  if (fill) fill.style.width = '0%';
-}
-
-function startQrCountdown(seconds) {
-  if (qrCountdownTimer) clearInterval(qrCountdownTimer);
-  let remaining = seconds;
-  const fill = document.getElementById('countdown-fill');
-  const text = document.getElementById('countdown-text');
-
-  qrCountdownTimer = setInterval(() => {
-    remaining--;
-    if (text) text.innerText = `Expires in ${remaining}s`;
-    if (fill) {
-      fill.style.width = `${Math.max(0, (remaining / 30) * 100)}%`;
-      fill.classList.toggle('low', remaining <= 8);
-    }
-    if (remaining <= 0) {
-      clearInterval(qrCountdownTimer);
-      refreshQrToken();
-    }
-  }, 1000);
-}
-
-// The demo desk sits at the Siebel atrium; coordinates are mandatory server-side.
-const DESK_COORDS = { latitude: 40.113812, longitude: -88.224937 };
-
-async function simulateDeskScan() {
-  if (!currentQrToken) { logQrTerminal('No active token to scan.'); return; }
-  logQrTerminal('Scanning token at the check-in desk…');
-  try {
-    const json = await Nexus.api('/api/v1/attendance/verify', { method: 'POST', body: { token: currentQrToken, coordinates: DESK_COORDS }, lenient: true });
-    if (json.success) {
-      logQrTerminal('[VERIFIED] Check-in accepted — volunteer status CHECKED_IN.');
-      window.soundEngine?.playSonarPing();
-      window.fx?.burstAt(document.querySelector('.qr-box'), '#34f5a0', 34);
-      fetchStats();
-    } else {
-      logQrTerminal(`[ERROR] Verification rejected: ${json.message}`);
-    }
-  } catch (err) {
-    logQrTerminal(`[ERROR] ${err.message}`);
-  }
-}
-
-async function simulateReplayAttack() {
-  if (!currentQrToken) return;
-  logQrTerminal('Re-submitting an already-scanned token…');
-  try {
-    const json = await Nexus.api('/api/v1/attendance/verify', { method: 'POST', body: { token: currentQrToken, coordinates: DESK_COORDS }, lenient: true });
-    if (!json.success && json.error === 'REPLAY_ATTACK_DETECTED') {
-      logQrTerminal('[VERIFIED] Replay detected and rejected.');
-    } else {
-      logQrTerminal(`Outcome: ${JSON.stringify(json)}`);
-    }
-  } catch (err) {
-    logQrTerminal(`[ERROR] ${err.message}`);
-  }
-}
 
 /* ------------------------------------------------------------------ *
  * Actions
@@ -2297,7 +2151,6 @@ async function init() {
     userInventoryCache = [];
     currentVolunteerFaction = 'NEUTRAL';
     renderUserInventory();
-    clearQrToken();
     // And load the new account's own things.
     //
     // `setUser` emits `session` and then `session:handover` synchronously, so the sign-in

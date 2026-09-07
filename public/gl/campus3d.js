@@ -711,6 +711,10 @@ export function createCampusRenderer(canvas, opts = {}) {
    * whose pack carries no recipe.
    */
   const crownMeshes = new Map();
+  // Must equal `MAP_NEUTRAL` in app.js, which explains the choice: the UI's unclaimed slate
+  // (#7c8daa) blows out to white under this renderer's night lighting, so the map uses a
+  // deeper one. Named here because it was written out as a literal in three places.
+  const NEUTRAL_COLOUR = '#5d7096';
   let factionColours = {};
   // `detail` rides along with vscale so a tile baked on the low tier is genuinely smaller in
   // memory rather than merely drawn with fewer of its ranges. `applyLevel` bumps it and drops
@@ -1919,7 +1923,7 @@ export function createCampusRenderer(canvas, opts = {}) {
     if (playerLayer && playerLayer.count()) {
       const rx0 = view[0], rz0 = view[8];
       const rl0 = Math.hypot(rx0, rz0) || 1;
-      playerLayer.update({ x: cam.cx, z: cam.cz }, (f) => factionColours[f] || '#5d7096', now, t);
+      playerLayer.update({ x: cam.cx, z: cam.cz }, (f) => factionColours[f] || NEUTRAL_COLOUR, now, t);
       playerLayer.draw(proj, view, new Float32Array([rx0 / rl0, 0, rz0 / rl0]));
       progScene.use();
     }
@@ -2156,8 +2160,8 @@ export function createCampusRenderer(canvas, opts = {}) {
           auraR: Math.max(spanX, spanZ) * 0.62 + 1.2,
           ry: spanZ > spanX ? Math.PI / 2 : 0,
           phase: i * 1.31,
-          colour: hexRGB('#5d7096'),
-          deep: hexRGB('#5d7096').map((v) => v * 0.16),
+          colour: hexRGB(NEUTRAL_COLOUR),
+          deep: hexRGB(NEUTRAL_COLOUR).map((v) => v * 0.16),
           faction: 'NEUTRAL',
           cp: 0,
         };

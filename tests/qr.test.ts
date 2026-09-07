@@ -36,22 +36,35 @@ function loadEncoder(): { encode: (t: string, o?: { mask?: number }) => number[]
  * finder patterns from whatever the symbol is sitting on, and this is one of the two ways a
  * technically-correct symbol still fails to scan.
  */
-function rasterise(matrix: number[][], scale = 6, quiet = 4): { data: Uint8ClampedArray; size: number } {
+function rasterise(
+  matrix: number[][],
+  scale = 6,
+  quiet = 4,
+  dark: [number, number, number] = [0, 0, 0],
+  light: [number, number, number] = [255, 255, 255],
+): { data: Uint8ClampedArray; size: number } {
   const size = (matrix.length + quiet * 2) * scale;
-  const data = new Uint8ClampedArray(size * size * 4).fill(255);
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let i = 0; i < size * size; i += 1) {
+    data[i * 4] = light[0]; data[i * 4 + 1] = light[1]; data[i * 4 + 2] = light[2]; data[i * 4 + 3] = 255;
+  }
   for (let r = 0; r < matrix.length; r += 1) {
     for (let c = 0; c < matrix.length; c += 1) {
       if (!matrix[r][c]) continue;
       for (let y = 0; y < scale; y += 1) {
         for (let x = 0; x < scale; x += 1) {
           const px = (((r + quiet) * scale + y) * size + (c + quiet) * scale + x) * 4;
-          data[px] = 0; data[px + 1] = 0; data[px + 2] = 0; data[px + 3] = 255;
+          data[px] = dark[0]; data[px + 1] = dark[1]; data[px + 2] = dark[2]; data[px + 3] = 255;
         }
       }
     }
   }
   return { data, size };
 }
+
+/** The colours `draw()` actually paints — cream light modules on near-black ink, not #fff/#000. */
+const INK: [number, number, number] = [0x08, 0x15, 0x2b];
+const CREAM: [number, number, number] = [0xff, 0xf3, 0xe0];
 
 const decode = (text: string, opts?: { mask?: number }): string | null => {
   const { encode } = loadEncoder();
@@ -92,6 +105,30 @@ describe('the attendance QR is a QR', () => {
     // A symbol that scans cleanly to *most* of a credential is worse than an error: the desk
     // would check somebody in against a token nobody minted.
     expect(() => encode('x'.repeat(1000))).toThrow(/exceeds version/);
+  });
+
+  /**
+   * The tests above rasterise pure black on pure white. The page does not: `draw()` paints
+   * cream (#FFF3E0) modules on ink (#08152B) so the symbol belongs to the dashboard rather
+   * than sitting in it as a white rectangle. That is a real change to what a scanner sees —
+   * the light modules are 4% down on white and tinted warm — and a symbol that decodes in the
+   * idealised palette but not the shipped one would pass every test here and fail at the desk.
+   */
+  it('still decodes in the cream-on-ink palette the page actually paints', () => {
+    const { encode } = loadEncoder();
+    const { data, size } = rasterise(encode(REAL_TOKEN), 6, 4, INK, CREAM);
+    expect(jsQR(data, size, size)?.data).toBe(REAL_TOKEN);
+  });
+
+  /**
+   * And the quiet zone has to be cream too. Painting the border white while the modules sit
+   * on cream leaves a seam the decoder can read as a module edge; this is the shape of the
+   * bug that would appear if `draw()` ever filled the canvas before sizing the quiet zone.
+   */
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])('decodes in the shipped palette under mask %i', (mask) => {
+    const { encode } = loadEncoder();
+    const { data, size } = rasterise(encode(REAL_TOKEN, { mask }), 6, 4, INK, CREAM);
+    expect(jsQR(data, size, size)?.data).toBe(REAL_TOKEN);
   });
 
   it('picks the smallest version that fits, so the modules stay as large as they can', () => {
