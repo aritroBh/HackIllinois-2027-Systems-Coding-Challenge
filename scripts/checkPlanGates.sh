@@ -33,7 +33,7 @@ pass=0; fail=0
 # A gate's own output is captured rather than streamed, so a passing gate prints its `ok` line
 # and nothing else — the value of this list is that it is scannable. (An earlier version of this
 # sentence said a passing gate "stays silent", which it plainly is not: it prints one line per
-# gate, about forty of them.)
+# gate, 58 of them.)
 #
 # Which lines to show is the part that was wrong on the first attempt. That version took
 # `tail -8`, on the stated premise that "the failure is almost always at the end". For anything
@@ -47,7 +47,15 @@ pass=0; fail=0
 # middle elided rather than betting on which end holds the cause — it is at the top for a
 # compiler and at the bottom for a shell script, and six lines either way costs nothing.
 #
-# The pattern must match `npm error`, lowercase. npm has emitted that since v7 and this repo is
+# What npm 11 actually emits, measured rather than assumed, because an earlier version of this
+# block asserted "npm then appends a dozen lines of `npm ERR! ... ELIFECYCLE`" two paragraphs
+# above another line saying that exact token matches nothing npm prints — the same comment
+# describing two different npms. A failing *script* appends no npm lines at all; the tool's own
+# output is the whole of it. Only npm failing *itself* (a missing script) prints anything, about
+# six lines, all prefixed `npm error`, lowercase.
+#
+# So the filter earns its keep on one case, not the common one, and the pattern must match
+# `npm error`, lowercase. npm has emitted that since v7 and this repo is
 # on 11.19.0; a filter written as `npm ERR!` matches nothing npm currently prints, which is what
 # the first version of this line did while claiming chatter was "dropped outright".
 #

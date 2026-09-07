@@ -7,19 +7,30 @@
  * *who is asking*:
  *
  *  (a) **Authenticated request** (`req.account` set by the identity middleware) → an
- *      account bucket only — `RATE_LIMIT_MAX`/window (default 300/min) for everything,
- *      plus 90/min for mutations. Authenticated traffic never touches an IP bucket, so 300
- *      people behind one address cannot exhaust anything by polling.
+ *      account bucket on the global stack — `RATE_LIMIT_MAX`/window (default 300/min) for
+ *      everything, plus 90/min for mutations. Reads and mutations by a proven session touch
+ *      no IP bucket, so 300 people behind one address cannot exhaust anything by polling.
+ *
+ *      This said "authenticated traffic *never* touches an IP bucket", which is the kind of
+ *      universal worth checking rather than repeating. `authExchangeLimiter` is keyed
+ *      `auth:${ipOf(req)}` and carries no `skip`, so it applies to a caller who already has a
+ *      session: a signed-in organiser calling `POST /auth/claim-codes` clears the global stack
+ *      by account and then meets a shared per-IP credential bucket (30/min, 300/min trusted).
+ *      During a doorway rush that bucket is the binding constraint, and the old sentence told
+ *      a capacity planner it did not exist.
  *  (b) **Anonymous credential exchange** (`POST /auth/claim`, `/auth/magic*`, `/auth/adonix`)
  *      → 30/min/IP. Bounds brute force on 50-bit claim codes. `auth.routes.ts` mounts
  *      `authExchangeLimiter` per route — on those three, on `/auth/dev-login`, and on the
  *      two claim-code issuance routes, which take the organiser secret instead.
  *  (c) **Anonymous everything else** → 600/min/IP (`anonymousLimiter`). In `legacy` mode
  *      this is what the open dashboard reads use; in `required` mode only `ANONYMOUS_ALLOW`
- *      gets past the gate — thirteen entries, not the four an earlier version of this line
- *      listed as though they were all of them: the public reads (`/content`, `/announcements`,
- *      `/plugins`, `/auth/providers`), every sign-in POST, and the two claim-code bootstrap
- *      routes. `src/middleware/identity.ts` holds the authoritative set; do not re-list it here
+ *      gets past the gate. That set holds **twelve** entries in development and **ten** that
+ *      are reachable in production, because `POST /auth/dev-login` and `GET /auth/dev-accounts`
+ *      are registered only when `NODE_ENV !== 'production'` (`src/routes/v1/auth.routes.ts`).
+ *      The shape is four public reads, five sign-in POSTs, two claim-code bootstrap routes and
+ *      the dev-accounts listing. `src/middleware/identity.ts` holds the authoritative set; do
+ *      not re-list it here — two earlier versions of this line gave four entries and then
+ *      thirteen, and a copied list is a list that goes stale
  *      behind it, though note the limiter runs *before* `enforceAuthMode`, so a request the
  *      gate is about to 401 is counted here first.
  *  (d) **IP ceiling**, 3,000/min over anonymous traffic only (`ipCeilingLimiter`) — the
