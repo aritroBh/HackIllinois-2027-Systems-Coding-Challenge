@@ -490,6 +490,9 @@
 
   function settingsPanel() {
     const on = N.presence?.state?.optIn ?? N.session.user?.presenceOptIn;
+    // Why the switch is on and the map still does not have you. The server refuses samples
+    // for six different reasons and used to say none of them out loud; this is the sentence.
+    const refusal = N.presence?.refusalLine?.() ?? null;
     return `
       <div class="px">
         <div class="panel-head"><div><div class="eyebrow">Settings</div><h3>Privacy</h3></div></div>
@@ -497,6 +500,7 @@
           <input type="checkbox" id="pref-visible" data-action="presence-toggle" aria-labelledby="me-presence-label" aria-describedby="me-presence-copy"${on ? ' checked' : ''}>
           <span class="hud-label" id="me-presence-label">Show me on the campus map</span>
         </div>
+        ${on && refusal ? `<p class="ob-hint me-presence-why" role="status">${esc(refusal)}</p>` : ''}
         <p class="ob-hint" id="me-presence-copy">${esc(privacyCopy())}</p>
       </div>`;
   }

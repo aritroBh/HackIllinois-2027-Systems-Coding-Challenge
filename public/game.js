@@ -643,7 +643,16 @@
     const on = typeof force === 'boolean' ? force : !state.walking;
     const btn = $('walk-btn');
     if (on) {
-      if (!navigator.geolocation) { toast('No geolocation on this device — use WASD on the map instead.'); return; }
+      // `!navigator.geolocation` is true only where the API is absent. It is NOT true on an
+      // insecure origin: there the object exists and every call fails, so this guard passed
+      // and the browser's own "User denied Geolocation" surfaced instead — blaming the person
+      // for what is actually the address bar. `avatar.js` already splits these two for the
+      // camera; location had no equivalent.
+      if (!navigator.geolocation) { toast('This device has no location — use WASD on the map instead.'); return; }
+      if (!window.isSecureContext) {
+        toast('Location needs a secure page (https, or localhost). Open this on localhost or over https, or walk the map with WASD.');
+        return;
+      }
       if (!has('setPlayerLatLng')) { toast('The map is still loading the player layer.'); return; }
       // Turning walking on while it is already on used to overwrite the handle and strand the
       // previous watch: two callbacks driving the sprite, and `clearWatch` only ever able to
@@ -676,7 +685,24 @@
               : "You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");
           }
         },
-        (err) => { toast(`Location unavailable: ${err.message}. WASD still works.`); toggleWalk(false); },
+        (err) => {
+          // Only a refusal turns walking off. A timeout used to, and `timeout: 15000` with
+          // `enableHighAccuracy` times out routinely on a cold fix indoors — so one tap, one
+          // wait and one toast left the button off and the feature looking broken, when the
+          // very next reading would have arrived. The watch stays open for 2 and 3; the OS
+          // keeps trying and a later fix moves the sprite with no further action.
+          const denied = err.code === 1; // PERMISSION_DENIED
+          if (!denied && geoErrorToldAt && Date.now() - geoErrorToldAt < 30000) return;
+          geoErrorToldAt = Date.now();
+          if (denied) {
+            toast('Location permission is off for this page. Turn it on in the address bar, or walk the map with WASD.');
+            toggleWalk(false);
+            return;
+          }
+          toast(err.code === 3 // TIMEOUT
+            ? 'Still looking for a location fix — this is slow indoors. Keeping at it; WASD works meanwhile.'
+            : 'No location fix right now. Keeping at it; WASD works meanwhile.');
+        },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
       );
       state.walking = true;
@@ -863,6 +889,9 @@
    * with it, so B never got the explanation A had already dismissed: the once-per-lifetime
    * defect this round removed, recreated once per handover.
    */
+  /** Throttles the repeating geolocation error toast; a watch re-fires on every failure. */
+  let geoErrorToldAt = 0;
+
   function resetPositionProvenance() {
     positionSource = window.campus?.getPlayer?.() ? 'demo' : null;
     positionOffBy = 0;

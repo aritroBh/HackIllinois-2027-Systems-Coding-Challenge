@@ -42,7 +42,8 @@
   // evaluated, and is equally safe if app.js never loaded.
   const colorOf = (f) => (typeof factionOf === 'function' ? factionOf(f)?.color : null) || FALLBACK_COLOR[f] || FALLBACK_COLOR.NEUTRAL;
 
-  const state = { active: null, reason: '', panel: null, canvas: null, note: null, timer: null, sig: '', fix: null, geoWatch: null };
+  /** `geoError`: null | 'insecure' | 'denied' | 'timeout' | 'unavailable' — why there is no fix. */
+  const state = { active: null, reason: '', panel: null, canvas: null, note: null, timer: null, sig: '', fix: null, geoWatch: null, geoError: null };
 
   const readChoice = () => { try { const v = localStorage.getItem(KEY); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } };
   const writeChoice = (on) => { try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* private mode */ } };
@@ -128,6 +129,10 @@
 
   function startWatch() {
     if (state.geoWatch != null || !navigator.geolocation) return;
+    // The object exists on an insecure origin and every call fails, so an existence check is
+    // not a secure-context check. Say which it is instead of waiting silently for ever.
+    if (!window.isSecureContext) { state.geoError = 'insecure'; paintNearest(); return; }
+    state.geoError = null;
     // See the note above: one watch at a time, and lite mode owns it while it is mounted.
     window.game?.stopWalk?.();
     state.geoWatch = navigator.geolocation.watchPosition(
@@ -143,10 +148,17 @@
         window.game?.gateSpins?.();
         draw(true);
       },
-      // A refusal is an answer, not an error, so there is no toast — but the watch is finished
-      // either way and holding its handle only guarantees `startWatch` will decline to open
-      // another one after the reader grants permission.
-      () => { state.fix = null; stopWatch(); paintNearest(); },
+      // A refusal is an answer and still gets no toast — but it does now get a readout, and
+      // only a refusal closes the watch. This ran `stopWatch()` on ANY error, so a single
+      // timeout (routine indoors at `enableHighAccuracy` with a cold fix) permanently ended
+      // the watch while the readout went on saying "Waiting for a location fix" — waiting on
+      // something that had been cancelled.
+      (err) => {
+        state.fix = null;
+        if (err && err.code === 1) { state.geoError = 'denied'; stopWatch(); }
+        else state.geoError = err && err.code === 3 ? 'timeout' : 'unavailable';
+        paintNearest();
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   }
@@ -173,7 +185,13 @@
     if (!near) return;
     const label = '<div class="hud-label">NEAREST HACKSTOP</div>';
     if (!state.fix) {
-      near.innerHTML = `${label}<div class="near-dist"><span>${navigator.geolocation ? 'Waiting for a location fix.' : 'No geolocation on this device.'}</span></div>`;
+      const why = !navigator.geolocation ? 'This device has no location.'
+        : state.geoError === 'insecure' ? 'Location needs a secure page (https, or localhost).'
+          : state.geoError === 'denied' ? 'Location is off for this page. Turn it on in the address bar.'
+            : state.geoError === 'timeout' ? 'Still looking for a location fix — this is slow indoors.'
+              : state.geoError === 'unavailable' ? 'No location fix right now. Still trying.'
+                : 'Waiting for a location fix.';
+      near.innerHTML = `${label}<div class="near-dist"><span>${esc(why)}</span></div>`;
       return;
     }
     const stops = (window.hackStopsCache || []).filter((s) => Number.isFinite(s.latitude));

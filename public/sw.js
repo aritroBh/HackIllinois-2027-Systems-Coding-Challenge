@@ -130,7 +130,22 @@
   //        cannot change a colour baked into pixels), the missing-model notice converges to
   //        one from any count, a Reinforce refusal no longer calls itself a battle, and the
   //        Details panel stopped removing a host that other dialogs' close path resolves.
-  const VERSION = 'v55';
+  // `v56`: the map's refusals were silent. The presence server rejects a sample for seven
+  //        distinct reasons and emitted every one of them as a `nack` that exactly one
+  //        listener received, discarded and repainted — so the chip went on reading
+  //        "Visible" while the server dropped every fix, asserting the opposite of what was
+  //        happening. Each reason now says itself, in its own words: an inaccurate fix
+  //        blames the radio and quotes both numbers, a single fast jump is not an accusation,
+  //        and opting out is not an error. Also: `!navigator.geolocation` could not fire on
+  //        an insecure origin (the object exists, the calls fail), so that case now names
+  //        itself instead of surfacing as the browser blaming the user; and a geolocation
+  //        timeout no longer switches walking off for good — only a refusal does.
+  // `v57`: the SSE fallback discarded the same refusal reasons. `POST /presence` answers
+  //        `{ accepted: false, reason }` and `postPosition` awaited it and dropped it on the
+  //        floor — which matters more than it sounds, because the WebSocket transport sends a
+  //        nack for only three of the seven reasons, so this HTTP reply is the only place
+  //        OFF_CAMPUS and INACCURATE can currently be observed by a browser at all.
+  const VERSION = 'v57';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

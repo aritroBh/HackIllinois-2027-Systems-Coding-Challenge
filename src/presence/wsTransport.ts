@@ -370,7 +370,19 @@ export async function handleMessage(
         h: msg.h === undefined ? undefined : Number(msg.h),
         spd: msg.spd === undefined ? undefined : Number(msg.spd),
       }, now);
-      if (!r.ok && (r.reason === 'MUTED' || r.reason === 'SPEED_STRIKE' || r.reason === 'OPT_OUT')) {
+      // Every refusal a sender can act on goes back to them. This used to answer only the
+      // three punitive ones — `MUTED`, `SPEED_STRIKE` and `OPT_OUT` — which meant the two
+      // reasons an ordinary person actually meets, `OFF_CAMPUS` and `INACCURATE`, were
+      // dropped with no frame at all. They opted in, granted location, published a fix the
+      // server refused on the merits, and the socket said nothing; the map simply never drew
+      // them. `POST /presence` has always returned `reason` for all of these, so the two
+      // transports disagreed about whether the sender was entitled to know.
+      //
+      // `RATE` is the one that stays silent, and deliberately: it is the normal cadence
+      // rather than a fault. A client sending faster than `minSampleIntervalMs` is behaving
+      // correctly, and nacking it would put a frame on the wire every couple of seconds for
+      // every healthy publisher on campus.
+      if (!r.ok && r.reason !== 'RATE') {
         client.send({ t: 'nack', reason: r.reason });
       }
       return;
