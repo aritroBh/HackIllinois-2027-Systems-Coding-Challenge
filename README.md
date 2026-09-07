@@ -79,7 +79,7 @@ The tests are the interesting part of the suite rather than coverage filler: ten
 
 ## Requirements
 
-Node 20 or newer. Python 3.11 with `shapely` and `numpy` only if you are rebaking a campus. MongoDB in production as a single-node replica set, because transactions need one; the demo starts its own in memory.
+Node 20 or newer. Python 3.10 or newer with `shapely` and `numpy`, only if you are rebaking a campus. MongoDB in production as a single-node replica set, because transactions need one; the demo starts its own in memory.
 
 ## About this submission
 

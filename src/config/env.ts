@@ -66,8 +66,12 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
-  // Comma-separated IPv4 CIDRs of the venue's NAT egress; per-IP anti-abuse ceilings do
-  // not apply to them (capacity is controlled per account).
+  // Comma-separated IPv4 CIDRs of the venue's NAT egress. These get a **10x allowance** on the
+  // two per-IP limiters that consult them (`authExchangeLimiter`, `ipCeilingLimiter`), never an
+  // exemption — the venue is the one place a shared address is legitimately hot, and it is also
+  // where an attacker on the Wi-Fi sits. `anonymousLimiter` does not widen for them at all.
+  // This said the ceilings "do not apply", which would have had an operator expect no per-IP
+  // limit at the door and be surprised by one.
   TRUSTED_EGRESS_CIDRS: z.string().default(''),
   /** Content pack directory name under CONTENT_DIR — a bare name, never a path. */
   CONTENT_PACK: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'CONTENT_PACK must be a bare lowercase directory name').default('hackillinois-2027'),

@@ -228,6 +228,8 @@ the end of the shift window, at some grace after it, and whether a cancellation 
 counts. Picking that silently would put a number on somebody's record that the event never agreed
 to.
 
-`Volunteer.streak` is the same shape with less consequence: declared, projected into the account
-payload by `AuthService`, and never written. Quest streaks are computed live from `QuestProgress`
+`Volunteer.streak` is the same shape with less consequence: declared on the model and never
+written. It is **not** projected into the account payload — `AuthService.toPublicAccount` is an
+allow-list and names `streak` among the fields it deliberately omits, so a client never sees the
+stale zero. This paragraph said the opposite until a reviewer checked. Quest streaks are computed live from `QuestProgress`
 instead, so the field is a stale zero rather than a wrong answer.

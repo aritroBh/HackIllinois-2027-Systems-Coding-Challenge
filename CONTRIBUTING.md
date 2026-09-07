@@ -37,8 +37,18 @@ be read.
 * Validation is Zod, in `src/schemas/`. Routers are `src/routes/v1/*.routes.ts`.
   Controllers are static classes returning `{ success: true, data }`. Services own the
   logic, throw `ApiError`, and broadcast through `eventHub` **after** the database write.
-* Configuration is read through `src/config/env.ts` and nowhere else. Reading
-  `process.env` directly bypasses both the schema and the production boot guards.
+* Configuration is read through `src/config/env.ts`. Reading `process.env` directly bypasses
+  both the schema and the production boot guards, so anything with a default, a range, or a
+  production check belongs there.
+
+  Four places read `process.env.NODE_ENV` directly — `src/index.ts`, `src/seed/seedData.ts`,
+  `src/common/sse/eventHub.ts` and `src/services/adonixSync.service.ts` — each guarding a
+  side effect that must not happen under the test runner (starting a listener, wiping
+  collections, arming a heartbeat, calling upstream). They agree with the parsed value; they
+  read it raw because they run at import, before or beside the env module. `FORCE_SEED` is the
+  one genuinely unvalidated flag, and it is a deliberate operator escape hatch rather than
+  configuration. This said "and nowhere else", which a reader could check in one grep and find
+  false.
 * Colours, labels, venues and landmarks belong in a content pack rather than in `src/`. See
   [docs/CONTENT-PACKS.md](docs/CONTENT-PACKS.md). This is checked, not just asked for:
   `npm run pack:check` reads the active pack and fails if any of that event's content strings
