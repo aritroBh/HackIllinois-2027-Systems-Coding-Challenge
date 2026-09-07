@@ -260,7 +260,11 @@ if (!fs.existsSync(lockPath)) {
     };
     for (const rel of TAB_SOURCES) {
       const raw = fs.readFileSync(path.join(root, rel), 'utf8');
-      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      // Line comments anywhere, not only at the start of a line. Start-anchored, a trailing
+      // `registerTab( // note` survived the strip and the indirect-registration scan then
+      // reported a valid call as unreadable. The `[^:]` guard keeps a `https://` in a string
+      // from being mistaken for the start of a comment.
+      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
       reportIndirectRegistrations(rel, src);
       for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);

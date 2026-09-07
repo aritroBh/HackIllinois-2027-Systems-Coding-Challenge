@@ -26,6 +26,8 @@ let volunteersCache = [];
 let handoverGeneration = 0;
 /** Which faction write owns the picker. A late response from an older one must not repaint. */
 let factionWriteGeneration = 0;
+/** True while a faction PATCH is in flight. State, so an unrelated repaint cannot clear it. */
+let factionWritePending = false;
 // The session user's faction when signed in.
 //
 // This used to say the picker overrode it "in this tab only: no endpoint writes an account's
@@ -833,11 +835,22 @@ function renderGymsList() {
  * next to a button that falls back to `PROX_RADIUS` — so on a pack whose campus radius is not
  * 75 the label and the control beside it disagreed.
  *
- * Not "one place": there are four readers of `event.campus.geofenceMeters` in the client —
- * this and `applyBranding` in this file, `applyGeofence` in game.js, and `geofenceMetres` in
- * views/me.js — spread across three files that do not import one another. (An earlier version
- * of this very sentence said three, having missed the one twelve hundred lines above it. A
- * comment that exists to enumerate is worth nothing if the enumeration is wrong.) What they share is the *field*, and the
+ * There are four readers of `event.campus.geofenceMeters` in the client: this and
+ * `applyBranding` in this file, `applyGeofence` in game.js, and `geofenceMetres` in
+ * views/me.js — three files that do not import one another.
+ *
+ * They agree on the *precedence*, because they do not implement it: venue-then-campus-then-75
+ * is resolved server-side in `geofenceMetersFor`, and each of these reads an already-resolved
+ * field. What they do **not** share is the missing-field fallback, and it is worth saying so
+ * rather than claiming they cannot disagree. If the field vanishes after a valid pack has
+ * loaded, this returns a fresh 75, `applyGeofence` early-returns and keeps whatever
+ * `PROX_RADIUS` already held, and `applyBranding` leaves the old string on screen. That
+ * divergence needs a pack to lose a field mid-session, which nothing does today.
+ *
+ * This sentence has now been wrong twice: it first claimed "one place" when there are four
+ * readers, then said "three" having missed the one in its own file, then said "none of them
+ * computes anything" when all four compute a fallback. Recorded because the correction is
+ * where the errors kept being introduced. What they share is the *field*, and the
  * precedence above it is resolved server-side, so they cannot disagree about the rule even
  * though they each read it separately. Claiming one place was flattering; the property that
  * matters is that none of them computes anything.
@@ -1436,15 +1449,20 @@ function paintFactionPicker(faction, locked, pending = false) {
   // during it is what this closes, but "Locked to Team Kernel" is not true until the server
   // has said so — and a label that asserts the outcome before the outcome exists is the
   // habit this dashboard has spent the day removing.
-  sel.disabled = !!locked || !!pending;
-  sel.title = pending
+  // `factionWritePending` is consulted as well as the argument, because every other caller —
+  // `onSessionChange`, the handover, boot — passes two arguments and would otherwise re-enable
+  // the control in the middle of a write it knows nothing about. A paint argument alone made
+  // "disabled while writing" a property of one call site rather than of the state.
+  sel.disabled = !!locked || !!pending || factionWritePending;
+  sel.title = (pending || factionWritePending)
     ? 'Taking that side…'
     : locked
       ? `Locked to ${factionOf(faction).label}. Allegiance is chosen once and cannot be changed.`
       : 'Choose once. Allegiance cannot be changed afterwards.';
   const label = sel.closest('.actions')?.querySelector('.hud-label');
   if (label) {
-    label.textContent = pending ? 'Your faction · saving' : locked ? 'Your faction · locked' : 'Your faction · choose once';
+    label.textContent = (pending || factionWritePending) ? 'Your faction · saving'
+      : locked ? 'Your faction · locked' : 'Your faction · choose once';
   }
 }
 
@@ -1460,6 +1478,7 @@ function paintFactionPicker(faction, locked, pending = false) {
 async function changeUserFaction(faction) {
   const previous = currentVolunteerFaction;
   const generation = ++factionWriteGeneration;
+  factionWritePending = true;
   currentVolunteerFaction = faction;
   // Disabled for the duration of the write — disabled, not locked.
   //
@@ -1486,6 +1505,7 @@ async function changeUserFaction(faction) {
   // newer pick had started.
   const giveUp = setTimeout(() => {
     if (generation !== factionWriteGeneration) return;
+    factionWritePending = false;
     currentVolunteerFaction = previous;
     paintFactionPicker(previous, false);
     renderGymsList();
@@ -1502,12 +1522,16 @@ async function changeUserFaction(faction) {
     window.game?.onFactionChange();
     const res = await Nexus.api('/api/v1/me/faction', { method: 'PATCH', body: { faction } });
     if (generation !== factionWriteGeneration) return;   // a newer pick owns the control now
+    // Cleared before the terminal paint, not in `finally`: the paint below reads this flag,
+    // and clearing it afterwards would render "saving" over a settled result.
+    factionWritePending = false;
     // `bound: false` is a success, not a refusal: re-sending the side you already hold
     // answers 200 so a retry after a dropped response is not an error.
     paintFactionPicker(res?.data?.faction || faction, true);
     logChaosTerminal(`[FACTION] ${factionOf(faction).label}${res?.data?.bound ? ' — allegiance bound.' : ''}`);
   } catch (err) {
     if (generation !== factionWriteGeneration) return;   // superseded; do not repaint
+    factionWritePending = false;                          // before the paints below read it
     // A 409 means the server holds a side this browser did not know about — the account
     // bound it somewhere else, another tab or another device. Rolling back to `previous` and
     // locking *that* would pin this tab to a faction the server will refuse on every battle
@@ -1547,6 +1571,9 @@ async function changeUserFaction(faction) {
     window.game?.toast?.(err.message);
   } finally {
     clearTimeout(giveUp);
+    // Only the newest write clears it; an older one settling late must not re-enable a
+    // control the newer one is still using.
+    if (generation === factionWriteGeneration) factionWritePending = false;
   }
 }
 
