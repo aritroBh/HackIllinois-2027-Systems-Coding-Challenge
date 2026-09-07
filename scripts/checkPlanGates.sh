@@ -31,14 +31,37 @@ pass=0; fail=0
 # into `public/gl/` to look for a triangle that was wound the right way all along.
 #
 # Output is captured rather than streamed so a passing gate stays silent — the value of this
-# list is that it is scannable — and only the last few lines are shown, because some of these
-# commands are chatty and the failure is almost always at the end.
+# list is that it is scannable.
+#
+# Which lines to show is the part that was wrong on the first attempt. That version took
+# `tail -8`, on the stated premise that "the failure is almost always at the end". For anything
+# run through npm that premise is exactly inverted: tsc's `file.ts:42: error` or the validator's
+# message prints first, and npm then appends a dozen lines of `npm ERR! ... ELIFECYCLE`. So the
+# last eight lines were reliably the wrapper's epilogue and the real cause was reliably dropped
+# — a failure printer that printed everything except the failure, inside a comment block whose
+# own anecdote is about a gate that sent the reader to the wrong file.
+#
+# Two changes. Wrapper chatter is dropped outright, since `npm ERR!` never carries the cause.
+# And rather than betting on which end holds it, long output is shown from both ends with the
+# middle elided — the error is at the top for a compiler and at the bottom for a shell script,
+# and eight lines of context either way costs nothing.
 check() { # name, command
-  local out
-  if out=$(eval "$2" 2>&1); then printf '  ok    %s\n' "$1"; pass=$((pass+1));
+  local out body n
+  if out=$(eval "$2" 2>&1); then printf '  ok    %s\n' "$1"; pass=$((pass+1)); return; fi
+  printf '  FAIL  %s\n' "$1"; fail=$((fail+1))
+
+  body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | grep -vE '^npm (ERR!|WARN|notice)')
+  # Everything the command said was wrapper noise: better the noise than nothing at all.
+  [ -z "$body" ] && body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$')
+  [ -z "$body" ] && body='(the command failed and printed nothing)'
+
+  n=$(printf '%s\n' "$body" | wc -l | tr -d ' ')
+  if [ "$n" -le 12 ]; then
+    printf '%s\n' "$body" | sed 's/^/          | /'
   else
-    printf '  FAIL  %s\n' "$1"; fail=$((fail+1))
-    printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | tail -8 | sed 's/^/          | /'
+    printf '%s\n' "$body" | head -6 | sed 's/^/          | /'
+    printf '          | ... %s more line(s) ...\n' "$((n - 12))"
+    printf '%s\n' "$body" | tail -6 | sed 's/^/          | /'
   fi
 }
 

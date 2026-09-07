@@ -121,7 +121,7 @@ own attested position is the fix, and it is not built.
 
 *(This section used to say there was no shift time-window check. There is one:
 `src/services/checkin.service.ts` refuses a check-in more than thirty minutes either side of
-the shift, and `docs/WORKFLOWS.md` §4 describes it. The gap was real when this page was
+the shift, and `docs/WORKFLOWS.md` §3 ("Turning up") describes it. The gap was real when this page was
 written and the sentence outlived the fix — exactly the failure this document exists to avoid
 on stage.)*
 

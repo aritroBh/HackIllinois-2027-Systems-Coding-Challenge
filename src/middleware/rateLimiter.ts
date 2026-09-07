@@ -29,14 +29,28 @@
  * the two probes. `GET /api/v1/stats/events` is mounted ahead of the stack for the same
  * reason and is bounded instead by the stream-slot table in `common/streamLimits.ts`.
  *
- * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on the
- * per-IP limiters *in this file*, never an exemption: the venue is the one place a shared
- * address is legitimately hot, but it is also where an attacker on the Wi-Fi sits.
+ * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on
+ * **two of the three per-IP limiters built here** — `authExchangeLimiter` and
+ * `ipCeilingLimiter` — and never an exemption. The venue is the one place a shared address is
+ * legitimately hot, but it is also where an attacker on the Wi-Fi sits.
  *
- * That qualifier is load-bearing rather than pedantic. The stream-slot table in
- * `common/streamLimits.ts` reads the same list and *skips* its PER_IP ceiling for a trusted
- * address, so "never an exemption" is true here and false one file over. `src/config/env.ts`
- * enumerates all three consumers next to the variable itself.
+ * `anonymousLimiter` is keyed per IP as well (`ip:${ipOf(req)}`) and is deliberately *not*
+ * widened: a venue NAT address gets the same 600/min for anonymous reads that anyone else
+ * does. That is the whole reason this sentence has to name the limiters instead of saying
+ * "the per-IP limiters".
+ *
+ * And the 10×-never-an-exemption rule stops at this file's edge: the stream-slot table in
+ * `common/streamLimits.ts` reads the same list and *skips* its PER_IP ceiling outright for a
+ * trusted address. `src/config/env.ts` enumerates all three consumers next to the variable.
+ *
+ * This sentence has now been wrong three times, which is worth more than the sentence itself.
+ * It said the ceilings "do not apply" (no per-IP limit at all — false). The correction said
+ * "the two per-IP limiters that consult them", which undercounted the consumers by missing the
+ * stream table. The correction to *that* said "the per-IP limiters *in this file*" — which
+ * fixed the cross-file half and broke the local half, because this file builds three per-IP
+ * limiters and only two of them are widened. Every version was written carefully and read as
+ * authoritative. **Enumerate; do not quantify.** Naming `authExchangeLimiter` and
+ * `ipCeilingLimiter` is checkable in a way that "the two" and "the per-IP limiters" are not.
  *
  * `TRUST_PROXY_HOPS` decides what "per IP" means. Left at 0 behind a proxy, every client
  * collapses into one bucket and the whole event shares a single allowance; `app.ts` sets

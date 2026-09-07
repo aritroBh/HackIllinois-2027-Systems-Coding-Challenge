@@ -507,9 +507,21 @@ export class PresenceService {
    * At five thousand watchers the frame-building work is tens of milliseconds. That is a small
    * fraction of a one-second cadence, but done in one go it is also tens of milliseconds during
    * which no HTTP request, no WebSocket message and no database callback runs — once a second,
-   * for the whole event. Slicing keeps the same total work and the same cadence while capping
-   * any single block at `SLICE_BUDGET_MS`, so the worst latency presence adds to an unrelated
-   * request is a slice rather than a tick.
+   * for the whole event. Slicing keeps the same total work and the same cadence while bounding
+   * any single block to roughly `SLICE_BUDGET_MS`, so the worst latency presence adds to an
+   * unrelated request is a slice rather than a tick.
+   *
+   * **Roughly, not exactly, and the difference is measurable.** The elapsed check runs once
+   * every thirty-second session rather than every one (see the loop below) because `hrtime` is
+   * syscall-shaped and reading it five thousand times a tick would cost a real share of the
+   * budget it polices. So a slice can run past 8 ms before the next check sees it: the longest
+   * contiguous block measured is 12.2 ms scattered and 9.4-10.8 ms clustered, recorded in
+   * `docs/PRESENCE.md`. Size event-loop latency against ~12 ms, not against 8.
+   *
+   * This docblock said "capping any single block at `SLICE_BUDGET_MS`" while `docs/DEMO.md` and
+   * `docs/WORKFLOWS.md` — which derive from it — had already been corrected to say the opposite.
+   * The source of a claim is the last place the correction reaches and the first place the next
+   * reader looks.
    *
    * The shared index and the cohort cache are built once, at the top, and reused by every
    * slice. That is safe because positions are promoted exactly once per tick (`store.tick`
