@@ -81,6 +81,36 @@ A bad pack does not start the server. That is deliberate: a typo in a venue key 
 geofence anchored to the wrong building, and the class of bug is worth a loud failure at
 boot instead of a quiet one at 3 a.m.
 
+### Then open it in a browser and read the console. This is not optional.
+
+```sh
+CONTENT_PACK=my-event PORT=3300 QR_HMAC_SECRET=$(openssl rand -hex 24) npm run demo
+```
+
+Open `http://127.0.0.1:3300/dashboard/`, click **every tab in the nav**, and keep the
+browser console visible while you do it. You are looking for two things:
+
+1. **Any red line in the console.** The client is JavaScript and a thrown exception stops
+   the rest of the panel silently — you get a blank area, not an error message. A blank
+   panel and a panel with nothing to show look identical to a reader and are not the same
+   thing at all.
+2. **Any name from *our* event in *your* UI.** Search the page for a venue, a team or a
+   building you did not put in your pack. Anything you find is a value hard-coded in the
+   client rather than read from your pack, and it will still be there on the day.
+
+**Why this step is written down in this much detail:** `content:validate` passes, the boot
+gate passes, `npm test` passes, and 58 plan gates pass on a pack that does this. Every one
+of those checks runs against the server, and the defects of this class live in the browser.
+The most consequential fork bug found to date was a hard-coded roster of *our* three faction
+ids in a client render path — it threw on any pack with different factions and blanked the
+entire Turf Wars board, while the API behind it returned perfectly correct data. No
+server-side check could have seen it, and no reviewer reading the code did. Opening the page
+under a second pack found it in about a minute. `docs/REVIEWS.md` carries the instance.
+
+There is deliberately no automated gate for this: catching it needs a headless browser, and
+this repository has no browser dependency. That is a real gap and it is stated here rather
+than papered over — until it closes, you are the check.
+
 ## 3. Bake your campus
 
 The pipeline turns OpenStreetMap into the tiled model the dashboard streams. It reads the

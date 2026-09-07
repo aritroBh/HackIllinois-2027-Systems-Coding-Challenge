@@ -1402,3 +1402,109 @@ ways on the real case before being called done.
 `docs/EXTENDING.md` is new: the six seams in order of blast radius, what each costs, and what
 checks you. The plugin manifest is populated for the first time and the other session confirmed
 the tab renders, executes, and raises no CSP violation in a real browser.
+
+## Round twenty — the second pack, in a browser, 2026-09-07
+
+Three reviewers were launched against HEAD `20e933a`. Only one produced a verdict:
+
+| reviewer | outcome |
+|---|---|
+| muse | 3 findings, all verified by grep, all true, all fixed |
+| agy | **did not run** — individual quota exhausted, ~3h to reset |
+| opencode | still running when this was written |
+
+That agy did not run is recorded rather than rounded off. A round with one reviewer is a round
+with one reviewer, and "muse clean" is not "three reviewers clean".
+
+### What muse found
+
+All three were mine, and two were the same defect: **the fix lands and the sentence stays.**
+
+The presence tick was re-measured into `docs/PRESENCE.md` earlier the same day — p50 59 ms
+clustered, 162 ms scattered, longest block 12.2 ms — and the numbers that re-measurement replaced
+were left standing in `docs/DEMO.md` (still telling a demo-giver to lead with "about fifty
+milliseconds" and "about 115 ms") and in `docs/WORKFLOWS.md` ("never holds the event loop for more
+than about ten"). PRESENCE.md says in as many words that "about 115 ms is not a fair description of
+162 ms" — written by the same hand that left the other two files quoting it. Both now lead with
+the ratio, ~2.7x scattered over clustered, which is the claim that survives being run on another
+machine.
+
+`src/config/env.ts` said trusted egress gets a 10x allowance on "the two per-IP limiters that
+consult them ... never an exemption". Three consult it, and the third — `StreamLimiter`'s `PER_IP`
+ceiling — skips the check outright. So an operator tuning `TRUSTED_EGRESS_CIDRS` from the env
+contract expects a bounded stream ceiling at 10x and has none. **That comment has now been wrong
+twice in the same spot**: it first said the ceilings "do not apply", and the correction introduced
+the count that was also wrong, in the more dangerous direction. Count the callers before writing
+"the two".
+
+Two stale counts: DEMO said 32 files / 347 tests, ARCHITECTURE's matrix said 29 / 306. It is 34 and
+375, measured by running the suite rather than by counting files. Both now carry a date and the
+word snapshot.
+
+### The gate that had to learn to read a line number
+
+Citing `src/presence/service.ts:608` made `docs:check` fail — the rule stripped one trailing
+punctuation mark and looked the whole string up as a path, so the most useful kind of citation in
+the docs was a guaranteed false positive. Rather than avoid the form, the rule now splits the line
+number off and checks both halves: the file exists, and the line is inside it. A citation pointing
+past the end of a file is exactly the drift this gate is for and was previously unrepresentable.
+Proved able to fail before being trusted: a planted `service.ts:9999` reports "has only 712 lines",
+a planted `nosuch.ts:12` reports the missing file, restoring goes green.
+
+What it deliberately does not check is whether the line still *says* what the sentence claims. No
+cheap check knows that, and a gate that pretends to is one that passes for the wrong reason.
+
+### The finding that mattered was not from a reviewer
+
+The server has been pack-driven for two days. The client had never been booted against a second
+pack. Doing it took one command:
+
+```sh
+CONTENT_PACK=example-campus PORT=3300 npm run demo
+```
+
+`public/app.js:918` throws `Cannot read properties of undefined (reading 'color')` and blanks the
+entire Turf Wars board. `renderFactionStrip` builds its tally correctly and pack-driven at :913 —
+`FACTION[g.controllingFaction] ? … : 'NEUTRAL'` — and four lines later, in the same function,
+renders from a hard-coded roster of `TEAM_KERNEL`, `TEAM_TENSOR`, `TEAM_SILICON`. `applyFactions`
+has already replaced `FACTION` with the pack's list, so the lookup is `undefined` and `.color`
+throws. The guard exists at :913 and is missing at :918.
+
+`GET /api/v1/pokeshift/gyms` returned 200 with correct data throughout. The server was right and
+the client threw before drawing a row — and `docs/FORK_GUIDE.md` is what tells a fork to start from
+`content/example-campus`, so this is the first thing a hacker following our own guide sees on the
+flagship feature.
+
+Three more of the same shape, none fatal: the Campus HUD control strip (`public/game.js:735`)
+renders three phantom factions at zero and never shows the pack's real ones; every avatar in a
+fork wears the neutral jacket (`public/avatar.js:423`); and `applyFactions` itself hands each of a
+fork's factions the *unclaimed* CSS class (`public/app.js:93`). Plus "1 monuments are strongholds"
+— a count made pack-driven an hour earlier, with no singular case.
+
+**Every server-side check passed on that pack**: `content:validate`, the boot gate, 375 tests, 58
+of 58 plan gates. They all run against the server. This class lives in the browser.
+
+### Why no gate was added for it, which is the honest part
+
+The obvious move is to extend `checkPackDriven` to `public/`. It was measured first: 74 hits, of
+which about 30 are honest documented fallbacks — a 40% false-positive rate, worse than the
+source-comment rule dropped that morning at nine-in-ten.
+
+The sharper reason is that a grep could not have found the P0 anyway.
+`['TEAM_KERNEL','TEAM_TENSOR','TEAM_SILICON','NEUTRAL']` is textually identical to the key set of
+`FACTION_DEFAULTS` one file away, which is correct and necessary. What separates them is whether
+anything rewrites the value before it is read, and that is a runtime property a text search cannot
+see. The thing that found it was booting the app under the other pack and reading the console.
+
+That is the gate worth having, and it needs a headless browser this repository does not depend on.
+Adding one hours before a demo was not a call to make quietly, so the procedure is written into
+`docs/FORK_GUIDE.md` §2 as a step a human runs, and the gap is stated there rather than papered
+over. A missing gate that somebody knows about beats a gate that fires on the wrong thing.
+
+### One fix of mine, verified against a fixture that could tell the difference
+
+`eventLocalHour` was checked with the two packs at the same instant: `hackillinois-2027`
+(`America/Chicago`) answered 14.63 while `example-campus` (`UTC`) answered 19.63. A version still
+reading `getUTCHours` would have returned 19.63 for both, so the fixture discriminates. The offset
+being five hours rather than six also confirms the reason `Intl` was used instead of a fixed offset
+— it is September, so Chicago is on CDT.

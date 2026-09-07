@@ -21,9 +21,25 @@
 # Relative to this script, not to an absolute path baked in on one machine.
 cd "$(dirname "$0")/.."
 pass=0; fail=0
+# A failing gate prints what actually broke, not just that something did.
+#
+# This used to send both streams to /dev/null, so a red line here gave a reader a name and
+# nothing else. That is the defect this repository has written down more than once — a gate's
+# exit code is not its result — sitting in the gate runner itself, and it cost real time: the
+# label below said "geometry winding audit clean" while the command ran the whole quick suite,
+# so a service-worker version mismatch was reported as a geometry failure and sent the reader
+# into `public/gl/` to look for a triangle that was wound the right way all along.
+#
+# Output is captured rather than streamed so a passing gate stays silent — the value of this
+# list is that it is scannable — and only the last few lines are shown, because some of these
+# commands are chatty and the failure is almost always at the end.
 check() { # name, command
-  if eval "$2" >/dev/null 2>&1; then printf '  ok    %s\n' "$1"; pass=$((pass+1));
-  else printf '  FAIL  %s\n' "$1"; fail=$((fail+1)); fi
+  local out
+  if out=$(eval "$2" 2>&1); then printf '  ok    %s\n' "$1"; pass=$((pass+1));
+  else
+    printf '  FAIL  %s\n' "$1"; fail=$((fail+1))
+    printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | tail -8 | sed 's/^/          | /'
+  fi
 }
 
 echo "M0 — commit baseline, legal, prod boot guards, compose"
@@ -95,7 +111,10 @@ check "boot warms the game catalogs"    "grep -q 'BoothService.warm' src/economy
 
 echo "M7 — renderer fidelity"
 check "crown recipes data-driven"       "test -d design/hand/crowns && test \$(ls design/hand/crowns/*.json | wc -l) -ge 14"
-check "geometry winding audit clean"    "bash scripts/verify.sh quick"
+# Named for what it runs, not for one of the twenty things inside it. `verify.sh quick` is the
+# winding audit *and* the shell lockstep, the event bridge, the docs and pack gates and the rest,
+# so a failure here can come from any of them — which is why the runner above now prints it.
+check "verify.sh quick (all)"           "bash scripts/verify.sh quick"
 
 echo "M8 — plugins, docs, CI"
 check "plugin registry + guard"         "test -f src/plugins/registry.ts -a -f src/plugins/index.ts"
