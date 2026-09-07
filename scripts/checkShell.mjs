@@ -251,6 +251,14 @@ if (!fs.existsSync(lockPath)) {
         }
         if (!id) continue;
         const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? null;
+        // Last write wins in a Map, and the plugin files are scanned last. A plugin reusing a
+        // core tab's id would therefore flip that entry to non-core and silently drop the
+        // fallback-nav requirement the core tab is subject to — turning this gate off for one
+        // tab by adding a file, which is the failure this whole block exists to prevent.
+        const clash = registered.get(id);
+        if (clash && clash.rel !== rel) {
+          problems.push(`tab id "${id}" is registered by both ${clash.rel} and ${rel}; ids must be unique`);
+        }
         registered.set(id, { roles, rel });
       }
     }
@@ -265,15 +273,31 @@ if (!fs.existsSync(lockPath)) {
     const isCore = (rel) => rel.startsWith('public/');
     const coreTabs = [...registered.values()].filter((t) => isCore(t.rel)).length;
 
-    // Every tab this repository actually has. A drop below it means the scan broke, not that
-    // tabs were deleted — and this is the number the sos.js miss above slipped past, so it is
-    // now the real total rather than a floor low enough to hide one.
-    const EXPECTED_TABS = 8;
-    if (coreTabs < EXPECTED_TABS) {
+    /**
+     * Every core tab this repository has, as an equality rather than a floor.
+     *
+     * This was `< 8` while the static count was 10, and the comment beside it claimed to be
+     * "the real total rather than a floor low enough to hide one". It was neither: two core
+     * tabs could be deleted with the gate still green, which is exactly the shape of the
+     * `sos.js` miss it was written to close. A one-sided floor cannot catch a deletion when
+     * it is set below the true count, and nothing kept the number honest.
+     *
+     * `!==` costs a contributor one line when they add a tab, and the message says which line.
+     * That is the trade a lockstep gate is for: the alternative is a number that drifts under
+     * the count it is supposed to be guarding, which is what happened here.
+     *
+     * Ten: six in `app.js` (shifts, campus, pokeshift, qr, chaos, leaderboard — `chaos` is
+     * registered conditionally at runtime but is a static call site, and this is a static
+     * scan), plus one each in `views/me.js`, `views/lead.js`, `views/quests.js`,
+     * `views/sos.js`.
+     */
+    const EXPECTED_TABS = 10;
+    if (coreTabs !== EXPECTED_TABS) {
       problems.push(
         `checkShell found ${coreTabs} core registerTab() calls across ${TAB_SOURCES.length} scanned files ` +
-        `but expects at least ${EXPECTED_TABS}. Either a tab was removed (update EXPECTED_TABS) ` +
-        'or the scanner no longer matches how they are written.'
+        `but EXPECTED_TABS is ${EXPECTED_TABS}. If you added or removed a tab on purpose, update ` +
+        `EXPECTED_TABS in scripts/checkShell.mjs to ${coreTabs}. Otherwise the scanner no longer ` +
+        'matches how registerTab() is written, or a tab was lost.'
       );
     }
 

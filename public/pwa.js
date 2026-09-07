@@ -33,8 +33,15 @@
   // was opened with ?nosw=1.
   if (/[?&]nosw=1/.test(location.search)) return;
 
-  /** One prompt per page, however many times the worker changes state. */
-  let offered = false;
+  /**
+   * The worker the visible bar belongs to, or null.
+   *
+   * A boolean latch was wrong: it silenced every update after the first for the rest of the
+   * session, so a dashboard left open across a shift would be told about one build and never
+   * another. Keyed on the worker instead, a genuinely newer one can raise a fresh bar while
+   * the same worker still cannot raise two.
+   */
+  let offeredWorker = null;
   /** `controllerchange` fires once per handover; reloading twice is a loop. */
   let reloading = false;
 
@@ -47,12 +54,22 @@
    * gone and no way to ask again.
    */
   function apply(worker) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
-      reloading = true;
-      location.reload();
-    });
+    const go = () => { if (!reloading) { reloading = true; location.reload(); } };
+
+    // Already in charge, or superseded. Neither will ever fire `controllerchange` again:
+    // another tab may have accepted this same update since the bar was drawn, or a newer
+    // worker may have replaced this one. Posting `skipWaiting` to either is a no-op, and
+    // waiting for an event that has already happened is how a button sticks on "Reloading…"
+    // for the rest of the session with no way out but a manual refresh.
+    if (worker.state !== 'installed' || navigator.serviceWorker.controller === worker) { go(); return; }
+
+    navigator.serviceWorker.addEventListener('controllerchange', go);
     worker.postMessage({ type: 'nexus-sw-skip-waiting' });
+
+    // Nothing in the specification promises an answer, and the user has already committed to
+    // a reload by clicking. A plain reload picks up whatever is current: if the swap did
+    // happen it lands on the new build, and if it did not the bar simply comes back.
+    setTimeout(go, 5000);
   }
 
   /**
@@ -64,8 +81,9 @@
    * permanently-hidden element there is one more thing for the gate to be wrong about.
    */
   function offer(worker) {
-    if (offered) return;
-    offered = true;
+    if (!worker || offeredWorker === worker) return;
+    document.querySelector('.sw-update')?.remove();   // a bar for a worker this one supersedes
+    offeredWorker = worker;
 
     const bar = document.createElement('div');
     bar.className = 'sw-update';
@@ -91,7 +109,11 @@
     // Dismissing does not discard the update: the worker stays waiting and the next reload
     // of the last open tab picks it up. Saying "later" mid-shift is the case sw.js was
     // written around.
-    later.addEventListener('click', () => bar.remove());
+    later.addEventListener('click', () => {
+      bar.remove();
+      // Dismissing this build should not silence the next one.
+      if (offeredWorker === worker) offeredWorker = null;
+    });
 
     bar.append(text, go, later);
     document.body.appendChild(bar);
@@ -115,6 +137,10 @@
         // Already waiting: the worker finished installing on an earlier visit, or in another
         // tab. This is the common case, and checking only `updatefound` missed all of it.
         if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+        // A worker that was already installing when this page loaded never fires
+        // `updatefound` for us — that event went to whoever triggered the update — so it has
+        // to be picked up by hand or the whole build is missed on this tab.
+        watch(reg.installing);
         reg.addEventListener('updatefound', () => watch(reg.installing));
 
         // Browsers check for a new worker on navigation, which a single-page dashboard left

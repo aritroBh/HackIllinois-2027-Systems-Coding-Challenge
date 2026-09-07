@@ -69,7 +69,9 @@
   //        has described since v11, so a new build is reachable without closing every tab.
   // `v20`: the avatar the trainer creator makes is actually sent to the server, so the
   //        moderation queue and other trainers' faces stop being unreachable code.
-  const VERSION = 'v23';
+  // `v24`: round-eighteen review — the battle no longer plays its animation in front of the
+  //        write, the encounter guards check identity, and the face follows the map switch.
+  const VERSION = 'v24';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

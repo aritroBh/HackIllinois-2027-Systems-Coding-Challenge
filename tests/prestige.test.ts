@@ -85,12 +85,26 @@ describe('the seed cannot restate the rule and get it wrong', () => {
    */
   it('writes no prestigeTier literal, deriving every one from karma', () => {
     const seed = read('src', 'seed', 'seedData.ts');
-    expect(seed).not.toMatch(/prestigeTier:\s*PrestigeTier\./);
-    expect(seed).toMatch(/prestigeTier: computePrestigeTier\(v\.karmaPoints\)/);
+    // Whitespace-tolerant, because `prestigeTier : PrestigeTier.X` is the same defect and a
+    // formatter could introduce it.
+    expect(seed).not.toMatch(/prestigeTier\s*:\s*PrestigeTier\./);
+    // Only that the derivation is called — not the argument name. Asserting on `v.karmaPoints`
+    // would fail a correct refactor that renamed the parameter, which is a gate failing for a
+    // change that fixed nothing and broke nothing.
+    expect(seed).toMatch(/prestigeTier\s*:\s*computePrestigeTier\(/);
   });
 
-  it('would have caught Nexus Ops at 4,200 karma labelled SIEBEL_GUARDIAN', () => {
+  /**
+   * The band 4,200 karma belongs to, stated as a fact rather than as coverage.
+   *
+   * This deliberately does NOT claim to catch the seed drift. `computePrestigeTier` never
+   * had the bug — it returned LEVIATHAN_PRIME for 4,200 before the fix and after it — and
+   * this assertion passed the whole time the demo's own leaderboard was showing rank one
+   * below rank two. The test above, which refuses a hand-typed literal in the seed, is the
+   * one that catches it. Naming this one honestly matters: a future reader seeing both green
+   * should not conclude the drift is covered twice.
+   */
+  it('puts 4,200 karma in the top band, which is where the seed disagreed', () => {
     expect(computePrestigeTier(4200)).toBe(PrestigeTier.LEVIATHAN_PRIME);
-    expect(computePrestigeTier(4200)).not.toBe(PrestigeTier.SIEBEL_GUARDIAN);
   });
 });

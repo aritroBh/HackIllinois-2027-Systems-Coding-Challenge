@@ -60,7 +60,9 @@
    * one is gated rather than trusted: `tests/prestige.test.ts` parses the thresholds back out
    * of the model and fails if the two ever disagree. The copy has to exist because the card
    * draws a *distance* — "you are 1,500 karma short of Leviathan Prime" needs both edges of
-   * the band, and `GET /me/card` sends only the tier the balance landed in, not its bounds.
+   * the band, and `GET /me/card` sends the tier the balance landed in without its bounds.
+   * (It sends plenty else this panel uses — `karma`, `shortId`, `faction`; it is the band
+   * edges specifically that are absent, and they are the only thing a distance needs.)
    */
   const TIER_BANDS = [
     { tier: 'NEOPHYTE_PLANKTON', minKarma: 0 },
@@ -357,7 +359,14 @@
   function statsPanel() {
     const u = N.session.user || {};
     const card = state.card || {};
-    const karma = Number(card.karma ?? u.karmaPoints) || 0;
+    // Clamped once, here, and used everywhere below.
+    //
+    // `bandsFor` clamps internally but returned bands were being combined with the *raw*
+    // value, so a negative balance printed "205 karma to Current Rider" at -5 and produced
+    // `width: -3%`, which is not a length and is simply dropped. The schema says `min: 0`,
+    // but `computePrestigeTier(-1)` is explicitly tested server-side, so the client is not
+    // entitled to assume it will never see one.
+    const karma = Math.max(0, Number(card.karma ?? u.karmaPoints) || 0);
     const streak = streakDays();
     const carrying = state.inventory.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
     const faction = myFaction();
@@ -546,15 +555,21 @@
 
   // players.js owns the toggle; repaint so the checkbox agrees with the transport.
   /**
-   * Repaint the standing panel once the two globals it reads have actually loaded.
+   * Repaint the standing panel once the things it reads have actually arrived.
    *
-   * `index.html` loads this file at line 389 and `sprites.js` at 400, `app.js` at 404. They
-   * are plain classic scripts, so by the time anything here runs on a `session:ready` that
-   * resolved early, `window.Sprites` can still be undefined and `currentVolunteerFaction`
-   * has not been reconciled against the content pack. Both were read once, at first paint,
-   * and never again: the trainer's face came out an empty box and the team chip said
-   * "Unclaimed" while the Campus tab, reading the same variable a moment later, said
-   * "Team Kernel" about the same person.
+   * `index.html` loads this file before `sprites.js`, `game.js` and `app.js`. They are plain
+   * classic scripts, so by the time anything here runs on a `session:ready` that resolved
+   * early, `window.Sprites` can be undefined and `currentVolunteerFaction` has not been
+   * reconciled against the content pack. Everything was read once, at first paint, and never
+   * again: the trainer's face came out an empty box and the team chip said "Unclaimed" while
+   * the Campus tab, reading the same variable a moment later, said "Team Kernel" about the
+   * same person.
+   *
+   * Three signals, because there are three different arrivals and no single one covers them:
+   * `load` for the scripts existing at all, `content` for the faction table, and `game:ready`
+   * for `state.head` and `levelFor` — which `game.init` only sets *after* awaiting
+   * `Sprites.ready` and a dynamic import, so subscribing to `Sprites.ready` here would have
+   * fired too early and left the face empty anyway.
    *
    * Only this panel is redrawn, not the tab. `paint()` rebuilds the attendance QR from
    * scratch, and a token minted thirty seconds ago should not be torn down and redrawn
@@ -568,13 +583,9 @@
   }
 
   // Whichever arrives last wins; both are cheap and idempotent.
-  window.addEventListener('load', () => {
-    repaintStanding();
-    // `Sprites.ready` settles after the memorabilia fetch. Subscribed here rather than at
-    // module scope because `window.Sprites` does not exist yet when this file is parsed.
-    window.Sprites?.ready?.then?.(repaintStanding, () => {});
-  });
+  window.addEventListener('load', repaintStanding);
   N.onEvent('content', repaintStanding);
+  N.onEvent('game:ready', repaintStanding);
 
   N.onEvent('presence:transport', () => paint());
   N.onEvent('presence:nack', () => paint());

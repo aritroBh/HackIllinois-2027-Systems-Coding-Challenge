@@ -351,6 +351,15 @@
     paintChip();
     if (state.optIn) api.start();
     else api.stop();
+    // The face follows the switch.
+    //
+    // An avatar's `shareOptIn` is fixed at upload time, so a player who made their trainer
+    // while hidden and then turned this on kept a face the moderation queue could not see
+    // and nobody else could fetch — after doing exactly what the app told them to do. Going
+    // the other way matters more: turning the switch off has to withdraw the face as well as
+    // the position, or "hidden" would be true of where you are and false of what you look
+    // like. Re-posting the same pixels is how `AvatarService.upload` updates the flag.
+    await window.game?.republishAvatar?.(state.optIn);
     return state.optIn;
   };
 

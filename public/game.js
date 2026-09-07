@@ -336,11 +336,34 @@
   }
 
   /**
+   * Send the sheet to the server, and say what the server made of it.
+   *
+   * Split out of `creatorKeep` because consent can change after the face is made: the
+   * `shareOptIn` flag is decided at upload time, and `AvatarService.upload` updates it in
+   * place when the same owner re-posts the same pixels. Without a second caller, a player who
+   * made a face while hidden and *then* turned on "Show me on the campus map" — which is
+   * exactly what the toast tells them to do — stayed invisible for ever, because nothing
+   * re-sent the consent. That is a worse failure than the original: the instruction is
+   * followed and nothing happens.
+   */
+  async function publishAvatar(sheet, share) {
+    const png = await sheetToPng(sheet);
+    if (!png) throw new Error('the browser could not encode the sheet');
+    const res = await window.Nexus.api(`/api/v1/avatars${share ? '?share=1' : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/png' },
+      body: png,
+    });
+    return res?.data?.status || null;
+  }
+
+  /**
    * Publish the avatar, then keep it locally whatever the server said.
    *
-   * This function used to end at `saveAvatar`, which writes to localStorage. Nothing else in
-   * the shipped client ever called `POST /api/v1/avatars` — I checked every file — so the
-   * entire server half of the avatar feature was unreachable: `AvatarService.upload` with its
+   * This function used to stop at `saveAvatar` — it went on to update the sprite, the sticker
+   * shelf and the HUD, but localStorage was as far as the *image* ever travelled. Nothing in
+   * the shipped client called `POST /api/v1/avatars` at all, so the entire server half of the
+   * avatar feature was unreachable: `AvatarService.upload` with its
    * IHDR bounds check and its re-encode-to-kill-polyglots step, the pending queue, the
    * lead console's Approve / Reject / Flag buttons, the per-owner deduplication, the takedown
    * path. The lead's "Avatar queue" panel could never show anything, because nothing could
@@ -382,24 +405,27 @@
     // position. Somebody who has chosen to be invisible does not have their face queued for
     // review as a side effect of making one, and the message below says which of the two
     // happened rather than leaving them to guess.
+    // `presence.state.optIn` first, and deliberately: `players.js`'s `setOptIn` writes it
+    // from the server's own `PATCH /me/presence` response, so after a toggle it is the
+    // *fresher* of the two. `session.user.presenceOptIn` is only refreshed when the session
+    // reloads, which is why it is the fallback rather than the source.
     const share = window.Nexus?.presence?.state?.optIn ?? window.Nexus?.session?.user?.presenceOptIn ?? false;
 
-    let note = "Looking sharp. That's you on the map now.";
+    let note;
     try {
-      const png = await sheetToPng(state.sheet);
-      if (!png) throw new Error('the browser could not encode the sheet');
-      const res = await window.Nexus.api(`/api/v1/avatars${share ? '?share=1' : ''}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'image/png' },
-        body: png,
-      });
+      const status = await publishAvatar(state.sheet, share);
       // PENDING is the normal answer, not a problem: a face other people will see is held
-      // for a lead to look at first.
-      note = !share
-        ? "Looking sharp. That's you on your own map. Turn on \u201cShow me on the campus map\u201d in Me to let other trainers see it."
-        : res?.data?.status === 'APPROVED'
-          ? "Looking sharp. That's you on the map now."
-          : "Looking sharp. That's you on your map now \u2014 a lead reviews it before other trainers see it.";
+      // for a lead to look at first. REJECTED is not — these exact pixels have already been
+      // turned down, `AvatarService.upload` deduplicates per owner and hands the old row
+      // straight back, and no queue will ever list it again. Saying "a lead reviews it"
+      // there would be a promise nothing intends to keep.
+      note = status === 'REJECTED'
+        ? 'That face was reviewed and turned down. Make a different one and try again.'
+        : !share
+          ? "Looking sharp. That's you on your own map. Turn on \u201cShow me on the campus map\u201d in Me and other trainers will see it too."
+          : status === 'APPROVED'
+            ? "Looking sharp. That's you on the map now."
+            : "Looking sharp. That's you on your map now \u2014 a lead reviews it before other trainers see it.";
     } catch (err) {
       note = `Saved on this device, but the organisers did not get it: ${err.message}`;
     }
@@ -778,18 +804,31 @@
         cmds.forEach((b) => { b.disabled = true; });
 
         encounterMessage(`${state.name.toUpperCase()} used ${attacking ? 'CONTEST' : 'REINFORCE'}!`);
-        await beat(400);
 
         const btn = document.querySelector(`.cmd[data-cmd="${cmd}"]`);
-        // The write's own answer, not a re-read of the cache it just invalidated.
-        const result = typeof battleOrFortifyGym === 'function'
-          ? await battleOrFortifyGym(enc.gymId, btn)
-          : null;
+        // The request goes out first and the beat runs beside it, rather than after it.
+        //
+        // Written the other way round — `await beat(400)` and then the POST — the decoration
+        // was sitting in front of the write, which is precisely what the comment above this
+        // block promises never happens. It also added 400 ms to every battle and widened the
+        // window the command lock exists to close. Starting the promise and then awaiting the
+        // beat keeps the same rhythm on screen and costs the write nothing: by the time the
+        // "used CONTEST!" line has been read, the answer is usually already back.
+        const pending = typeof battleOrFortifyGym === 'function'
+          ? battleOrFortifyGym(enc.gymId, btn)
+          : Promise.resolve(null);
+        await beat(400);
+        const result = await pending;
 
-        // Closed mid-flight: the write still happened and still counts, but there is no
-        // longer a stage to play it on, and re-opening one the player dismissed would be
-        // taking the tab back off them.
-        if (!state.encounter) break;
+        // Still the same encounter?
+        //
+        // Identity, not truthiness. `!state.encounter` only catches a dismissal; it misses
+        // the case where the player closed this stage and opened a *different* gym while the
+        // request was in flight, because `state.encounter` is then a new object and the check
+        // passes. This gym's result would have been shaken onto that gym's stage, its CP
+        // number floated over the wrong monument, and the `setTimeout` at the end would have
+        // torn the new encounter down to re-open the old one.
+        if (state.encounter !== enc) break;
 
         if (!result) {
           encounterMessage('That move did not land. The reason is in the console panel.');
@@ -809,7 +848,7 @@
           setTimeout(() => floatOff(stage?.querySelector('.jrpg.you'), `+${result.karmaAwarded} KARMA`, '#FCB316'), 240);
         }
         await beat(520);
-        if (!state.encounter) break;
+        if (state.encounter !== enc) break;
 
         if (captured) {
           const g3 = (window.gymsCache || []).find((x) => x._id === enc.gymId);
@@ -822,7 +861,17 @@
           // and it is the only description of the write that cannot disagree with it.
           encounterMessage(String(result.message || ''));
         }
-        setTimeout(() => state.encounter && openEncounter(enc.gymId), captured ? 1800 : 1400);
+        // `openEncounter` is what re-enables the command list, so a re-open that bails —
+        // the gym is gone from the freshly reloaded cache — would leave the stage up with
+        // every command dead and no way out but closing the dialog.
+        setTimeout(() => {
+          if (state.encounter !== enc) return;
+          openEncounter(enc.gymId);
+          if (state.encounter === enc) {
+            document.querySelectorAll('.enc-stage .cmd').forEach((b) => { b.disabled = false; });
+            encounterMessage('That stronghold is no longer on the board. Close and refresh the territory list.');
+          }
+        }, captured ? 1800 : 1400);
         break;
       }
       case 'bag':
@@ -883,6 +932,15 @@
       drop.addEventListener('dragleave', () => drop.classList.remove('over'));
       drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer?.files?.[0]; if (f) creatorFromFile(f); });
     }
+    // Anything that draws from `state.head` or `levelFor` has to know when they are real.
+    //
+    // This function is async and awaits two things — `Sprites.ready` and a dynamic import of
+    // avatar.js — before `state.head` exists. `views/me.js` draws the trainer's face and
+    // level from exactly those, and it had no way to hear about this: subscribing to
+    // `Sprites.ready` was not enough, because that resolves *before* the continuation above
+    // runs, so a cold load could leave an entitled user looking at an empty face box and no
+    // level meter until some unrelated later repaint.
+    window.Nexus?.emit?.('game:ready', { hasAvatar: !!state.head });
   }
 
   const ACTIONS = {
@@ -966,6 +1024,25 @@
       return true;
     },
     onCampusReady, onProximity, gateSpins, openEncounter, closeEncounter,
+
+    /**
+     * Re-send the stored face with the consent that now applies.
+     *
+     * Called by `players.js` whenever the campus-map switch changes. Turning it on publishes
+     * a face that was uploaded privately; turning it off withdraws one, which is the same
+     * symmetry the position switch already has. No stored sheet means nothing to say.
+     */
+    async republishAvatar(share) {
+      if (!state.sheet) return false;
+      try {
+        await publishAvatar(state.sheet, !!share);
+        return true;
+      } catch (err) {
+        console.warn('[game] could not update avatar sharing:', err.message);
+        return false;
+      }
+    },
+
     handle(action, el) { const fn = ACTIONS[action]; if (fn) { fn(el); return true; } return false; },
     levelFor, levelProgress,
     onFactionChange() { syncFromCaches(); if (has('setPlayer') && window.campus.getPlayer?.()) { const p = window.campus.getPlayer(); window.campus.setPlayer({ x: p.x, z: p.z, name: state.name, faction: state.faction }); applyPlayerSprite(); } renderTrainer(); updateHud(true); },
