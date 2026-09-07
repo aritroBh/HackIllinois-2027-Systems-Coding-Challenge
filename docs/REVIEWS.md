@@ -1171,3 +1171,85 @@ run against the final code, not an earlier commit. 58 plan gates, and the CSP, p
 event-bridge, shell and docs gates. Docker image builds and boots in production against a real
 replica set, with every claimed-identity read re-probed against the running container in both
 auth modes.
+
+---
+
+## Rounds sixteen and seventeen — the front end, and seven claims that were not true
+
+The last two rounds pointed all three reviewers at the client: the layer a judge clicks, which
+thirteen earlier rounds had barely touched. Twenty-two findings. The most useful ones were not
+about the code that was written — they were about the sentences written next to it.
+
+### The one to read first: the renderer that never stopped
+
+`campus3d.js`'s frame loop guards on `if (!W || !H) return`. `resize()` sets those with
+`Math.max(1, …)`, so neither can ever be zero and **the guard could never fire**. Every inactive
+tab is `display: none`; lite mode hides the canvas outright. So the WebGL renderer went on doing
+full scene work behind a hidden canvas — on every tab, and in the mode that exists specifically
+to switch it off. `clientWidth`/`clientHeight` are the layout box and *are* zero for a hidden
+element, which is the question `W`/`H` cannot answer.
+
+This is the fourth instance of a check in this repository that reads a value which cannot take
+the failing state. It is worth naming as a class: **a guard is only a guard if you can say what
+makes it fire.**
+
+### Seven false comments, all written in round sixteen
+
+muse was given one instruction — find statements that are FALSE — and returned nine, seven of
+them sentences written in the immediately preceding commit:
+
+| Claim | Reality |
+|---|---|
+| "The two GPS watches never run at once" | Entering lite mode does not stop the renderer's walk. Two watches, two presence publishers, one stopped on unmount. |
+| "In lite mode this file is the only writer of `#hud-nearest`" | `updateHud` has nine callers; the frame callback is one. Switching to Campus overwrote it. |
+| "Kept in step by checkShell — order and ids must match" | The gate checked ids, not order. Added; it caught real drift on its first run. |
+| "It had drifted three tabs behind, still listing Chaos Lab" | The old nav listed five tabs, all still registered. The real fault was two role-gated tabs in a nav rendered before any session. |
+| "`roles: STAFF`, so the volunteers who check in could not reach it" | `STAFF` *includes* VOLUNTEER. The excluded role was HACKER, who cannot mint at all. |
+| "cream modules on ink" | `draw()` fills cream and paints the modules ink. The test code had it right; the prose did not. |
+| "the Trainer path still posts `{volunteerId, shiftId}`" | That path had been deleted in the same commit. |
+
+Every one would have been believed by a reader. This is the failure mode the review briefs now
+lead with, because it is the one this repository produces most.
+
+### Two gates of mine that were partly blind
+
+The `registerTab({…})` scanner used a lazy `[\s\S]{0,400}?`. That stops at the first `})` — an
+inner `addEventListener` close in `views/sos.js` — so it matched **nothing at all** in that file.
+`tab-sos` was invisible to the gate, and the "did the scan work" floor of 5 still saw nine hits
+from the other four files and stayed silent. A gate that cannot fail for one input is worse than
+no gate, because it is trusted.
+
+Separately, "open to every role" was tested by string-matching the identifier `EVERYONE`. Two
+views write the same five roles as an array literal, so both counted as gated and deleting their
+fallback buttons would have passed. Both fixed and both verified red.
+
+### What the demo-judge angle found that accuracy did not
+
+opencode was told to be a judge with five minutes to break it. It walked the click paths per
+role and found four dead ends where a labelled button does nothing: `showTab` refuses, logs a
+`console.warn` nobody sees, and leaves the reader on the page they were already on. BAG for a
+hacker, "Open the quest board" for a hacker, and the lite-mode Spin buttons under a readout
+saying "in range — spin it!".
+
+That last one is the shape worth remembering: **two panels disagreeing about the same fact**,
+which no amount of reading either panel alone would surface.
+
+It also found `sos-simulate` still registered after its button was removed. An action id is
+reachable from anything that carries it; that one posted fixtures as real tickets, and dispatch
+would have routed a real volunteer to a table where nobody needed help.
+
+### And a fix that broke the entitled user
+
+`Sync Adonix` was gated to organisers because the endpoint is `requireRole('ORGANIZER')` while
+the tab hosting it is `roles: STAFF`. The gating then went wrong twice: the call landed in
+`changeUserFaction` rather than `onSessionChange`, referencing a `user` not in that scope, and
+the session listener is registered *after* `await Nexus.session.ready`, so the account signed in
+at page load never reached the gate. The button was hidden from the only role entitled to it —
+found by checking it both ways in a browser rather than by reading it.
+
+### The state at the end
+
+340 unit tests across 31 files, including `tests/lite.test.ts`, which evaluates the real browser
+file against a hand-built window rather than asserting on its source. 58 plan gates. `verify.sh`
+exit 0. The QR renders to a canvas that was exported and decoded by an independent decoder back
+to the exact minted token. Both review trees were hashed before and after: no reviewer wrote.
