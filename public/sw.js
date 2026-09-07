@@ -111,7 +111,9 @@
   //        reads your exact position whether or not they have switched themselves on.
   // `v47`: the Turf Wars intro's monument count comes from the pack instead of the word
   //        "Fourteen", which the Campus intro had already been rewriting for months.
-  const VERSION = 'v47';
+  // `v48`: the Details link on a quest card opens a panel instead of writing one line to a
+  //        console on a tab you are not looking at.
+  const VERSION = 'v49';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

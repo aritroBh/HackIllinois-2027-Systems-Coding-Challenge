@@ -494,6 +494,7 @@ const CLICK_ACTIONS = {
   'chaos-drop': () => simulateDropCascade(),
   'chaos-cycle': () => resolveCyclicTrade(),
   'loot-close': () => closeLootModal(),
+  'shift-details-close': () => { const el = document.getElementById('shift-details'); if (Nexus.dialog) Nexus.dialog.close(el); else el?.classList.remove('open'); },
   'campus-reset': () => campusResetView(),
   'campus-cinema': () => toggleCinema(),
   'gyms-refresh': () => loadGymsData(),
@@ -663,17 +664,81 @@ async function fetchLeaderboard() {
   }
 }
 
+/**
+ * The Details link on a quest card, which used to open nothing.
+ *
+ * It fetched the shift and wrote one line to `logChaosTerminal` — the console panel on the
+ * War Room tab. A person pressing "Details" on the Quests board therefore saw **nothing at
+ * all**, and the information they asked for was rendered on a tab they were not looking at,
+ * for a role that may not even be able to open it. That is the fourth control this session to
+ * send its only output somewhere the presser cannot see, after `Nexus.toast`, the quest-claim
+ * refusals and `requirePlayerCoords`.
+ *
+ * The panel is built here rather than shipped in `index.html` because it exists only while it
+ * is open, and `scripts/checkShell.mjs` gates that file's contents — a permanently-hidden
+ * element there is one more thing for the gate to be wrong about. `Nexus.dialog` supplies the
+ * focus trap, Escape and return-focus, the same as the encounter stage.
+ *
+ * The field names are `baseKarma`, `surge.karmaAward` and `requiredSkills`, taken from the
+ * live payload rather than from memory. The first draft guessed `karmaValue`/`karma` and
+ * `requiredCertifications`, and the panel then rendered "0 KARMA" and "No certifications
+ * required" for a quest worth 110 — plausible values, no error, nothing to notice. A wrong
+ * field name in a template is indistinguishable from a real zero.
+ */
 async function viewShiftDetails(shiftId) {
+  let shift;
   try {
-    const shift = await apiGet(`/api/v1/shifts/${encodeURIComponent(shiftId)}`);
-    const confirmed = (shift.confirmedVolunteers || []).length;
-    const waitlisted = (shift.waitlistedVolunteers || []).length;
-    logChaosTerminal(
-      `[DETAILS] "${shift.title}" @ ${shift.location} — ${shift.filledSlots}/${shift.capacity} filled, ${confirmed} confirmed, ${waitlisted} waitlisted`
-    );
+    shift = await apiGet(`/api/v1/shifts/${encodeURIComponent(shiftId)}`);
   } catch (err) {
     logChaosTerminal(`[ERROR] Could not load shift: ${err.message}`);
+    window.game?.toast?.(`Could not load that quest: ${err.message}`);
+    return;
   }
+
+  const confirmed = (shift.confirmedVolunteers || []).length;
+  const waitlisted = (shift.waitlistedVolunteers || []).length;
+  logChaosTerminal(
+    `[DETAILS] "${shift.title}" @ ${shift.location} — ${shift.filledSlots}/${shift.capacity} filled, ${confirmed} confirmed, ${waitlisted} waitlisted`
+  );
+
+  const host = document.getElementById('shift-details') || (() => {
+    const el = document.createElement('div');
+    el.id = 'shift-details';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'shift-details-title');
+    document.body.appendChild(el);
+    return el;
+  })();
+
+  const when = (v) => { const d = new Date(v); return Number.isNaN(+d) ? '—' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const mine = myRegistrations.get(String(shift._id));
+  host.innerHTML = `
+    <div class="px loot-card" style="max-width:460px;text-align:left">
+      <div class="eyebrow">Quest</div>
+      <h3 id="shift-details-title">${esc(shift.title)}</h3>
+      <p class="ob-hint">${icon('pin', 'icon sm')} ${esc(shift.location)}</p>
+      <div class="ob-stats" style="margin:12px 0">
+        <span><b>${Number(shift.filledSlots) || 0}/${Number(shift.capacity) || 0}</b><small>PARTY</small></span>
+        <span><b>${waitlisted}</b><small>WAITING</small></span>
+        <span><b>${num(shift.surge ? shift.surge.karmaAward : shift.baseKarma)}</b><small>KARMA</small></span>
+      </div>
+      <p class="ob-hint">${esc(when(shift.startTime))} → ${esc(when(shift.endTime))}</p>
+      ${Array.isArray(shift.requiredSkills) && shift.requiredSkills.length
+        ? `<p class="ob-hint">Needs: ${shift.requiredSkills.map((c) => `<span class="badge-tag">${esc(humaniseCert(c))}</span>`).join('')}</p>`
+        : '<p class="ob-hint">No certifications required.</p>'}
+      ${mine ? `<p class="ob-hint">You are <b>${esc(String(mine).toLowerCase().replace(/_/g, ' '))}</b> on this quest.</p>` : ''}
+      <div class="btn-row" style="margin-top:14px">
+        <button class="pb pb-sm" type="button" data-action="shift-details-close">Close</button>
+      </div>
+    </div>`;
+  if (Nexus.dialog) Nexus.dialog.open(host, { initialFocus: host.querySelector('button') });
+  else host.classList.add('open');
+}
+
+/** ALL_CAPS certification ids read badly in a sentence. */
+function humaniseCert(v) {
+  return String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /* ------------------------------------------------------------------ *
