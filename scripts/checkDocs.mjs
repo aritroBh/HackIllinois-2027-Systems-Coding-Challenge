@@ -202,22 +202,46 @@ for (const rel of docs) {
     }
   }
 
-  // 3. Backticked repository paths.
+  // 3. Backticked repository paths, and the line numbers attached to them.
+  //
+  // `src/presence/service.ts:608` is the clickable form an editor turns into a jump, and it is
+  // how this repository cites a specific line in prose. The first version of this rule stripped
+  // one trailing punctuation character and then looked the whole string up as a path, so every
+  // such citation was reported as a file that does not exist — a false positive on the most
+  // useful kind of reference in the docs.
+  //
+  // The fix is not to skip them. Splitting the line number off lets both halves be checked, and
+  // the second half is the one worth having: a citation that points past the end of a file is
+  // exactly the drift this gate exists to catch, and it is invisible to a reader who trusts it.
+  // What is deliberately NOT checked is whether the line still contains what the sentence says
+  // it does — no cheap check can know that, and pretending otherwise would be a gate that
+  // passes for the wrong reason.
   for (const m of text.matchAll(/`([^`\n]+)`/g)) {
     const raw = m[1].trim();
     if (!raw.includes('/') || /[ *?<>|$(){}]/.test(raw) || raw.includes('://')) continue;
     const candidate = raw.replace(/^\.\//, '').split('#')[0].replace(/[.,;:]$/, '');
-    const top = candidate.split('/')[0];
-    const looksLikeRepoPath = REPO_DIRS.has(top) || SOURCE_EXT.test(candidate);
+    const lineRef = /^(.+\.[A-Za-z0-9]+):(\d+)$/.exec(candidate);
+    const pathPart = lineRef ? lineRef[1] : candidate;
+    const lineNo = lineRef ? Number(lineRef[2]) : 0;
+    const top = pathPart.split('/')[0];
+    const looksLikeRepoPath = REPO_DIRS.has(top) || SOURCE_EXT.test(pathPart);
     if (!looksLikeRepoPath) continue;
-    if (INTENTIONALLY_ABSENT.some((re) => re.test(candidate))) continue;
+    if (INTENTIONALLY_ABSENT.some((re) => re.test(pathPart))) continue;
     // A directory reference may be written with a trailing slash.
-    const trimmed = candidate.replace(/\/$/, '');
-    if (BASES.some((base) => fs.existsSync(path.join(base, trimmed)))) continue;
+    const trimmed = pathPart.replace(/\/$/, '');
+    const base = BASES.find((b) => fs.existsSync(path.join(b, trimmed)));
+    if (base) {
+      const full = path.join(base, trimmed);
+      if (!lineNo || fs.statSync(full).isDirectory()) continue;
+      const lines = fs.readFileSync(full, 'utf8').split('\n').length;
+      if (lineNo <= lines) continue;
+      problems.push(`${rel}: names \`${candidate}\`, but ${trimmed} has only ${lines} lines`);
+      continue;
+    }
     // `src/models/*.model.ts` style wildcards are skipped above; a `<pack>` placeholder is not
     // a path anybody can check, so treat an angle-bracketed segment as intentional.
-    if (/[<>]/.test(candidate)) continue;
-    problems.push(`${rel}: names \`${candidate}\`, which does not exist`);
+    if (/[<>]/.test(pathPart)) continue;
+    problems.push(`${rel}: names \`${pathPart}\`, which does not exist`);
   }
 }
 

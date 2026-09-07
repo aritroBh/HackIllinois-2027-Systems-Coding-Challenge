@@ -197,8 +197,15 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
    jittered by a per-hour stable offset, and published one tick late.
 4. Once a second the server builds the world once, shares one interest computation per
    fifty-metre cell, and sends each client the nearest sixty players as eight-byte rows plus
-   crowd counts for the rest. At five thousand clients that is about fifty milliseconds of CPU
-   a second, sliced so it never holds the event loop for more than about ten.
+   crowd counts for the rest. The cost of that tick depends on how the crowd is spread far more
+   than on any figure quotable here: a scattered crowd costs ~2.7x a venue-clustered one, because
+   scattering is what defeats the per-cell sharing. Measured p50 on a loaded dev machine was
+   59 ms clustered and 162 ms scattered per second at five thousand sessions; an earlier laptop
+   run gave ~50 ms and ~115 ms. Work is sliced against an 8 ms budget, but the clock is checked
+   once every thirty-two sessions rather than every one, so a slice can overrun it — the longest
+   contiguous block measured is 12.2 ms. `docs/PRESENCE.md` carries both runs, the ladder
+   thresholds, and the tool to re-measure; treat the milliseconds as a property of the machine and
+   the ratio as the property of the code.
 5. **Privacy is symmetric between players, with one exception.** Opting out hides you from
    other players and stops your map showing them. A lead's roster still counts you, which is
    the one asymmetry and is stated in `docs/PRESENCE.md`.

@@ -66,12 +66,27 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
-  // Comma-separated IPv4 CIDRs of the venue's NAT egress. These get a **10x allowance** on the
-  // two per-IP limiters that consult them (`authExchangeLimiter`, `ipCeilingLimiter`), never an
-  // exemption — the venue is the one place a shared address is legitimately hot, and it is also
-  // where an attacker on the Wi-Fi sits. `anonymousLimiter` does not widen for them at all.
-  // This said the ceilings "do not apply", which would have had an operator expect no per-IP
-  // limit at the door and be surprised by one.
+  // Comma-separated IPv4 CIDRs of the venue's NAT egress. Three things consult this list, and
+  // they do not all treat it the same way. The difference is the part an operator has to know:
+  //
+  //   - `authExchangeLimiter` (`middleware/rateLimiter.ts`) — 10x allowance, never an exemption.
+  //   - `ipCeilingLimiter`    (`middleware/rateLimiter.ts`) — 10x allowance, never an exemption.
+  //   - `StreamLimiter`'s PER_IP ceiling (`common/streamLimits.ts`) — a full **exemption**. The
+  //     per-IP stream check is skipped outright for a trusted address, so one venue NAT address
+  //     can hold stream slots up to the global and per-account caps with no per-IP bound at all.
+  //     The separate anonymous ceiling (`ANON_PER_IP`) still applies to it.
+  //
+  // So listing a range you do not actually control gives away the per-IP stream ceiling for it.
+  // The venue is the one place a shared address is legitimately hot, and it is also where an
+  // attacker on the Wi-Fi sits. `anonymousLimiter` does not widen for them at all.
+  //
+  // This comment has now been wrong twice in the same spot, which is worth leaving on the record.
+  // It first said the ceilings "do not apply", so an operator would expect no per-IP limit at the
+  // door and be surprised by one. The correction said "the two per-IP limiters that consult them
+  // ... never an exemption" — still wrong, and wrong in the more dangerous direction: the stream
+  // table is a third consumer and it is the one that genuinely does exempt. Both versions read as
+  // authoritative and neither was. Count the callers before writing "the two":
+  // `grep -rn isTrustedEgress src/`.
   TRUSTED_EGRESS_CIDRS: z.string().default(''),
   /** Content pack directory name under CONTENT_DIR — a bare name, never a path. */
   CONTENT_PACK: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'CONTENT_PACK must be a bare lowercase directory name').default('hackillinois-2027'),

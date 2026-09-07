@@ -29,9 +29,14 @@
  * the two probes. `GET /api/v1/stats/events` is mounted ahead of the stack for the same
  * reason and is bounded instead by the stream-slot table in `common/streamLimits.ts`.
  *
- * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on
- * the per-IP limiters, never an exemption: the venue is the one place a shared address is
- * legitimately hot, but it is also where an attacker on the Wi-Fi sits.
+ * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on the
+ * per-IP limiters *in this file*, never an exemption: the venue is the one place a shared
+ * address is legitimately hot, but it is also where an attacker on the Wi-Fi sits.
+ *
+ * That qualifier is load-bearing rather than pedantic. The stream-slot table in
+ * `common/streamLimits.ts` reads the same list and *skips* its PER_IP ceiling for a trusted
+ * address, so "never an exemption" is true here and false one file over. `src/config/env.ts`
+ * enumerates all three consumers next to the variable itself.
  *
  * `TRUST_PROXY_HOPS` decides what "per IP" means. Left at 0 behind a proxy, every client
  * collapses into one bucket and the whole event shares a single allowance; `app.ts` sets

@@ -902,7 +902,7 @@ encounter with no keyboard exit, 7 px labels, and unvalidated content.
 
 ```text
 ========================================================================================
-VERIFICATION MATRIX — 29 suites, 306 tests
+VERIFICATION MATRIX — 34 suites, 375 tests (snapshot, 2026-09-07)
 ========================================================================================
 Run `npm test` for the authoritative figure; the numbers above are a snapshot, not a claim.
 

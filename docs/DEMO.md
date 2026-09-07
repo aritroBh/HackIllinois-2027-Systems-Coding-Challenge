@@ -145,12 +145,30 @@ or the coordinates.
 
 Opt in on two devices and watch them appear on the campus.
 
-The number to lead with: **the tick that builds those frames costs about fifty milliseconds
-of CPU a second at five thousand sessions**, because the expensive part is computed once per
-fifty-metre cell and shared by everyone standing in it. Say where that came from — a laptop
-run recorded in `docs/PRESENCE.md` — and say the other number in the same breath: about
-115 ms when the crowd is artificially scattered, which is the layout the sharing does not
-help. The slice budget is 8 ms and the measured worst hold is about 11 ms.
+The number to lead with is a **ratio, not a millisecond count**: an artificially scattered crowd
+costs roughly **2.7x** what a venue-clustered one does, because the expensive part is computed
+once per fifty-metre cell and shared by everyone standing in it. Scattering is precisely what
+defeats that sharing. The ratio is the property of the code and it is the one that survives being
+run on somebody else's machine.
+
+Give absolute numbers only with the machine attached, because the two runs in `docs/PRESENCE.md`
+disagree by 40%. A laptop recorded ~50 ms clustered and ~115 ms scattered per second at five
+thousand sessions; a re-measurement on 2026-09-07, on a dev machine that had been running test
+suites and three review agents all day, gave p50 **59 ms** clustered and p50 **162 ms** scattered.
+Quote the re-measurement and name it as a loaded machine — this is a hardware gap, not a
+regression. Do not quote "about 115 ms": it is not a fair description of 162 ms, and the older
+figure is the one a demo audience will write down.
+
+The slice budget is 8 ms and the longest contiguous hold measured is **12.2 ms**. Both are true
+and the second is not a violation of the first: the tick checks the clock every thirty-second
+session rather than every one (`src/presence/service.ts:608`), because reading it five thousand
+times would cost a measurable share of the budget it is policing — so a slice can run past 8 ms
+before the next check sees it. Slicing bounds the block; it does not pin it under the budget.
+
+One number to know before somebody else finds it: scattered p95 was 211 ms, which is *above* the
+200 ms rung-1 degradation threshold. That run stayed on rung 0 with no skipped ticks, but on a
+machine like that one the scattered layout sits at the boundary rather than comfortably inside it.
+Re-measure with `scripts/benchmarks/presenceTick.ts` before quoting any of this at an event.
 
 The privacy rules are the part worth being proud of:
 
@@ -186,7 +204,8 @@ and lidar is a step you run yourself. The README used to imply the good sources 
 
 ## What to say about how it was built
 
-The suite is 32 files and 347 tests, and the interesting ones are invariants rather than
+The suite is 34 files and 375 tests as of 2026-09-07 — a snapshot, not a claim; `npm test`
+prints the authoritative figure — and the interesting ones are invariants rather than
 coverage: fifty racing registrations against two seats, ten concurrent bounty reservations
 against a budget for three granting exactly three, twenty phones on one sponsor poster
 producing one winner and nineteen refusals, a lead who cannot spin another player's
