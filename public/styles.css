@@ -120,8 +120,8 @@ body {
   background: var(--ground);
   color: var(--cream);
   font-family: var(--f-body);
-  font-size: 17px;
-  line-height: 1.15;
+  font-size: 19px;
+  line-height: 1.2;
   min-height: 100dvh;
   display: flex; flex-direction: column;
   overflow-x: hidden;
@@ -151,7 +151,7 @@ img.pxi, canvas.pxi { image-rendering: pixelated; image-rendering: crisp-edges; 
 /* ---------------- Type helpers ---------------- */
 
 .hud-label, .label, .eyebrow {
-  font-family: var(--f-hud); font-size: 9px; line-height: 12px; letter-spacing: 0.5px;
+  font-family: var(--f-hud); font-size: 11px; line-height: 15px; letter-spacing: 0.6px;
   color: var(--mute); text-transform: uppercase;
 }
 .eyebrow { margin-bottom: 6px; }
@@ -179,12 +179,12 @@ img.pxi, canvas.pxi { image-rendering: pixelated; image-rendering: crisp-edges; 
 .px.inset, .panel.inset { background: var(--inset); box-shadow: none; }
 .px.flat { box-shadow: inset 2px 2px 0 var(--edge); }
 .panel-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
-.panel-head h3 { font-size: 20px; }
+.panel-head h3 { font-size: 23px; }
 
 .pb, .btn {
   --face: var(--orange); --base: var(--orange-dk); --txt: var(--ink);
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  font-family: var(--f-hud); font-size: 9px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
+  font-family: var(--f-hud); font-size: 10px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
   color: var(--txt); background: var(--face);
   border: 2px solid var(--ink); padding: 9px 14px; min-height: 30px;
   box-shadow: 0 4px 0 0 var(--base), 0 4px 0 2px var(--ink);
@@ -200,7 +200,7 @@ img.pxi, canvas.pxi { image-rendering: pixelated; image-rendering: crisp-edges; 
 .pb-danger, .btn-danger { --face: var(--pink); --base: #A31E58; --txt: var(--ink); }
 .pb-patina, .btn-faction { --face: var(--patina-lt); --base: var(--patina); --txt: var(--ink); }
 .pb-live { --face: var(--prairie-lt); --base: var(--prairie); }
-.pb-sm, .btn-sm { padding: 6px 10px; min-height: 26px; font-size: 8px; }
+.pb-sm, .btn-sm { padding: 7px 11px; min-height: 28px; font-size: 9px; }
 select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 .link { background: none; border: 0; color: var(--cream-dim); font-family: var(--f-body); font-size: 15px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .link:hover { color: var(--cream); }
@@ -209,7 +209,7 @@ select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .sticker, .tag {
-  display: inline-block; font-family: var(--f-hud); font-size: 9px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
+  display: inline-block; font-family: var(--f-hud); font-size: 10px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
   padding: 5px 8px; background: var(--harvest); color: var(--ink);
   border: 2px solid var(--ink); box-shadow: var(--shadow-sm);
   transform: rotate(-5deg); white-space: nowrap;
@@ -236,7 +236,7 @@ select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 .segbar i, .seg i { flex: 1; background: var(--inset); }
 .segbar i.on, .seg i.on { background: var(--orange); }
 .seg.is-full i.on { background: var(--pink); }
-.seg-label { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--f-hud); font-size: 8px; color: var(--mute); text-transform: uppercase; }
+.seg-label { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--f-hud); font-size: 9px; color: var(--mute); text-transform: uppercase; }
 .seg-label .wait { color: var(--harvest); }
 .meter { height: 12px; background: var(--ink); padding: 2px; }
 .meter-fill { height: 100%; background: var(--c, var(--orange)); transition: width 220ms steps(6); }
@@ -729,3 +729,67 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .announce-tone { text-transform: uppercase; letter-spacing: .08em; font-size: 10px; color: var(--ink); }
 .announce-msg { color: var(--fg); }
 .announce-by { color: var(--ink); font-size: 11px; }
+
+/* ---------------- Pixel dropdown (pxselect.js) ----------------
+   A native <select> draws its popup in the OS, where CSS cannot reach it — rounded corners,
+   system highlight, a checkmark in a font we never chose. This is the replacement, built from
+   the same parts as .pb: 2px ink border, the hard 4px offset shadow, Silkscreen, and the
+   press-down on :active. The <select> itself stays in the DOM as the value; see pxselect.js. */
+
+.pxsel { position: relative; display: inline-flex; vertical-align: top; }
+.pxsel-native { display: none; }
+
+/* The closed control is a .pb — it inherits that class — plus room for the caret. */
+.pxsel-btn { padding-right: 10px; gap: 10px; }
+.pxsel-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+.pxsel-caret {
+  flex: none; width: 0; height: 0;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
+  transition: transform var(--t) steps(2);
+}
+.pxsel[data-open="1"] .pxsel-caret { transform: rotate(180deg); }
+/* Held down while the menu is open, so the control reads as engaged rather than merely focused. */
+.pxsel[data-open="1"] .pxsel-btn { transform: translateY(3px); box-shadow: 0 1px 0 0 var(--base), 0 1px 0 2px var(--ink); }
+
+.pxsel-list {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  margin: 0; padding: 4px; list-style: none;
+  min-width: 100%; width: max-content; max-width: min(92ch, 86vw); max-height: 300px; overflow-y: auto;
+  background: var(--panel); border: 2px solid var(--ink);
+  box-shadow: 0 4px 0 0 var(--inset), 0 4px 0 2px var(--ink), 6px 10px 0 rgba(8, 21, 43, 0.45);
+}
+.pxsel.drop-up .pxsel-list { top: auto; bottom: calc(100% + 6px); }
+
+.pxsel-opt {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px; cursor: pointer;
+  font-family: var(--f-hud); font-size: 10px; line-height: 15px; letter-spacing: 0.5px;
+  text-transform: uppercase; color: var(--cream-dim);
+}
+.pxsel-mark { flex: none; width: 10px; color: var(--orange); }
+/* Wraps rather than truncates. The closed control can ellipsis a long shift name because you
+   have already chosen it; the list is where you are deciding, and a venue and a time cut off
+   mid-word is the moment this control fails at its one job. */
+.pxsel-text { min-width: 0; }
+.pxsel-opt[aria-selected="true"] { color: var(--cream); }
+/* One highlight, driven by the keyboard and by hover alike, so both routes look the same. */
+.pxsel-opt.is-active { background: var(--orange); color: var(--ink); }
+.pxsel-opt.is-active .pxsel-mark { color: var(--ink); }
+.pxsel-opt[aria-disabled="true"] { color: var(--mute); cursor: not-allowed; }
+.pxsel-opt[aria-disabled="true"].is-active { background: var(--edge); color: var(--mute); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pxsel-caret { transition: none; }
+}
+
+/* ---------------- The lead broadcast row ----------------
+   This div had no rule at all, so `.px-input { width: 100% }` took the whole line and the
+   minutes field appeared on a row of its own, full-bleed, under labels that referred to
+   controls beside them. It is a wrapping flex row, and the number input is sized to the three
+   digits it accepts rather than to whatever space is left. */
+
+.lead-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 12px; }
+.lead-row .hud-label { margin: 0; flex: none; }
+.lead-row .px-input { flex: none; width: 7ch; text-align: center; }
+.lead-row .pb { margin-left: auto; }

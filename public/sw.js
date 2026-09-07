@@ -54,7 +54,10 @@
   // `v2`: the shell list gained the nine scripts the per-tab split had left out, and the
   // clear-card handler learned to acknowledge.
   // `v3`: the handover teardown in views/lead.js and app.js, and the SOS cache it clears.
-  const VERSION = 'v3';
+  // `v4`: pxselect.js joins the shell, and the type scale moved — a cached v3 bundle would show
+  //       the old sizes and the OS dropdown next to a page that had stopped using either.
+  // `v5`: dropdown options wrap instead of truncating, and only one list opens at a time.
+  const VERSION = 'v5';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
@@ -82,6 +85,7 @@
     '/dashboard/session.js',
     '/dashboard/theme.js',
     '/dashboard/lite.js',
+    '/dashboard/pxselect.js',
     '/dashboard/a11y.js',
     '/dashboard/pwa.js',
     '/dashboard/plugins.js',
