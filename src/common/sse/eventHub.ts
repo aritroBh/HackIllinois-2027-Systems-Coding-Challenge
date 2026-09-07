@@ -408,7 +408,17 @@ class SSEBroadcastHub {
       if (set) set.add(client);
       else this.byChannel.set(ch, new Set([client]));
     }
-    if (account) {
+    // Targeted delivery is filed under a **proved** account only.
+    //
+    // `byAccount` is what `sendToAccount` addresses, and the things it addresses are the most
+    // personal frames the hub carries — a ticket's own parties get the *whole* SOS document
+    // there, coordinates and all. Filing on a bare `account.id` meant that in `legacy` a stream
+    // opened with `?volunteerId=<victim>` was registered as the victim, and every message
+    // intended for them was delivered to whoever had typed their public id.
+    //
+    // A claimed identity keeps its broadcast channels, which are redacted for it like any
+    // other unproved caller; what it loses is the ability to be somebody else's inbox.
+    if (account && account.source === 'session') {
       const set = this.byAccount.get(account.id);
       if (set) set.add(client);
       else this.byAccount.set(account.id, new Set([client]));

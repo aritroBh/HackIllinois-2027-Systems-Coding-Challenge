@@ -33,7 +33,7 @@ In order, and each for a reason:
 - **rate** — one accepted sample every 2 s.
 - **speed** — over 15 m/s (campus buses do about 10) three times in a row is a 60 s mute, recorded in `presenceMutes` with a TTL index. The store re-reads it before `hello_ack`, so reconnecting does not clear it.
 
-Published positions are snapped to a 20 m grid, jittered by a per-hour stable offset of up to 8 m, and released one tick late. The exact position exists only in memory, and only three things read it.
+Published positions are snapped to a 20 m grid, jittered by a per-hour stable offset of up to 8 m, and released one tick late. The jitter is derived from a server secret, not from the account id and the clock: both of those are values a viewer already holds (the id ships in every join), so keying it on them would have let any viewer recompute the offset and subtract it, leaving the grid snap doing all the work. The exact position exists only in memory, and only three things read it.
 
 ## Who can see an exact position
 

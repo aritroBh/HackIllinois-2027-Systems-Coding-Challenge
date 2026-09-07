@@ -299,7 +299,14 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
 
     // Resolve SOS ticket and award Karma bounty (assignee-bound: only the
     // dispatched volunteer may resolve — the old test resolved as a bystander).
-    const assigneeId = dispatchRes.ticket.assignedVolunteerId!.toString();
+    //
+    // The responder's id comes from `dispatchedVolunteer`, which is the field that exists to
+    // carry it. It used to be read off `ticket.assignedVolunteerId`, and that stopped working
+    // when the ticket returned to a caller who has not proved they are a lead became the
+    // redacted shape: this call passes no viewer at all, so it gets what an ordinary
+    // dispatcher gets. Nothing is lost — a dispatcher is told who they dispatched — and the
+    // test now reads the field a real client would.
+    const assigneeId = String((dispatchRes.dispatchedVolunteer as { _id: unknown })._id);
     const resolvedTicket = await SOSService.resolveTicket(
       ticket._id.toString(),
       assigneeId

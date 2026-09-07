@@ -73,6 +73,40 @@ registration in place, so nothing sets it. Anyone wiring it up must change
 `CHECKED_IN` — at the same time, and must cancel the pending swap on check-in, or a trade could
 hand the shift away underneath an attendance row. Noted at both ends in the code.
 
+### A published heading is derived from the unfuzzed track
+
+When a client does not supply a heading, the server computes one from the difference of two
+**exact** positions and publishes it beside the **fuzzed** one. It is quantised to a byte
+(~1.4°) on the wire, so it is not a position and does not by itself invert the 20 m grid — but
+it is a quantity derived from coordinates the layer otherwise promises never leave memory, and
+enough of them describe a path more precisely than the fuzz intends. Deriving it from the
+published track instead would close it, at the cost of a sprite that turns in 20 m steps.
+
+### Presence entries outlive the event that should end them
+
+Three cases, all bounded by the 120-second store expiry and none of them instant:
+
+- **A handover leaves a ghost.** The client stops without telling the server (deliberately —
+  the cookie already belongs to the new account, and a `DELETE` from there would erase *them*),
+  so the departing account's last fuzzed position lingers until the idle sweep or expiry.
+- **`DELETE /presence` is not sticky against an open WebSocket.** It removes the entry and drops
+  the SSE session, but a socket that keeps publishing recreates the entry, because the
+  database's `presenceOptIn` is untouched by that route. Only a client that also closes its
+  socket — which the shipped one does — makes it hold. `PATCH /me/presence { optIn: false }` is
+  the one that persists.
+- **Going off shift hides you within a tick or two, not immediately.** `onDuty` is refreshed
+  from a 30-second roster read and applied on the account's next sample, so a stationary
+  volunteer whose shift has just ended can remain visible to ordinary viewers briefly.
+
+`docs/PRESENCE.md` describes all three as immediate. They are eventual, within two minutes.
+
+### `store.cells` never deletes an emptied cell
+
+The spatial index removes an id from its cell's set but never deletes the set when it empties,
+so the map grows monotonically. It is bounded by campus geometry — the bounding-box gate refuses
+any sample outside it, so the key space is a few thousand cells, not the globe — which is why it
+is recorded here rather than fixed.
+
 ### `presenceAudit`'s `lead-view` reason is designed and unbuilt
 
 The union member exists; no route writes it. Left in place so a future per-player lead view has

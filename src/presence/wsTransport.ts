@@ -167,7 +167,31 @@ export function attachPresenceWs(server: http.Server): void {
       stale?.close(1013, 'replaced by a newer connection');
     }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    // The slot is acquired before the handshake and released by the socket's `close` handler,
+    // which is attached inside the callback below — so an upgrade that never reaches the
+    // callback leaks the slot permanently. A client that aborts the TCP connection mid-handshake
+    // or sends a malformed one does exactly that, and slots are the ceiling that decides whether
+    // real people can connect: leaking them is a denial of service that costs the attacker a
+    // half-open connection each.
+    //
+    // Guarded on both sides. `handleUpgrade` can throw synchronously, and a socket that errors
+    // or closes before the callback runs never calls it at all; `settled` makes the release
+    // idempotent so the normal path — where the callback does run and `close` releases later —
+    // cannot double-free.
+    let settled = false;
+    const releaseUnlessUpgraded = (): void => {
+      if (settled) return;
+      settled = true;
+      streamLimits.release(acquired.slot);
+    };
+    socket.once('error', releaseUnlessUpgraded);
+    socket.once('close', releaseUnlessUpgraded);
+
+    try {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+      settled = true; // the callback owns the slot now; `ws.on('close')` releases it.
+      socket.removeListener('error', releaseUnlessUpgraded);
+      socket.removeListener('close', releaseUnlessUpgraded);
       const id = `ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       const client = new WsPresenceClient(id, resolved.account, ws, acquired.slot);
       bySlot.set(acquired.slot.id, client);
@@ -196,7 +220,13 @@ export function attachPresenceWs(server: http.Server): void {
         presenceService.remove(id);
       });
       ws.on('error', () => { try { ws.terminate(); } catch { /* gone */ } });
-    });
+      });
+    } catch {
+      // A malformed handshake throws here rather than calling back. Release and drop the
+      // socket; without this the slot is held for the lifetime of the process.
+      releaseUnlessUpgraded();
+      try { socket.destroy(); } catch { /* already gone */ }
+    }
   });
 }
 

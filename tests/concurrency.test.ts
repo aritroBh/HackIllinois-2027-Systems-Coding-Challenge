@@ -6,6 +6,7 @@ import { Volunteer } from '../src/models/volunteer.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
 import { IdempotencyRecord, IdempotencyStatus } from '../src/models/idempotency.model';
 import { RegistrationService } from '../src/services/registration.service';
+import { eventHub } from '../src/common/sse/eventHub';
 
 describe('High-Concurrency Stress Test & Anti-Overselling Guard', () => {
   it('guarantees ZERO overbooking when 50 concurrent requests hit a 2-spot shift', async () => {
@@ -209,13 +210,33 @@ describe('a stalled predecessor cannot corrupt the record its successor now owns
     expect(committed!.status).toBe(IdempotencyStatus.COMMITTED);
     const owner = committed!.ownerToken;
 
-    // A different attempt on the same key — a predecessor that stalled and is now failing —
-    // runs the catch's write. It must not touch a record it does not own.
-    await IdempotencyRecord.updateOne(
-      { key, ownerToken: 'some-other-attempt-token', status: IdempotencyStatus.PENDING },
-      { $set: { status: IdempotencyStatus.FAILED } }
-    );
+    // Drive the *real* catch, rather than re-running its query by hand.
+    //
+    // The first version of this test issued the new filter itself and asserted nothing
+    // changed — which passes against the old unfenced code too, so it proved nothing about
+    // the fix. `eventHub.broadcast` runs after the commit, so making it throw is the honest
+    // way to reach the catch with a record that is already COMMITTED.
+    const broadcast = jest.spyOn(eventHub, 'broadcast').mockImplementation(() => {
+      throw new Error('wire down');
+    });
+    const second = uniqueKey('fence2');
+    const vol2 = await Volunteer.create({
+      name: 'Fence Two', email: `f2-${Date.now()}@illinois.edu`, certifications: [], karmaPoints: 0,
+    });
+    await expect(
+      RegistrationService.reserveShift({
+        shiftId: String(shift._id), volunteerId: String(vol2._id), idempotencyKey: second,
+      })
+    ).rejects.toThrow('wire down');
+    broadcast.mockRestore();
 
+    // The registration committed before the throw, so its record must still say so. Against
+    // the unfenced `{ key }` write this reads FAILED, and the client is told a reservation
+    // failed while its row exists.
+    const torn = await IdempotencyRecord.findOne({ key: second });
+    expect(torn!.status).toBe(IdempotencyStatus.COMMITTED);
+
+    // And the original record is untouched by any of it.
     const after = await IdempotencyRecord.findOne({ key });
     expect(after!.status).toBe(IdempotencyStatus.COMMITTED);
     expect(after!.ownerToken).toBe(owner);

@@ -983,3 +983,102 @@ twelve scattered comments.
 link resolves, every `npm run` script named exists, every repository path named exists. It found
 the `check:events` typo on its first run. It cannot check whether a true-looking sentence is
 true, which is what these rounds are for.
+
+---
+
+## Round fourteen — the layer nobody had read, and the fourth sibling, 2026-09-06
+
+Two targets, both chosen because no reviewer had seen either: the **previous round's own commit**
+(`5138aef`, unreviewed by anybody) and **`src/presence/`**, which thirteen rounds of attention on
+the REST surface had never touched despite it being the most privacy-sensitive code here.
+
+### The disclosure class found a fourth branch
+
+`dispatchNearestVolunteer` trims `dispatchedVolunteer` to four fields, buckets `distanceMeters`
+for non-leads, and empties `candidates` for them — and then returned the **raw ticket document**
+beside all that care, carrying the coordinates, the hacker's name, the table text and the medical
+category. The route admits any volunteer-kind caller, and in `legacy` an anonymous one.
+
+That is the same defect as the `sos` SSE channel, as `GET /sos/tickets` for a non-party, and as
+that route's own *party* exception — four branches, four rounds, each fixed alone and each
+leaving a sibling. There is now **one** `redactedTicket()` used by both call sites, so the shape
+is decided once.
+
+### A revoked session kept its map
+
+Nothing under `src/presence/` referenced `sessionVersion` — zero occurrences. Every HTTP route
+re-verifies the cookie per request and the SSE hub evicts on its heartbeat; the presence
+WebSocket authenticated once at the upgrade handshake and never again. A revoked or expired
+session kept publishing its position and receiving everybody else's for as long as the socket
+stayed open.
+
+`invalidate()` is what hid it: it removed the *lead privilege*, so the visible symptom of a
+demotion looked handled while the connection itself survived. `evictRevoked()` is public and
+called from the tick, following the precedent set when `eventHub.reauthorise()` was made public
+for the same reason.
+
+**The test for it needed three attempts, and the first two were wrong in instructive ways.** The
+first asserted the return value of a method the running tick had already called, so it read 0.
+The second asserted close code `4401` — which is also what the no-hello sweep sends, so it
+passed with the fix removed. It now sets `helloAt` to take that path off the table and asserts
+the session is *gone* rather than merely closed, and it was verified red against a stubbed
+`evictRevoked` before being believed.
+
+### The jitter defended against nobody who was looking
+
+Published positions are snapped to a 20 m grid and offset by a per-hour jitter of up to 8 m.
+That jitter was `sha256(accountId : hourIndex)` — and **both inputs are things a viewer already
+holds**: the raw account id ships in every join record, and the hour comes from the `serverTime`
+in `hello_ack`. Any viewer could recompute the exact offset applied to anybody they could see and
+subtract it. `docs/PRESENCE.md` presented the snap and the jitter as layered protection; the
+second layer was decorative against the only party it mattered against. It is now keyed on
+`SESSION_SECRET`, which keeps every property it was chosen for and removes that one.
+
+### Also closed
+
+| Finding | Source | Severity |
+|---|---|---|
+| Dispatch returned the whole SOS ticket — coordinates, name, table, medical category — to any volunteer, or anonymous in `legacy`. | muse | P0 |
+| A revoked session kept its presence socket, publishing and receiving indefinitely. | muse, agy | P0 |
+| `GET /avatars/:hash` sent `private, max-age=60`, so a shared browser served the previous occupant's **unpublished** face photo from disk, past the session check. The same defect `/me/card` had been fixed for. | opencode, muse | P1 |
+| The per-hour presence jitter was computable by any viewer. | muse | P1 |
+| A claimed `?volunteerId=` was filed in the SSE hub's `byAccount`, so **targeted** frames — including a ticket's full document to its parties — were delivered to the impersonator. | muse | P1 |
+| `POST /presence` on `requireAccount` let a claimed identity **publish a position as somebody else** and allocate an SSE session under their id. `PATCH` and `DELETE` had both been tightened; this one was left. | agy | P1 |
+| Non-lead dispatchers received `positionSource` and `positionAgeMs` for a named winner — a liveness oracle usable without publishing anything, against the symmetric opt-out promise. | muse | P1 |
+| A WebSocket stream slot was acquired before `handleUpgrade` and released only inside its callback, so an aborted or malformed handshake leaked the slot permanently. | agy | P1 |
+| `ARCHITECTURE.md` said the OSM extracts are committed; `.gitignore` excludes them. | opencode | P2 |
+| `checkShell` matched only `src="…​.js"`, so a stylesheet or font added to the page and missing from the precache list would slip past the gate written to catch exactly that drift. Now 22 assets, not 19. | opencode | P2 |
+| Two misattributions in `docs/DATA-MODEL.md`: a heading naming four ledgers over seven sections, and `ownerToken` credited with what `requestHash` does. | opencode | P2 |
+
+### The test that certified nothing
+
+Both reviewers independently caught that the previous round's regression test **could not fail**:
+it issued the fixed `updateOne` itself and asserted Mongo's filter semantics, never invoking the
+`catch` it was written for. It passes identically against the broken code. It now drives the real
+path by making the post-commit broadcast throw, and was verified red — `Expected: COMMITTED,
+Received: FAILED` — before being trusted.
+
+### My own harness manufactured a finding, for two reviewers at once
+
+Both opencode and muse reported that the new `checkDocs` gate fails on a clean tree, which would
+mean CI red at HEAD. It does not: `design/osm/` **is** tracked (the `.overpass` queries and
+`manifest.json`; only the fetched extracts are ignored), and a `git archive` of HEAD passes.
+They both saw it fail because the `rsync` building their scratch copies excluded that directory.
+The exclusion list that exists to keep reviews cheap produced a confident, identical, wrong P1
+from two independent reviewers — worth remembering next time three of them agree.
+
+### Recorded rather than fixed
+
+A published heading is derived from the unfuzzed track (quantised to ~1.4° on the wire); presence
+entries outlive a handover, a `DELETE` against an open socket, and the end of a shift by up to
+the 120-second expiry; and `store.cells` never deletes an emptied cell, bounded by the
+bounding-box gate to a few thousand keys. All four are now in `docs/LIMITATIONS.md`.
+
+### Checked and clean
+
+muse confirmed the exact-position reader set holds: `presenceStore.all` / `get` /
+`nearestVolunteers` have exactly the three audited call sites, and `near()` / `clusters()` are
+test-only. My own pass verified the same and two things beyond it — the presence layer performs
+exactly one database write (a mute row, carrying no coordinates), and opt-out symmetry is
+enforced explicitly at two levels rather than emerging by accident: opting out removes the store
+entry, which nulls the cohort, which returns an empty frame.

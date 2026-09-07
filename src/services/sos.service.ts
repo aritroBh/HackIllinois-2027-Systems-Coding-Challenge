@@ -88,6 +88,33 @@ const isProvenLead = (viewer?: { role?: string; source?: string }): boolean =>
   viewer?.source === 'session' && isLeadRole(viewer.role);
 
 /**
+ * The only shape of an SOS ticket a caller who is not a proved lead or a party may receive.
+ *
+ * Enough to render a queue and decide whether to help; nothing that says **where a named person
+ * is or what is wrong with them**. Withheld: `coordinates`, `tableLocation`, `hackerName`,
+ * `description`, `createdById`, `assignedVolunteerId`.
+ *
+ * This lives in one function because the same disclosure has now been reopened four times in
+ * four different branches — the `sos` SSE channel, `GET /sos/tickets` for a non-party, that same
+ * route's *party* exception, and the dispatch response, which returned the whole Mongoose
+ * document while every other field beside it was being carefully trimmed. Each was fixed on its
+ * own and each left a sibling. A shared shape means the next reader has one thing to check
+ * rather than four, and adding a field to it is a decision made once.
+ */
+function redactedTicket(t: ISOSTicket): Record<string, unknown> {
+  const venue = resolveVenue(t.tableLocation);
+  return {
+    _id: t._id,
+    status: t.status,
+    venueKey: venue.matched ? venue.key : null,
+    category: t.category,
+    urgency: t.urgency,
+    karmaBounty: t.karmaBounty,
+    createdAt: t.createdAt,
+  };
+}
+
+/**
  * Distances shown to non-leads are rounded to this, so they cannot be used to range.
  *
  * Twenty-five metres, not ten, and measured against the *published* position rather than
@@ -398,7 +425,17 @@ export class SOSService {
     });
 
     return {
-      ticket: dispatched,
+      // Redacted unless the dispatcher proved they are a lead.
+      //
+      // `dispatchedVolunteer` is trimmed, `distanceMeters` is bucketed and `candidates` is
+      // emptied for an ordinary caller — and then the ticket itself went out as the raw
+      // document beside them, carrying the coordinates, the hacker's name, the table text and
+      // the medical category that all of that care was protecting. The route admits any
+      // volunteer-kind caller, and in `legacy` that includes an anonymous one.
+      //
+      // The responder who is actually sent still gets the whole thing: it is delivered to them
+      // on the targeted `me` channel, which is the path that already asks who they are.
+      ticket: isLead ? dispatched : (redactedTicket(dispatched) as unknown as ISOSTicket),
       // Only what the dispatcher needs to see; never the full account document (email, phone,
       // identities, sessionVersion).
       dispatchedVolunteer: {
@@ -412,8 +449,15 @@ export class SOSService {
       // ordinary caller's number is measured to the published position rather than merely
       // rounded off the exact one.
       distanceMeters: isLead ? shortestDistance : coarsen(shortestPublishedDistance),
-      positionSource: winner!.positionSource,
-      positionAgeMs: winner!.ageMs,
+      // A lead gets the live fix's age; everybody else gets nothing from it.
+      //
+      // `positionSource` is a single bit — is this named volunteer publishing right now — and
+      // `positionAgeMs` sharpens it to the millisecond. Together they let any dispatcher probe
+      // the liveness of a colleague they have named, without publishing anything themselves,
+      // which is precisely the asymmetry the symmetric opt-out promise rules out. The
+      // dispatcher does not need either number: they need to know somebody is on the way.
+      positionSource: isLead ? winner!.positionSource : 'unknown',
+      positionAgeMs: isLead ? winner!.ageMs : null,
       /**
        * The runners-up, for the lead queue's "who else could go" column. Ordinary callers
        * get nothing here: they asked to dispatch, not to survey where everyone is.
@@ -830,15 +874,7 @@ export class SOSService {
         !!viewer.id &&
         (sameId(t.createdById, viewer.id) || sameId(t.assignedVolunteerId, viewer.id));
       if (isParty) return t;
-      return {
-        _id: t._id,
-        status: t.status,
-        venueKey: resolveVenue(t.tableLocation).matched ? resolveVenue(t.tableLocation).key : null,
-        category: t.category,
-        urgency: t.urgency,
-        karmaBounty: t.karmaBounty,
-        createdAt: t.createdAt,
-      };
+      return redactedTicket(t);
     });
   }
 }

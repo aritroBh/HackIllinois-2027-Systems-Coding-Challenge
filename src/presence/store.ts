@@ -10,6 +10,7 @@
  * both audited by the callers.
  */
 import crypto from 'crypto';
+import { env } from '../config/env';
 import { pack, toLocal, inBbox } from '../content/loader';
 import { PresenceMute } from '../models/presenceMute.model';
 
@@ -217,8 +218,23 @@ export function maxFuzzDisplacementMetres(fuzzGridMeters: number): number {
   return fuzzGridMeters / 2 + JITTER_METRES;
 }
 
+/**
+ * The per-account, per-hour jitter offset — keyed on a **server secret**, not on public inputs.
+ *
+ * This used to hash `${id}:${hourIndex}` alone, and both halves of that are things a viewer
+ * already has: the raw account id ships in every join record, and the hour is derivable from
+ * the `serverTime` in `hello_ack`. So any viewer could recompute the exact offset applied to
+ * anybody they could see and subtract it, recovering the grid-snapped position exactly. The
+ * jitter defended against nobody who was actually looking, while `docs/PRESENCE.md` presented
+ * the snap and the jitter as layered protection.
+ *
+ * Mixing `SESSION_SECRET` in keeps every property the jitter was chosen for — stable within an
+ * hour so a stationary person does not shimmer, uncorrelated between accounts, free to compute
+ * — and removes the one that made it decorative. It is not a session token here, just a value
+ * the process has and a client does not.
+ */
 function jitterFor(id: string, hourIndex: number): [number, number] {
-  const h = crypto.createHash('sha256').update(`${id}:${hourIndex}`).digest();
+  const h = crypto.createHash('sha256').update(`${env.SESSION_SECRET}:${id}:${hourIndex}`).digest();
   return [((h[0] / 255) * 2 - 1) * JITTER_METRES, ((h[1] / 255) * 2 - 1) * JITTER_METRES];
 }
 

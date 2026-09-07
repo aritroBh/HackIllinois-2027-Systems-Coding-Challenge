@@ -58,6 +58,12 @@ export interface AccountFacts {
   optIn: boolean;
   onDuty: boolean;
   muteUntil: number;
+  /**
+   * The account's *current* session version, compared each tick against the one the socket
+   * connected with. See the eviction in `tick()`: this is how a revoked session stops
+   * receiving the map.
+   */
+  sessionVersion: number;
 }
 
 export class PresenceService {
@@ -195,6 +201,8 @@ export class PresenceService {
   async factsFor(accountId: string, nowMs = Date.now()): Promise<AccountFacts | null> {
     await this.refreshRoster(nowMs);
     await this.refreshMutes(nowMs);
+    // Before any frame is built: a socket whose session was revoked gets no more of them.
+    this.evictRevoked();
     const cached = this.facts.get(accountId);
     if (cached && nowMs - (cached as AccountFacts & { at?: number }).at! < FACT_TTL_MS) {
       return {
@@ -235,10 +243,10 @@ export class PresenceService {
     if (batch.size === 0) return;
     const ids = [...batch.keys()];
     this.stats.factBatchLast = ids.length;
-    let docs: Array<{ _id: unknown; name: string; kind?: string; role?: unknown; faction?: string | null; avatarHash?: string | null; presenceOptIn?: boolean }> = [];
+    let docs: Array<{ _id: unknown; name: string; kind?: string; role?: unknown; faction?: string | null; avatarHash?: string | null; presenceOptIn?: boolean; sessionVersion?: number }> = [];
     try {
       docs = await Volunteer.find({ _id: { $in: ids } })
-        .select('name kind role faction avatarHash presenceOptIn')
+        .select('name kind role faction avatarHash presenceOptIn sessionVersion')
         .lean();
     } catch {
       // A read failure resolves every waiter as unknown rather than leaving them pending. An
@@ -259,6 +267,7 @@ export class PresenceService {
           name: doc.name,
           kind: (doc.kind ?? AccountKind.VOLUNTEER) as 'VOLUNTEER' | 'HACKER',
           role: String(doc.role),
+          sessionVersion: doc.sessionVersion ?? 0,
           faction: doc.faction ?? null,
           avatarHash: doc.avatarHash ?? null,
           optIn: !!doc.presenceOptIn,
@@ -302,6 +311,39 @@ export class PresenceService {
   }
 
   /** Drop a cached fact (opt-in toggled, avatar changed, faction changed). */
+  /**
+   * Close any socket whose session has been revoked since it connected.
+   *
+   * Revocation has to end the connection, not merely demote it. Every HTTP route re-verifies
+   * the session cookie per request, and the SSE hub evicts on its heartbeat when
+   * `sessionVersion` moves. This transport had neither — nothing under `src/presence/`
+   * referenced `sessionVersion` at all — so a socket authenticated once at the upgrade
+   * handshake kept publishing its position and receiving the map for as long as it stayed
+   * open, through a revocation, a sign-out elsewhere, or an expiry.
+   *
+   * `invalidate()` is what made that hard to notice: it took the lead *privilege* away, so the
+   * visible symptom of a demotion was handled while the connection itself survived.
+   *
+   * `client.account` is the context the upgrade resolved, so its `sessionVersion` is the one
+   * the socket was granted on. A bump anywhere — `revoke`, a role change, a credential reset —
+   * makes the two disagree and the socket goes. Public, and called from the tick, because the
+   * SSE hub's `reauthorise()` is public for the same reason: an invariant this important is
+   * one a test should be able to drive directly.
+   *
+   * Returns the number of sessions closed.
+   */
+  public evictRevoked(): number {
+    let closed = 0;
+    for (const s of [...this.sessions.values()]) {
+      const known = this.facts.get(s.accountId);
+      if (!known || known.sessionVersion === s.client.account.sessionVersion) continue;
+      s.client.close(4401, 'session revoked');
+      this.remove(s.client.id);
+      closed += 1;
+    }
+    return closed;
+  }
+
   invalidate(accountId: string): void {
     this.facts.delete(accountId);
     this.pendingRevalidate.add(accountId);

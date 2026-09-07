@@ -42,8 +42,19 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const html = read('public/index.html');
 const sw = read('public/sw.js');
 
-/** `src="/dashboard/…"` in load order, deduped. */
-const loaded = [...new Set([...html.matchAll(/src="(\/dashboard\/[^"]+\.js)"/g)].map((m) => m[1]))];
+/**
+ * Everything `index.html` pulls from `/dashboard/`, in load order, deduped.
+ *
+ * `src=` **and** `href=`. The first version matched only `src="…​.js"`, which is the exact
+ * shape of the drift this gate exists to catch — nine scripts had gone missing from the
+ * precache list — but one file type over: a stylesheet, a font or the manifest added to the
+ * page and not to `SHELL` would have slipped past a checker written to catch exactly that
+ * mistake. The extension filter is gone with it; whatever the page loads from `/dashboard/`
+ * has to be precached or explicitly optional, whatever it is.
+ */
+const loaded = [
+  ...new Set([...html.matchAll(/(?:src|href)="(\/dashboard\/[^"]+)"/g)].map((m) => m[1])),
+];
 
 /**
  * The entries of one array literal in sw.js, by the name it is declared under.
@@ -152,6 +163,6 @@ if (problems.length) {
 }
 
 console.log(
-  `checkShell: OK — ${loaded.length} scripts loaded, ${shell.length} precached, ` +
+  `checkShell: OK — ${loaded.length} assets loaded, ${shell.length} precached, ` +
   `${optional.length} optional, shell ${version}/${shellHash}`
 );

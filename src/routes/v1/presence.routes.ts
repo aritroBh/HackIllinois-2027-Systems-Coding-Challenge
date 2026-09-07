@@ -27,7 +27,18 @@ export const presenceRouter = Router();
 const lastList = new Map<string, number>();
 const LIST_INTERVAL_MS = 5000;
 
-presenceRouter.post('/', requireAccount, validate(postPresenceSchema), async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * `requireSession`, like the `PATCH` and `DELETE` beside it.
+ *
+ * This is the SSE fallback for publishing a position. On `requireAccount` alone a claimed
+ * `?volunteerId=<victim>` published a position **as that person**: it does not reveal where
+ * they really are, it puts them somewhere they are not, on everybody's map, and allocates an
+ * SSE presence session under their id while doing it. Putting a named person on the map is the
+ * same kind of act as taking them off it, and the `DELETE` was tightened for exactly that.
+ *
+ * The WebSocket path already resolves its identity from the session cookie at the upgrade.
+ */
+presenceRouter.post('/', requireSession, requireAccount, validate(postPresenceSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const account = req.account!;
     ensureSseSession(account);

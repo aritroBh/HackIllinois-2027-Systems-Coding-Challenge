@@ -360,6 +360,28 @@ describe('SOS dispatch prefers a live position', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.candidates).toEqual([]);
 
+    // And the ticket itself is redacted, which is the part that was missed.
+    //
+    // `dispatchedVolunteer` is trimmed to four fields, `distanceMeters` is bucketed and
+    // `candidates` is emptied for this caller — and the raw ticket document went out beside
+    // all of that, carrying the coordinates, the hacker's name, the table text and the medical
+    // category those three protections exist for. The route admits any volunteer-kind caller.
+    // The responder actually sent still receives the whole thing, on the targeted `me` channel.
+    const t = res.body.data.ticket;
+    expect(t.coordinates).toBeUndefined();
+    expect(t.tableLocation).toBeUndefined();
+    expect(t.hackerName).toBeUndefined();
+    expect(t.description).toBeUndefined();
+    expect(t.createdById).toBeUndefined();
+    // Enough survives to know a ticket was dispatched and to render a queue row.
+    expect(t.status).toBe('DISPATCHED');
+    expect(t.urgency).toBe('HIGH');
+    // The dispatcher is still told who they dispatched — that is what this field is for.
+    expect(res.body.data.dispatchedVolunteer.name).toBe('Rae');
+    // And the liveness of a named colleague is not readable by anyone who can dispatch.
+    expect(res.body.data.positionSource).toBe('unknown');
+    expect(res.body.data.positionAgeMs).toBeNull();
+
     // Two properties, and the second is the one that matters.
     //
     // The bucket is coarser than the 20 m fuzz grid, so a range read off it cannot resolve a
@@ -568,6 +590,17 @@ describe('avatars', () => {
     expect(now.headers['content-type']).toContain('image/png');
     expect(now.headers['cache-control']).toBe('private, max-age=60, must-revalidate');
     expect(now.headers.etag).toBeTruthy();
+
+    // And the *unpublished* copy is not cacheable at all. `private` does not partition by
+    // account, so a stored unapproved avatar is the previous occupant's face photo waiting for
+    // whoever sits down next — the same defect `GET /me/card` was fixed for, on more sensitive
+    // bytes. Published avatars stay cacheable because they are world-readable anyway.
+    const second = await o.post('/api/v1/avatars?share=1').set('X-CSRF-Token', oCsrf).set('Content-Type', 'image/png').send(sheet(128, 48, 222));
+    const pendingHash = second.body.data.hash;
+    expect(second.body.data.status).toBe(AvatarStatus.PENDING);
+    const pendingFetch = await o.get(`/api/v1/avatars/${pendingHash}`);
+    expect(pendingFetch.status).toBe(200);
+    expect(pendingFetch.headers['cache-control']).toBe('no-store');
   });
 
   it('three distinct reporters unpublish it, and so does one lead on its own', async () => {
@@ -861,4 +894,64 @@ afterAll(() => {
   // last, so this only has to drop the in-process state the store holds.
   presenceStore.clear();
   presenceService.stop();
+});
+
+describe('a revoked session loses its presence socket, not just its privileges', () => {
+  /**
+   * Every HTTP route re-verifies the session cookie per request, and the SSE hub evicts a
+   * client on the heartbeat when `sessionVersion` moves. The presence WebSocket had neither:
+   * nothing under `src/presence/` referenced `sessionVersion` at all, so a socket authenticated
+   * once at the upgrade handshake kept publishing its position and receiving the map for as
+   * long as it stayed open — through a revocation, a sign-out elsewhere, or an expiry.
+   *
+   * `invalidate()` made this hard to see, because it *did* take the lead privilege away. The
+   * connection survived; only its vision was trimmed.
+   */
+  it('closes the socket when sessionVersion moves under it', async () => {
+    const { presenceService } = await import('../src/presence/service');
+    const account = await Volunteer.create({
+      name: 'Revoked Rae', email: `rr-${Date.now()}@illinois.edu`,
+      kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER, presenceOptIn: true,
+    });
+
+    let closedWith: number | null = null;
+    const client = {
+      id: 'ws_revoked_test',
+      account: {
+        id: String(account._id), role: 'VOLUNTEER', kind: 'VOLUNTEER', faction: null,
+        displayName: 'Revoked Rae', sessionVersion: 0, source: 'session',
+      },
+      transport: 'ws' as const,
+      binary: true,
+      send: () => true,
+      sendBinary: () => true,
+      bufferedBytes: () => 0,
+      close: (code?: number) => { closedWith = code ?? 0; },
+    };
+    // `helloAt` is set so the no-hello sweep — which also closes with 4401 — cannot be what
+    // this test observes. Without it the assertion passes whether or not revocation works.
+    const session = presenceService.add(client as never);
+    session.helloAt = Date.now();
+
+    // Warm the fact cache at the version the socket connected on, then revoke.
+    await presenceService.factsFor(String(account._id), Date.now());
+    await Volunteer.updateOne({ _id: account._id }, { $inc: { sessionVersion: 1 } });
+    presenceService.invalidate(String(account._id));
+    // The re-read is kicked by `invalidate`; give it a moment to land, then tick.
+    await new Promise((r) => setTimeout(r, 50));
+    const fresh = await presenceService.factsFor(String(account._id), Date.now());
+    expect(fresh!.sessionVersion).toBe(1);
+    expect(client.account.sessionVersion).toBe(0);
+
+    // The running tick calls `evictRevoked` itself, so the socket may already be gone by the
+    // time we look; calling it again is idempotent and covers the case where it has not run
+    // yet. What is asserted is the outcome, not which of the two did it.
+    // The running tick calls `evictRevoked` itself, so the socket may already be gone; calling
+    // it again is idempotent and covers the case where the tick has not come round yet.
+    presenceService.evictRevoked();
+    expect(closedWith).toBe(4401);
+    // And it is *gone*, not merely closed. The no-hello sweep closes without removing, so the
+    // session count is what separates a revocation eviction from every other close.
+    expect(presenceService.stats.sessions).toBe(0);
+  });
 });

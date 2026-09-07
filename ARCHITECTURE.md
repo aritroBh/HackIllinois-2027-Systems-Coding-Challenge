@@ -662,8 +662,9 @@ triangulation and a static batcher — and `public/gl/campus3d.js` is the scene.
 ### 14.2 Data provenance
 
 The city is not hand-authored. `design/build-campus.py` bakes two cached
-OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API and committed
-under `design/osm/`) into `content/<pack>/campus/` (tiled; the single-file
+OpenStreetMap extracts (ODbL 1.0, fetched via the Overpass API and cached
+under `design/osm/`, which `.gitignore` excludes — the committed part is the
+`.overpass` queries and `manifest.json` that let anyone refetch them byte-for-byte) into `content/<pack>/campus/` (tiled; the single-file
 `public/gl/uiuc-campus.json` no longer exists):
 
 ```text

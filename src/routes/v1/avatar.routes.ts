@@ -69,10 +69,25 @@ avatarRouter.get('/:hash', async (req: Request, res: Response, next: NextFunctio
     }
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('ETag', etag);
-    // Never `immutable`: this URL 404s once the avatar is unpublished, so a cached copy
-    // must expire. 60 s is the ceiling for a disconnected browser; connected ones are
-    // evicted by the AVATAR_UNPUBLISHED event long before that.
-    res.setHeader('Cache-Control', 'private, max-age=60, must-revalidate');
+    // A published avatar is public and may be cached; an unpublished one may not be, at all.
+    //
+    // `private` does not partition by account — it means "not a shared proxy" — and nothing
+    // here sends `Vary`. For a *published* avatar that costs nothing: it is world-readable, so
+    // one browser profile reusing it across accounts discloses nothing. For an unpublished one
+    // it is the whole problem: the previous occupant's face photo, served to whoever sat down
+    // next from disk, inside the freshness window, without the request ever reaching the
+    // server or the `source === 'session'` check guarding it. The hash travels publicly on the
+    // presence wire, so the next occupant does not have to guess it.
+    //
+    // This is the same defect as `GET /me/card`'s `private, max-age=86400`, which was fixed by
+    // sending `no-store`. That fix did not reach this route, which carries the more sensitive
+    // bytes of the two.
+    //
+    // Never `immutable` on the cacheable branch either: this URL 404s once an avatar is
+    // unpublished, so a cached copy must expire. 60 s is the ceiling for a disconnected
+    // browser; connected ones are evicted by the AVATAR_UNPUBLISHED event long before that.
+    const isPublished = doc.status === AvatarStatus.APPROVED && doc.shareOptIn;
+    res.setHeader('Cache-Control', isPublished ? 'private, max-age=60, must-revalidate' : 'no-store');
     res.status(200).send(doc.bytes);
   } catch (error) {
     next(error);

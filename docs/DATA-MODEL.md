@@ -111,8 +111,11 @@ that dies holding one does not deadlock the volunteer.
 Exactly-once semantics for reservations. Phones on congested event wifi produce requests that
 succeed server-side and time out client-side; the natural client behaviour is to retry, and
 without this table a retry double-books. A repeat carrying the same `Idempotency-Key` replays the
-stored `responseStatusCode` / `responseBody` instead of re-executing. `requestHash` catches a key
-reused for a *different* body, and `ownerToken` stops one account replaying another's. 24h TTL.
+stored `responseStatusCode` / `responseBody` instead of re-executing. `requestHash` is what stops one account replaying another's, because it is a digest over the
+shift id, the volunteer id **and** `allowWaitlist` — so the same key sent for a different
+request, or by a different person, is a conflict rather than a replay. `ownerToken` solves a
+different problem: it fences a *stalled attempt* out of the record a later attempt has since
+claimed. 24h TTL.
 
 ---
 
@@ -135,7 +138,7 @@ minutes is — so neither the early scan nor the forgotten tap-out is paid.
 
 ---
 
-## The economy — why there are four ledgers
+## The economy — why the counters are not the record
 
 The README's claim is that karma is minted in exactly one place, capped per source per day, and
 recorded so a disputed balance can be reconstructed. These collections are that claim.
