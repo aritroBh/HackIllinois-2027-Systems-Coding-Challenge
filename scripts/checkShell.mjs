@@ -206,6 +206,24 @@ if (!fs.existsSync(lockPath)) {
      * The same drift, in `scripts/verify.sh`'s frontend-syntax step, had left it nine files
      * behind before it was globbed for this reason.
      */
+    /**
+     * A `registerTab(...)` whose argument is not an inline object literal.
+     *
+     * Both scans key on `registerTab(\s*{`, so `const conf = {...}; registerTab(conf);`
+     * matched neither and the tab was invisible to every per-tab check while `coreTabs`
+     * stayed satisfied by the others. Same shape as the unreadable-id hole: the scanner
+     * cannot read it, so it must say so rather than pass.
+     */
+    const reportIndirectRegistrations = (rel, src) => {
+      for (const m of src.matchAll(/registerTab\(\s*(?!\{)/g)) {
+        const shown = src.slice(m.index, m.index + 60).split('\n')[0];
+        problems.push(
+          `${rel} calls registerTab() with something other than an inline object literal `
+          + `(\`${shown.trim()}…\`). checkShell cannot read a tab declared that way.`,
+        );
+      }
+    };
+
     const listJs = (rel) => {
       try {
         return fs.readdirSync(path.join(root, rel))
@@ -240,6 +258,7 @@ if (!fs.existsSync(lockPath)) {
     for (const rel of TAB_SOURCES) {
       const raw = fs.readFileSync(path.join(root, rel), 'utf8');
       const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      reportIndirectRegistrations(rel, src);
       for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) { problems.push(`checkShell: unbalanced registerTab({ in ${rel}`); continue; }
@@ -374,7 +393,11 @@ if (!fs.existsSync(lockPath)) {
           const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
           if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
         }
-        if (!id) continue;
+        // Same policy as the first scan, which is the point: this loop kept the old silent
+        // `continue` after that one learned to complain, so one scanner had two answers to the
+        // same limitation. It changes no verdict today — loop one already reports the file —
+        // but a reader comparing them would have to work out which behaviour was intended.
+        if (!id) continue;   // already reported by the first scan; not silent, just not twice
         meta.set(id, {
           order: Number(body.match(/order:\s*(\d+)/)?.[1] ?? 100),
           label: body.match(/label:\s*'([^']+)'/)?.[1] ?? id,

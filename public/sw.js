@@ -83,7 +83,9 @@
   // `v32`: round-nineteen review — a 409 no longer locks the picker to the stale side, and a
   //        handover no longer wipes the incoming account's faction.
   // `v33`: round twenty — the nearest-stop readout uses that stop's fence, not the campus one.
-  const VERSION = 'v33';
+  // `v34`: round twenty-one — the faction picker is disabled while its write is in flight,
+  //        and a handover re-renders everything that reads the faction, not just the picker.
+  const VERSION = 'v34';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

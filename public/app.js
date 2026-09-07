@@ -1410,7 +1410,7 @@ async function triggerAdonixSync() {
  * change. A picker left live against that rule is a control that always fails, which is
  * worse than no control.
  */
-function paintFactionPicker(faction, locked) {
+function paintFactionPicker(faction, locked, pending = false) {
   const sel = document.getElementById('user-faction-selector');
   if (!sel) return;
   if (faction && [...sel.options].some((o) => o.value === faction)) {
@@ -1421,12 +1421,20 @@ function paintFactionPicker(faction, locked) {
     sel.dispatchEvent(new CustomEvent('pxsel:sync'));
   }
   sel.style.borderColor = factionOf(faction || currentVolunteerFaction).color;
-  sel.disabled = !!locked;
-  sel.title = locked
-    ? `Locked to ${factionOf(faction).label}. Allegiance is chosen once and cannot be changed.`
-    : 'Choose once. Allegiance cannot be changed afterwards.';
+  // `pending` disables without claiming the lock. The write is in flight and a second pick
+  // during it is what this closes, but "Locked to Team Kernel" is not true until the server
+  // has said so — and a label that asserts the outcome before the outcome exists is the
+  // habit this dashboard has spent the day removing.
+  sel.disabled = !!locked || !!pending;
+  sel.title = pending
+    ? 'Taking that side…'
+    : locked
+      ? `Locked to ${factionOf(faction).label}. Allegiance is chosen once and cannot be changed.`
+      : 'Choose once. Allegiance cannot be changed afterwards.';
   const label = sel.closest('.actions')?.querySelector('.hud-label');
-  if (label) label.textContent = locked ? 'Your faction · locked' : 'Your faction · choose once';
+  if (label) {
+    label.textContent = pending ? 'Your faction · saving' : locked ? 'Your faction · locked' : 'Your faction · choose once';
+  }
 }
 
 /**
@@ -1441,7 +1449,16 @@ function paintFactionPicker(faction, locked) {
 async function changeUserFaction(faction) {
   const previous = currentVolunteerFaction;
   currentVolunteerFaction = faction;
-  paintFactionPicker(faction, false);
+  // Locked for the duration of the write, not just on success.
+  //
+  // Nothing stopped a second pick while the first PATCH was in flight, and each call closes
+  // over its own `previous`. Two overlapping writes could then finish in the order that made
+  // the loser's rollback authoritative: the earlier click failing *after* the later one
+  // succeeded restores a side the server does not hold. It self-heals on the next pick — the
+  // 409 path re-reads the card — but until then the HUD and the gym list are labelled for the
+  // wrong team. There is no reason to allow a second pick during the first; allegiance is a
+  // one-time choice and the control has nothing useful to say while it is being made.
+  paintFactionPicker(faction, false, true);
   renderGymsList();
   window.game?.onFactionChange();
   try {
@@ -1455,8 +1472,13 @@ async function changeUserFaction(faction) {
     // bound it somewhere else, another tab or another device. Rolling back to `previous` and
     // locking *that* would pin this tab to a faction the server will refuse on every battle
     // until the page is reloaded, which is worse than the disagreement it is reacting to. So
-    // the server's answer is fetched and adopted; `previous` is only restored when the write
-    // failed for some other reason and the old value is still the truth.
+    // the server's answer is fetched and adopted.
+    //
+    // `previous` is restored on every other path — a non-409 failure, and also a 409 whose
+    // follow-up card read throws or comes back NEUTRAL. Those two are nearly-dead defensive
+    // branches (a 409 contradicts a NEUTRAL card), and they leave the picker **unlocked**,
+    // which is the point: an unlocked picker showing a stale side is one click from the
+    // truth, and a locked one is not.
     if (err.status === 409) {
       try {
         const card = await Nexus.api('/api/v1/me/card');
@@ -2309,6 +2331,13 @@ async function init() {
       currentVolunteerFaction = playable[0] || 'NEUTRAL';
       paintFactionPicker(currentVolunteerFaction, false);
     }
+    // And everything that renders *from* the faction, which the picker repaint alone does not
+    // reach. `onSessionChange` and the 409 path both do this pair; this handler did neither,
+    // so the gym list kept Contest/Reinforce labels computed for the previous account's side
+    // and `game.js`'s own handover listener — registered before this one — had already baked
+    // that side into the trainer. Both healed only on the next fetch or tab switch.
+    renderGymsList();
+    window.game?.onFactionChange();
     // And load the new account's own things.
     //
     // `setUser` emits `session` and then `session:handover` synchronously, so the sign-in

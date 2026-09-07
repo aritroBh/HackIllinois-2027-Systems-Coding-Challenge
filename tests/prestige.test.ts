@@ -94,7 +94,12 @@ describe('the seed cannot restate the rule and get it wrong', () => {
     // and hard-coded the sixth as a raw string — `prestigeTier: 'SIEBEL_GUARDIAN'` names no
     // enum, and the compliant five satisfied the "is derived" half on their own. That is the
     // original defect wearing quotes.
-    const assignments = [...seed.matchAll(/prestigeTier\s*:\s*([^,\n]+)/g)].map((m) => m[1].trim());
+    // Comments stripped first. `prestigeTier /* hardcoded */ : 'SIEBEL_GUARDIAN'` matched no
+    // pattern below and was skipped entirely, so the assertion passed on a seed containing
+    // the exact literal it exists to refuse. Contrived as a keystroke, ordinary as the
+    // residue of somebody annotating a line they meant to come back to.
+    const stripped = seed.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
+    const assignments = [...stripped.matchAll(/prestigeTier\s*:\s*([^,\n]+)/g)].map((m) => m[1].trim());
     expect(assignments.length).toBeGreaterThan(0);   // a parser that matches nothing is not a pass
     for (const value of assignments) {
       expect(value).toMatch(/^computePrestigeTier\(/);
