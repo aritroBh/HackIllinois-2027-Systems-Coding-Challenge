@@ -34,6 +34,16 @@
    * Longer than SEND_INTERVAL_MS, or a healthy sender would flicker between the two states.
    */
   const REFUSAL_TTL_MS = 12000;
+  /**
+   * `TOO_FAST` costs one sample and nothing else — `store.ts` is explicit that it is a single
+   * implausible jump a phone can produce without anybody lying. A standing problem re-nacks
+   * and refreshes this, so the only thing the shorter life changes is how long a *recovered*
+   * one-off keeps talking: with the common TTL the chip reported a skipped reading for about
+   * seven seconds after the next sample had already been accepted. Still longer than
+   * SEND_INTERVAL_MS, so a repeating jump does not flicker.
+   */
+  const TRANSIENT_REFUSAL_TTL_MS = 6000;
+  const ttlFor = (reason) => (reason === 'TOO_FAST' ? TRANSIENT_REFUSAL_TTL_MS : REFUSAL_TTL_MS);
 
   const state = {
     ws: null,
@@ -325,8 +335,9 @@
     try {
       // The reply carries `{ accepted, reason }` and this used to discard the whole thing, so
       // on the fallback transport the server said exactly why it dropped your position and
-      // the answer went into a variable nobody read. Unlike the socket, this path reports
-      // every reason, so it is the only place some of them can currently be seen at all.
+      // the answer went into a variable nobody read. Both transports report every refusal
+      // now (the socket answers everything but `RATE`); this path has always reported all of
+      // them, which for a while made it the only place some could be observed at all.
       const res = await N.api('/api/v1/presence', { method: 'POST', body: { lat, lng, acc, h: heading }, lenient: true });
       const reason = res?.data?.reason;
       if (res?.data?.accepted === false && reason) {
@@ -436,7 +447,21 @@
     state.peers.clear();
     state.slots.clear();
     state.clusters = [];
+    // A refusal belongs to the account that earned it and to the connection it arrived on.
+    // Without this the handover path (`stop({ tellServer: false })`) left the previous
+    // account's explanation on the chip for whoever sat down next — the same "someone else's
+    // state presented as yours" shape as the departing account's shifts on the quest board —
+    // and the pending timer then fired a `presence:nack` into a torn-down transport.
+    state.refusal = null;
+    clearTimeout(state.refusalTimer);
+    state.refusalTimer = null;
+    state.lastSentAcc = null;
+    state.lastSentLatLng = null;
     pushToMap();
+    // Clearing the refusal above is not enough on its own: the chip holds rendered text, and
+    // nothing else in this path repaints it, so the previous account's explanation stayed on
+    // screen after the state behind it was gone.
+    paintChip();
     if (tellServer) void N.api('/api/v1/presence', { method: 'DELETE', lenient: true });
     N.emit('presence:transport', { mode: 'off' });
   };
@@ -455,7 +480,7 @@
       .slice(0, 12);
     const total = state.peers.size + state.clusters.reduce((s, c) => s + c[2], 0);
     if (!rows.length) {
-      host.innerHTML = `<div class="empty-state">${state.optIn ? 'Nobody nearby yet.' : 'Presence is off. Turn it on in Me → Settings to see other trainers.'}</div>`;
+      host.innerHTML = `<div class="empty-state">${state.optIn ? 'Nobody nearby yet.' : 'You are hidden. Turn on "Show me on the campus map" in Me to see other trainers.'}</div>`;
       return;
     }
     host.innerHTML = `<div class="nearby-head"><b>${total}</b> trainer${total === 1 ? '' : 's'} on campus</div>` +
@@ -549,7 +574,7 @@
   function currentRefusal() {
     const r = state.refusal;
     if (!r) return null;
-    if (Date.now() - r.at > REFUSAL_TTL_MS) { state.refusal = null; return null; }
+    if (Date.now() - r.at > ttlFor(r.reason)) { state.refusal = null; return null; }
     return describeRefusal(r) ? r : null;
   }
 
@@ -565,7 +590,7 @@
     };
     // Repaint once when it ages out, so the chip stops reporting a problem that has stopped.
     clearTimeout(state.refusalTimer);
-    state.refusalTimer = setTimeout(() => { paintChip(); N.emit('presence:nack', { reason: null }); }, REFUSAL_TTL_MS + 100);
+    state.refusalTimer = setTimeout(() => { paintChip(); N.emit('presence:nack', { reason: null }); }, ttlFor(reason) + 100);
   }
 
   function paintChip() {
@@ -579,10 +604,13 @@
     // happening — which is what made this feature look broken rather than strict.
     const refused = currentRefusal();
     const described = refused && describeRefusal(refused);
-    el.textContent = !state.optIn ? 'Presence off'
-      : state.mode === 'off' ? 'Presence connecting…'
+    // "WS" / "SSE" named the transport, which is ours to worry about and not the player's —
+    // and the two are chosen automatically, so it was a detail nobody could act on. What a
+    // person wants from this chip is whether they are on the map.
+    el.textContent = !state.optIn ? 'Hidden'
+      : state.mode === 'off' ? 'Getting you on the map…'
         : described ? described.chip
-          : `Visible · ${state.mode.toUpperCase()}${detail}`;
+          : `On the map${detail}`;
     el.dataset.on = state.optIn ? '1' : '0';
     el.dataset.refused = described ? '1' : '0';
     el.title = described ? described.line : '';

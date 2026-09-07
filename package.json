@@ -31,7 +31,8 @@
     "e2e": "tsx scripts/e2e.ts",
     "comments:check": "node scripts/checkCommentsOnly.mjs",
     "pack:check": "node scripts/checkPackDriven.mjs",
-    "placards": "tsx scripts/placards.ts"
+    "placards": "tsx scripts/placards.ts",
+    "icons": "node scripts/makeIcons.mjs"
   },
   "keywords": [
     "hackillinois",

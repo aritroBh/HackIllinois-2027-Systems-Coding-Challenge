@@ -351,14 +351,14 @@
     if (N.session.user?.kind !== 'VOLUNTEER') return '';
     if (!canMint()) {
       return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Check in</div><h3>No token yet</h3></div></div>
-        <p class="ob-hint">A token is minted against a confirmed spot. Claim a shift and it appears here.</p></div>`;
+        <p class="ob-hint">Your code is issued against a confirmed spot. Claim a shift and it appears here.</p></div>`;
     }
     const live = !!state.token;
     return `
       <div class="px">
         <div class="panel-head">
           <div><div class="eyebrow">Check in</div><h3>Show this at the desk</h3></div>
-          <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New token' : 'Mint token'}</button>
+          <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New code' : 'Get my code'}</button>
         </div>
         <div class="qr-container">
           <div class="qr-box"><div id="me-token-code" class="qr-target"></div></div>
@@ -475,16 +475,22 @@
    * this earlier; **this is the only one of the four addressed to the person whose privacy it
    * describes**, and it is the one they read at the moment they decide. Nobody opens
    * PRESENCE.md before flipping a location switch.
+   *
+   * The route name used to be printed in this copy, verbatim, as "GET /presence". Every
+   * disclosure it carried is still here — the lead's read, the audit trail, the fuzzing, the
+   * delay — in words that do not require knowing what an HTTP verb is. Shortening it is not
+   * cosmetic either: `styles.css` records that this face at this size reads poorly, and the
+   * fix that worked was fewer words set larger rather than a colour change.
    */
   function privacyCopy() {
     const u = N.session.user || {};
-    const base = 'Off, you are invisible on the map and you see nobody there. Leads can still read your exact position — from the shift roster and GET /presence — and every one of those reads is logged under their name. On, other trainers see a position snapped to a 20 m grid, nudged a few metres, and released a second late.';
+    const base = 'Off: you vanish from the map, and nobody appears to you. Shift leads can still see exactly where you are — on their roster and on the live map — and every time one looks, it is recorded under their name. On: other trainers see you rounded to the nearest 20 metres, nudged slightly, and about a second behind.';
     if (u.kind === 'HACKER') {
-      return `${base} Those logs are kept for thirty days. Raising an SOS shares where you are whatever this switch says.`;
+      return `${base} Those records are kept for thirty days. Calling for help shares where you are either way.`;
     }
-    const volunteer = `${base} Off shift you stay hidden from everyone but a lead. Distress calls only reach volunteers who are opted in and on shift; opted out, dispatch falls back to your shift venue.`;
+    const volunteer = `${base} Off shift, only a lead can see you. Help requests are sent to volunteers who are on shift and sharing; if you are not, they are sent to your shift's venue instead.`;
     return LEAD_ROLES.includes(u.role)
-      ? `${volunteer} You can also read exact positions from the roster, and each of those reads is written to the audit log under your name.`
+      ? `${volunteer} You can also see exact positions on your roster, and each of those looks is recorded under your name.`
       : volunteer;
   }
 

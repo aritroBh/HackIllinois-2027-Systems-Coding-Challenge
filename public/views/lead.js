@@ -192,7 +192,7 @@
       return;
     }
     table.innerHTML = `
-      <thead><tr><th>Volunteer</th><th>Status</th><th>Fix</th><th>Distance</th><th class="num">Karma</th></tr></thead>
+      <thead><tr><th>Volunteer</th><th>Status</th><th>Last seen</th><th>Distance</th><th class="num">Karma</th></tr></thead>
       <tbody>${rows.map((r) => {
         const p = r.presence || {};
         return `<tr>

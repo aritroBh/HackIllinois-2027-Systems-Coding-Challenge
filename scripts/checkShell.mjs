@@ -111,6 +111,34 @@ for (const entry of [...shell, ...optional]) {
 }
 
 /*
+ * The manifest's icons, which nothing checked.
+ *
+ * `manifest.webmanifest` named `/dashboard/icon-192.png` and `/dashboard/icon-512.png` for a
+ * long time while `public/` contained no `.png` at all, so installing the app to a home
+ * screen failed on its icons and no gate noticed. The loop above only walks what `sw.js`
+ * precaches and the one above that only walks `src=`/`href=` in `index.html`; a manifest icon
+ * is referenced from neither, which is exactly why it could rot unobserved.
+ *
+ * Declared size is checked against the PNG's real IHDR dimensions, not just existence — a
+ * 512 named as a 192 installs a blurry icon and is the kind of thing nobody re-measures.
+ */
+const manifestRaw = read('public/manifest.webmanifest');
+let manifest = null;
+try { manifest = JSON.parse(manifestRaw); } catch (err) { problems.push(`manifest.webmanifest is not valid JSON: ${err.message}`); }
+for (const icon of manifest?.icons ?? []) {
+  const src = String(icon.src || '');
+  if (!src.startsWith('/dashboard/')) { problems.push(`manifest icon ${src || '(missing src)'} is not under /dashboard/`); continue; }
+  const file = path.join(root, 'public', src.slice('/dashboard/'.length));
+  if (!fs.existsSync(file)) { problems.push(`manifest declares icon ${src}, which does not exist at ${path.relative(root, file)}`); continue; }
+  const buf = fs.readFileSync(file);
+  // PNG IHDR: 8-byte signature, 4-byte length, "IHDR", then width and height as big-endian u32.
+  if (buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) { problems.push(`manifest icon ${src} is not a PNG`); continue; }
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  const declared = String(icon.sizes || '');
+  if (declared && declared !== `${w}x${h}`) problems.push(`manifest icon ${src} declares ${declared} but the file is ${w}x${h}`);
+}
+
+/*
  * Contents against VERSION.
  *
  * The hash covers every precached file plus the shell list itself, so a byte change anywhere

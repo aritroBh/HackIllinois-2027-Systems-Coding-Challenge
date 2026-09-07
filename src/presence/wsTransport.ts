@@ -329,11 +329,28 @@ export function attachPresenceWs(server: http.Server): void {
  * only an explicit `enc:'json'` opts out. An SSE client cannot reach this, and would be forced
  * to JSON by the transport test even if it did.
  *
- * A rejected `pos` is answered only for `MUTED`, `SPEED_STRIKE` and `OPT_OUT` — the three that
- * mean the client is publishing nothing at all until it or the clock changes something. The
- * other four verdicts the store can return (off-campus, inaccurate, too fast, and the 2 s rate
- * gate) are dropped in silence, so a phone with a poor indoor fix sampling every second is not
- * sent a rejection every second for it.
+ * A rejected `pos` is answered for every verdict except `RATE`.
+ *
+ * This used to answer only `MUTED`, `SPEED_STRIKE` and `OPT_OUT` — the three that mean the
+ * client is publishing nothing until it or the clock changes something — and the stated reason
+ * was noise: a phone with a poor indoor fix should not be sent a rejection every second for it.
+ * The cost of that quiet turned out to fall on the wrong person. `INACCURATE` and `OFF_CAMPUS`
+ * are the two verdicts an ordinary user actually meets, so the effect was that someone who
+ * opted in, granted location and published a fix the store refused on the merits was told
+ * nothing at all, while the interface went on reporting them as visible. `POST /presence` has
+ * always returned `reason` for every refusal, so the two transports disagreed about whether the
+ * sender was entitled to know why they had vanished.
+ *
+ * The noise concern was real and is handled where it belongs: a client paces itself at one
+ * sample per 5 s (`SEND_INTERVAL_MS` in `public/views/players.js`), and the browser renders a
+ * refusal as a state on one chip rather than as a stream of messages, so a standing problem
+ * costs one small frame per sample and says one thing.
+ *
+ * `RATE` stays silent, and not because it is harmless: the protocol header advertises samples
+ * "≥ 2 s apart", so a client tripping it is out of cadence rather than merely unlucky. It stays
+ * silent because the nack would carry nothing the client can act on — it already paces itself,
+ * and answering would echo at up to 1 Hz at precisely the sender that is already sending too
+ * much.
  */
 export async function handleMessage(
   session: import('./session').PresenceSession,
@@ -378,10 +395,10 @@ export async function handleMessage(
       // them. `POST /presence` has always returned `reason` for all of these, so the two
       // transports disagreed about whether the sender was entitled to know.
       //
-      // `RATE` is the one that stays silent, and deliberately: it is the normal cadence
-      // rather than a fault. A client sending faster than `minSampleIntervalMs` is behaving
-      // correctly, and nacking it would put a frame on the wire every couple of seconds for
-      // every healthy publisher on campus.
+      // `RATE` is the one that stays silent — see the rule and its reasoning in the docblock
+      // above. Not because it is the normal cadence: the protocol advertises "≥ 2 s apart",
+      // so tripping it means the sender is out of cadence. Because the answer carries nothing
+      // actionable, and would be sent most often to the client sending most often.
       if (!r.ok && r.reason !== 'RATE') {
         client.send({ t: 'nack', reason: r.reason });
       }

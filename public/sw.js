@@ -131,8 +131,9 @@
   //        one from any count, a Reinforce refusal no longer calls itself a battle, and the
   //        Details panel stopped removing a host that other dialogs' close path resolves.
   // `v56`: the map's refusals were silent. The presence server rejects a sample for seven
-  //        distinct reasons and emitted every one of them as a `nack` that exactly one
-  //        listener received, discarded and repainted — so the chip went on reading
+  //        distinct reasons; the socket answered three of them and the client discarded
+  //        those three — exactly one listener received a `nack`, dropped the reason and
+  //        repainted — so the chip went on reading
   //        "Visible" while the server dropped every fix, asserting the opposite of what was
   //        happening. Each reason now says itself, in its own words: an inaccurate fix
   //        blames the radio and quotes both numbers, a single fast jump is not an accusation,
@@ -142,10 +143,19 @@
   //        timeout no longer switches walking off for good — only a refusal does.
   // `v57`: the SSE fallback discarded the same refusal reasons. `POST /presence` answers
   //        `{ accepted: false, reason }` and `postPosition` awaited it and dropped it on the
-  //        floor — which matters more than it sounds, because the WebSocket transport sends a
-  //        nack for only three of the seven reasons, so this HTTP reply is the only place
-  //        OFF_CAMPUS and INACCURATE can currently be observed by a browser at all.
-  const VERSION = 'v57';
+  //        floor. This mattered more than it sounds at the time: the socket then answered
+  //        only three of the seven reasons, so the HTTP reply was briefly the only place
+  //        OFF_CAMPUS and INACCURATE could be observed by a browser at all. The socket was
+  //        fixed in the same round and now answers everything but RATE.
+  // `v58`: the copy pass. The Chaos Lab credited "Tarjan's algorithm" for a routine that
+  //        ARCHITECTURE.md, docs/DEMO.md and docs/REVIEWS.md all record as a bounded DFS and
+  //        explicitly not Tarjan — the correction had landed in three documents and never in
+  //        the one place an audience reads. Protocol names left the interface (SSE, WS,
+  //        WebGL2, HMAC-SHA256), the privacy notice stopped printing an HTTP route at the
+  //        person whose privacy it describes, and "mint" stopped being a verb on a button.
+  //        Also: the manifest had named two icon files that never existed, so the app could
+  //        not be installed; they exist now and checkShell fails if they stop matching.
+  const VERSION = 'v59';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
@@ -195,8 +205,12 @@
   // Fetched one at a time and allowed to fail. A font subset can be renamed by a
   // rebuild of the vendored set, and avatar.js is only pulled in when the trainer
   // opens the builder; neither is worth failing an install over.
+  // The install icons join the fonts here for the same reason: a failed icon fetch should not
+  // fail the whole install, and the app is entirely usable without them.
   const SHELL_OPTIONAL = [
     '/dashboard/avatar.js',
+    '/dashboard/icon-192.png',
+    '/dashboard/icon-512.png',
     '/dashboard/fonts/silkscreen-400-latin.woff2',
     '/dashboard/fonts/silkscreen-400-latin-ext.woff2',
     '/dashboard/fonts/silkscreen-700-latin.woff2',

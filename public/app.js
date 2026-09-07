@@ -1183,7 +1183,7 @@ function connectSSE() {
   // dead dashboard with no visible sign that it had stopped updating.
   eventSource.onopen = () => {
     sseRetryMs = 1000;
-    setSseStatus('SSE Live', 'c-mint');
+    setSseStatus('Live', 'c-mint');
   };
   eventSource.onerror = () => {
     eventSource.close();
@@ -2184,8 +2184,8 @@ async function bootCampus() {
     });
 
     if (!renderer) {
-      setGlStatus('WebGL2 unavailable', 'c-amber');
-      showCampusNotice('This browser has no WebGL2. The campus map needs it; every other panel still works.');
+      setGlStatus('3D unavailable', 'c-amber');
+      showCampusNotice('This browser cannot draw the 3D campus. Everything else on this page still works.');
       campusBooting = false;
       return;
     }
@@ -2227,7 +2227,7 @@ async function bootCampus() {
     });
     window.toWorld = toWorld;
 
-    setGlStatus('WebGL2 · live', 'c-mint');
+    setGlStatus('3D campus · live', 'c-mint');
     // A boot that succeeds clears whatever the last failed one left on screen.
     document.getElementById('campus-viewport')?.querySelectorAll('.campus-notice').forEach((n) => n.remove());
     // The bake time is a boot fact; the counts live in the telemetry strip.
