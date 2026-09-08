@@ -85,5 +85,8 @@
   "hackerBountyBudgetPerDay": 600,
   "plugins": [
     "hello-nexus"
-  ]
+  ],
+  "gauntlet": {
+    "requiredForCapture": true
+  }
 }

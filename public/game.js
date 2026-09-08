@@ -1031,6 +1031,7 @@
           <div class="plate">COMMAND</div>
           <button class="cmd ${ally ? '' : 'first'}" data-action="enc-cmd" data-cmd="contest" ${ally ? 'disabled' : ''}>FIGHT <small>(−150 CP)</small></button>
           <button class="cmd ${ally ? 'first' : ''}" data-action="enc-cmd" data-cmd="reinforce" ${ally ? '' : 'disabled'}>REINFORCE <small>(+150 CP)</small></button>
+          <button class="cmd" data-action="enc-cmd" data-cmd="gauntlet" ${ally ? 'disabled' : ''}>CHALLENGE</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="bag">BAG</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="map">MAP · LOCATE</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="run">RUN</button>
@@ -1059,11 +1060,121 @@
     if (m) m.textContent = text;
   }
 
+  /**
+   * Play a gym's coding challenge: open it, answer it, spend the win.
+   *
+   * Three server round trips, and the identity guard after each await is load-bearing rather
+   * than defensive — a challenge is a long-lived modal, so a second encounter opening while
+   * this one waits is a real sequence, and without the guard the older flow keeps writing into
+   * the newer stage. The per-gym `inFlight` lock is reused rather than a second one invented:
+   * it is keyed by gym id and released in a `finally`, and it already solves "pressed twice".
+   */
+  async function runGauntlet(enc, g) {
+    if (!g) return;
+    if (inFlight.has(enc.gymId)) { encounterMessage('That move is already in flight. Give it a moment.'); return; }
+    const coords = window.requirePlayerCoords?.('Taking a gym');
+    if (!coords) return;
+    inFlight.add(enc.gymId);
+    const cmds = document.querySelectorAll('.jrpg.cmd .cmd');
+    cmds.forEach((b) => { b.disabled = true; });
+    try {
+      encounterMessage('Fetching the challenge…');
+      const started = await window.Nexus.api(`/api/v1/pokeshift/gyms/${enc.gymId}/gauntlet`, {
+        method: 'POST', body: { coordinates: coords },
+      });
+      if (state.encounter !== enc) return;
+      const ch = started.data;
+      const answers = await askChallenge(ch);
+      if (state.encounter !== enc) return;
+      if (!answers) { encounterMessage('Challenge closed. The clock keeps running until it expires.'); return; }
+
+      encounterMessage('Checking your answer…');
+      const judged = await window.Nexus.api(`/api/v1/pokeshift/gauntlets/${ch.attemptId}/submit`, {
+        method: 'POST', body: { answers, coordinates: window.requirePlayerCoords?.('Taking a gym') || coords },
+      });
+      if (state.encounter !== enc) return;
+      if (!judged.data.won) {
+        replay(document.querySelector('.enc-stage'), 'is-hit', 400);
+        encounterMessage(`Not this time — ${judged.data.correctCount} of ${judged.data.total} right. Try the challenge again.`);
+        return;
+      }
+
+      encounterMessage('Correct. Taking the gym…');
+      const spent = await window.Nexus.api(`/api/v1/pokeshift/gauntlets/${ch.attemptId}/spend`, {
+        method: 'POST', body: { faction: state.faction, coordinates: window.requirePlayerCoords?.('Taking a gym') || coords },
+      });
+      if (state.encounter !== enc) return;
+      replay(document.querySelector('.enc-stage'), 'is-crit', 600);
+      window.soundEngine?.playGymVictoryFanfare?.();
+      encounterMessage(spent.data.message || `${g.locationName} is yours.`);
+      window.refreshGyms();
+    } catch (err) {
+      // The server's refusal is the message. Inventing a friendlier one here is how a geofence
+      // rejection becomes "something went wrong" and a player walks away not knowing to move.
+      encounterMessage(String(err?.message || 'That did not go through.'));
+    } finally {
+      inFlight.delete(enc.gymId);
+      cmds.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  /**
+   * Render the challenge and resolve with the player's answers, or null if they backed out.
+   *
+   * The countdown runs off the server's `expiresAt`, never a client timer started here: the
+   * browser clock is not evidence, and the server refuses a late answer regardless — so a
+   * client-side clock that disagreed would only ever mislead.
+   */
+  function askChallenge(ch) {
+    return new Promise((resolve) => {
+      const msg = document.querySelector('.jrpg.msg');
+      if (!msg) { resolve(null); return; }
+      const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const fields = ch.kind === 'MULTIPLE_CHOICE'
+        ? `<div class="gaunt-choices">${(ch.choices || []).map((c, i) => `
+             <label class="gaunt-choice"><input type="radio" name="gaunt-a" value="${esc(c)}"${i === 0 ? ' checked' : ''}> <span>${esc(c)}</span></label>`).join('')}</div>`
+        : (ch.cases || []).map((c) => `
+             <label class="gaunt-field"><span class="hud-label">${esc(c.input)}</span>
+               <input type="text" class="gaunt-input" data-index="${c.index}" autocomplete="off" spellcheck="false"></label>`).join('');
+      msg.innerHTML = `
+        <div class="gaunt">
+          <div class="hud-label">CHALLENGE · ${esc(ch.difficulty)} · <span id="gaunt-clock">--</span></div>
+          <h4 class="gaunt-title">${esc(ch.title)}</h4>
+          <pre class="gaunt-prompt">${esc(ch.prompt)}</pre>
+          ${fields}
+          <div class="btn-row">
+            <button class="pb pb-sm" type="button" id="gaunt-submit">Submit</button>
+            <button class="pb pb-sm" type="button" id="gaunt-cancel">Back</button>
+          </div>
+        </div>`;
+      const deadline = new Date(ch.expiresAt).getTime();
+      const clock = document.getElementById('gaunt-clock');
+      const tick = setInterval(() => {
+        const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+        if (clock) clock.textContent = `${left}s`;
+        if (left <= 0) { clearInterval(tick); done(null); }
+      }, 500);
+      const done = (v) => { clearInterval(tick); resolve(v); };
+      document.getElementById('gaunt-submit')?.addEventListener('click', () => {
+        const answers = ch.kind === 'MULTIPLE_CHOICE'
+          ? [String(msg.querySelector('input[name="gaunt-a"]:checked')?.value || '')]
+          : Array.from(msg.querySelectorAll('.gaunt-input')).map((el) => el.value);
+        done(answers);
+      });
+      document.getElementById('gaunt-cancel')?.addEventListener('click', () => done(null));
+      msg.querySelector('.gaunt-input, input[name="gaunt-a"]')?.focus();
+    });
+  }
+
   async function encounterCommand(cmd) {
     const enc = state.encounter;
     if (!enc) return;
     const g = (window.gymsCache || []).find((x) => x._id === enc.gymId);
     switch (cmd) {
+      case 'gauntlet': {
+        await runGauntlet(enc, g);
+        return;
+      }
       case 'contest':
       case 'reinforce': {
         const stage = document.querySelector('.enc-stage');

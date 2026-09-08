@@ -32,7 +32,8 @@
     "comments:check": "node scripts/checkCommentsOnly.mjs",
     "pack:check": "node scripts/checkPackDriven.mjs",
     "placards": "tsx scripts/placards.ts",
-    "icons": "node scripts/makeIcons.mjs"
+    "icons": "node scripts/makeIcons.mjs",
+    "gauntlet:hashes": "tsx scripts/gauntletHashes.ts"
   },
   "keywords": [
     "hackillinois",

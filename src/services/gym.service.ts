@@ -40,6 +40,7 @@ import { GeoEngine, IGeoCoordinates } from '../common/utils/geo';
 import { bindFaction } from './faction.service';
 import { geofenceMetersFor } from '../common/utils/geofence';
 import { ApiError } from '../common/errors/apiError';
+import { GauntletService } from './gauntlet.service';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { env } from '../config/env';
@@ -203,7 +204,8 @@ export class GymService {
     volunteerId: string,
     volunteerFaction: Faction,
     power: number = 100,
-    coordinates?: IGeoCoordinates
+    coordinates?: IGeoCoordinates,
+    opts: { viaGauntlet?: boolean } = {}
   ): Promise<IBattleResult> {
     if (!Number.isFinite(power) || power < 10 || power > 500) {
       throw ApiError.badRequest('Attack/defense power must be a finite number between 10 and 500.');
@@ -371,6 +373,37 @@ export class GymService {
             leaderName: gym.leaderName,
             karmaAwarded: karmaAward,
             message: `Inflicted ${power} damage on ${gym.name}! ${newPoints} CP remaining.`,
+          };
+        } else if (GauntletService.requiredForCapture() && !opts.viaGauntlet) {
+          /*
+           * The last hit is the only thing the gauntlet gates.
+           *
+           * When a pack turns `event.gauntlet.requiredForCapture` on, raw control points can
+           * grind a rival gym down but cannot take it: the flip needs a challenge win spent
+           * through `POST /pokeshift/gauntlets/:id/spend`. Everything else is untouched —
+           * reinforcing an ally, taking neutral ground, and every earlier strike behave
+           * exactly as before, because gating those would break the first thirty seconds of
+           * play for the sake of the last one.
+           *
+           * The gym is left on a floor of 1 CP rather than 0 so the board shows how close it
+           * is, and the message says what would finish it. A silent refusal here would be the
+           * enabled-button-that-always-fails shape this repository has fixed twice.
+           */
+          const floored = await Gym.findOneAndUpdate(
+            { _id: gym._id, version: gym.version },
+            { $set: { controlPoints: 1, lastBattledAt: new Date() }, $inc: { version: 1 } },
+            { new: true }
+          );
+          if (!floored) continue; // lost the CAS; the retry loop re-reads and decides again
+          return {
+            action: 'ATTACKED',
+            gymId: String(gym._id),
+            controllingFaction: floored.controllingFaction,
+            newControlPoints: floored.controlPoints,
+            maxControlPoints: floored.maxControlPoints,
+            leaderName: floored.leaderName,
+            karmaAwarded: 0,
+            message: `${gym.name} is down to its last point. Win its coding challenge to take it.`,
           };
         } else {
           // A strike that meets or exceeds the remaining points flips the gym. The reset is

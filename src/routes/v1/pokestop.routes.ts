@@ -36,6 +36,9 @@ import { validate } from '../../middleware/validate';
 import { requireAccount, requireSession } from '../../middleware/identity';
 import {
   battleGymSchema,
+  startGauntletSchema,
+  submitGauntletSchema,
+  spendGauntletSchema,
   spinBeaconSchema,
   getInventorySchema,
   usePowerUpSchema,
@@ -46,6 +49,15 @@ export const pokeShiftRouter = Router();
 // Gym endpoints
 pokeShiftRouter.get('/gyms', GymController.listGyms);
 pokeShiftRouter.post('/gyms/:id/battle', validate(battleGymSchema), GymController.battleOrContribute);
+/*
+ * The gauntlet. All three require a session, unlike `/battle`, which is deliberately open for
+ * the legacy demo posture: these three mint karma and create a durable row owned by a named
+ * person, and the inventory route in this file is the precedent for gating a route whose
+ * subject is somebody in particular.
+ */
+pokeShiftRouter.post('/gyms/:id/gauntlet', requireSession, validate(startGauntletSchema), GymController.startGauntlet);
+pokeShiftRouter.post('/gauntlets/:attemptId/submit', requireSession, validate(submitGauntletSchema), GymController.submitGauntlet);
+pokeShiftRouter.post('/gauntlets/:attemptId/spend', requireSession, validate(spendGauntletSchema), GymController.spendGauntlet);
 
 // HackStop supply beacon endpoints
 pokeShiftRouter.get('/hackstops', HackStopController.listBeacons);

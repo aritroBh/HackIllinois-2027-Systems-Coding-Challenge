@@ -1,3 +1,4 @@
+import { pack } from '../src/content/loader';
 import { Gym } from '../src/models/gym.model';
 import { HOLDER, RIVAL } from './helpers/factions';
 import { HackStop } from '../src/models/hackstop.model';
@@ -52,6 +53,16 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
     });
 
     it('damages opposing gym and successfully overthrows/captures it when CP is depleted', async () => {
+    /*
+     * This exercises the control-point capture path, which the gauntlet gates when a pack
+     * turns `event.gauntlet.requiredForCapture` on — as the shipped HackIllinois pack now
+     * does. Stating the precondition here rather than inheriting whatever the pack happens to
+     * say keeps the test about the thing it names: a test that silently changed meaning with a
+     * pack edit would be worse than one that fails.
+     */
+      const gauntletWas = pack.event.gauntlet.requiredForCapture;
+      pack.event.gauntlet.requiredForCapture = false;
+      try {
       const gym = await Gym.create({
         name: 'ECEB Microelectronics Bastion',
         locationName: 'ECEB',
@@ -79,6 +90,7 @@ describe('PokéShift Campus Turf Wars & HackStop Engine', () => {
       expect(dbGym?.controllingFaction).toBe(RIVAL);
       expect(dbGym?.leaderVolunteerId?.toString()).toBe(volB._id.toString());
       expect(dbGym?.leaderName).toBe(volB.name);
+      } finally { pack.event.gauntlet.requiredForCapture = gauntletWas; }
     });
   });
 

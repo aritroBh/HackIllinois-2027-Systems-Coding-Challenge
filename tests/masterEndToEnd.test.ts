@@ -339,7 +339,11 @@ describe('WaveShift Nexus: 10-System Master Hackathon Operations Simulation', ()
       volAda._id.toString(),
       RIVAL,
       150,
-      VENUE_COORDINATES.SIEBEL_ATRIUM
+      VENUE_COORDINATES.SIEBEL_ATRIUM,
+      // This leg asserts the control-point capture, which the gauntlet gates when a pack turns
+      // `event.gauntlet.requiredForCapture` on — as the shipped pack now does. Saying so here
+      // keeps the assertion about the mechanic it names rather than about a pack default.
+      { viaGauntlet: true }
     );
     expect(battleRes.action).toBe('CAPTURED');
     expect(battleRes.controllingFaction).toBe(RIVAL);

@@ -13,6 +13,7 @@
  * original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
  */
 import { z } from 'zod';
+import type { Challenge } from './challenges.schema';
 import fs from 'fs';
 import path from 'path';
 import { KARMA_SOURCES } from '../common/karmaSources';
@@ -106,6 +107,20 @@ export const eventSchema = z.object({
       cellMeters: z.number().positive().default(50),
       maxDetail: z.number().int().positive().default(60),
     })
+    .default({}),
+  /**
+   * The gauntlet: whether taking a rival gym requires winning its coding challenge.
+   *
+   * Defaulted rather than required, and off by default, for two reasons. A pack that ships no
+   * `challenges.json` — `content/example-campus` does not — would otherwise make every rival
+   * gym permanently uncapturable, which is a dead mechanic that boots green. And a fork
+   * pulling this commit keeps the behaviour it already had until it opts in.
+   *
+   * `GauntletService.requiredForCapture()` additionally refuses to honour a `true` here when
+   * the pack ships no challenges, so the flag cannot lock a board it has nothing to unlock.
+   */
+  gauntlet: z
+    .object({ requiredForCapture: z.boolean().default(false) })
     .default({}),
   karmaCaps: z.record(z.number().int().nonnegative()).default({}),
   bountyCap: z.record(z.number().int().positive()).default({}),
@@ -347,6 +362,14 @@ export interface ContentPack {
   territories: Territory[];
   beacons: Beacon[];
   loot: Loot;
+  /**
+   * Coding challenges, when the pack ships `challenges.json`. Null means this event has none,
+   * which is different from having an empty list: null is "no such file", and the gauntlet
+   * requirement refuses to engage without challenges to serve.
+   */
+  challenges: Challenge[] | null;
+  /** The salt this pack's answer digests were generated with. Null when it ships no challenges. */
+  challengesSalt: string | null;
   /** Monument ids baked into campus.json, when the file exists (null when it has not been built yet). */
   campusMonumentIds: string[] | null;
   /** Files present in the pack directory that the client may fetch under /dashboard/content/. */

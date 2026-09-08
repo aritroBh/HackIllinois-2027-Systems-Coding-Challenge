@@ -47,6 +47,37 @@ export const battleGymSchema = z.object({
   }),
 });
 
+/** Shared by every gauntlet route: you must say where you are, and it is checked server-side. */
+const coordinatesBody = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+
+export const startGauntletSchema = z.object({
+  params: z.object({ id: objectId('Invalid Gym ObjectId') }),
+  body: z.object({ coordinates: coordinatesBody }),
+});
+
+export const submitGauntletSchema = z.object({
+  params: z.object({ attemptId: objectId('Invalid attempt ObjectId') }),
+  body: z.object({
+    // Bounded here so the judge's cost is bounded before it is reached: at most eight answers
+    // of at most 200 characters is at most eight HMACs over 1.6 KB.
+    answers: z.array(z.string().max(200)).min(1).max(8),
+    coordinates: coordinatesBody,
+  }),
+});
+
+export const spendGauntletSchema = z.object({
+  params: z.object({ attemptId: objectId('Invalid attempt ObjectId') }),
+  body: z.object({
+    faction: z
+      .string().min(1).max(40)
+      .regex(/^[A-Z][A-Z0-9_]*$/, 'A faction id is SCREAMING_SNAKE_CASE, as declared in factions.json'),
+    coordinates: coordinatesBody,
+  }),
+});
+
 export const spinBeaconSchema = z.object({
   params: z.object({
     beaconId: z.string().min(1, 'Beacon ID is required'),

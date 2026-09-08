@@ -1,0 +1,68 @@
+{
+  "_about": "PLAINTEXT ANSWERS — the source of truth for content/hackillinois-2027/challenges.json. This file is NOT served and NOT copied into the Docker image; only the generated digests travel with the pack. Edit here, then run `npm run gauntlet:hashes -- hackillinois-2027`. Never hand-edit the generated file.",
+  "answerSalt": "nexus-gauntlet-hi2027-a7f3c1d9e4b28650",
+  "challenges": [
+    {
+      "id": "off-by-one",
+      "title": "Off by one",
+      "prompt": "for (let i = 0; i < 5; i++) {}\nconsole.log(i);\n\nWhat does this print?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "EASY",
+      "choices": ["4", "5", "undefined", "ReferenceError"],
+      "cases": [{ "input": "The result of running the snippet", "answer": "ReferenceError" }],
+      "timeLimitSeconds": 180,
+      "rewardKarma": 40,
+      "capturePower": 200
+    },
+    {
+      "id": "two-seats",
+      "title": "Two seats, fifty people",
+      "prompt": "Fifty requests arrive at the same instant for a shift with two seats. The server reserves a seat with a single conditional update:\n\n  findOneAndUpdate(\n    { _id, $expr: { $lt: ['$filled', '$capacity'] } },\n    { $inc: { filled: 1 } }\n  )\n\nHow many of the fifty are confirmed?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "EASY",
+      "cases": [{ "input": "Number confirmed", "answer": "2" }],
+      "timeLimitSeconds": 180,
+      "rewardKarma": 50,
+      "capturePower": 220
+    },
+    {
+      "id": "grid-snap",
+      "title": "Snap to the grid",
+      "prompt": "Positions are published snapped to a 20-metre grid, using:\n\n  Math.round(x / 20) * 20\n\nA trainer stands at x = 51. What x is published?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "MEDIUM",
+      "cases": [{ "input": "Published x for x = 51", "answer": "60" }],
+      "timeLimitSeconds": 240,
+      "rewardKarma": 60,
+      "capturePower": 250
+    },
+    {
+      "id": "three-way-ring",
+      "title": "The three-way ring",
+      "prompt": "Alice wants Bob's shift, Bob wants Charlie's, and Charlie wants Alice's. The resolver enumerates elementary cycles of length 2 to 4 by depth-first search, refusing to traverse below the start node.\n\nHow many distinct cycles does it find in this graph?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "MEDIUM",
+      "cases": [{ "input": "Number of distinct cycles", "answer": "1" }],
+      "timeLimitSeconds": 240,
+      "rewardKarma": 70,
+      "capturePower": 260
+    },
+    {
+      "id": "stale-read",
+      "title": "The guard that cannot fire",
+      "prompt": "const acc = pos.coords.accuracy ?? 999;\nif (acc > 50) return drop();\n\nA device reports no accuracy at all. What happens?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "HARD",
+      "choices": [
+        "The sample is kept, because accuracy is unknown",
+        "The sample is dropped, every time",
+        "It depends on the device",
+        "A TypeError is thrown"
+      ],
+      "cases": [{ "input": "The outcome for a device with no accuracy figure", "answer": "The sample is dropped, every time" }],
+      "timeLimitSeconds": 300,
+      "rewardKarma": 90,
+      "capturePower": 300
+    }
+  ]
+}

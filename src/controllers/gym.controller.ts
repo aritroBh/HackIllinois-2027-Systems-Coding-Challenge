@@ -7,6 +7,7 @@
  * favourable branch.
  */
 import { Request, Response, NextFunction } from 'express';
+import { GauntletService } from '../services/gauntlet.service';
 import { GymService } from '../services/gym.service';
 import { resolveActorId } from '../middleware/identity';
 
@@ -58,6 +59,76 @@ export class GymController {
    * unexpired shield; and 403 when coordinates are sent and place the caller more than 75 m
    * away.
    */
+  /**
+   * Open a coding challenge at a gym you are standing at.
+   *
+   * The geofence is checked inside the service before a challenge is chosen, so this cannot be
+   * used to enumerate the question set from elsewhere.
+   */
+  public static async startGauntlet(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const volunteerId = resolveActorId(req);
+      const served = await GauntletService.start(volunteerId as string, req.params.id as string, req.body.coordinates);
+      res.status(201).json({ success: true, data: served });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /** Judge an open attempt. Returns per-case verdicts and never the expected answer. */
+  public static async submitGauntlet(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const volunteerId = resolveActorId(req);
+      const { won, perCase, challenge } = await GauntletService.submit(
+        volunteerId as string,
+        req.params.attemptId as string,
+        req.body.answers,
+        req.body.coordinates
+      );
+      res.status(200).json({
+        success: true,
+        data: {
+          won,
+          perCase,
+          correctCount: perCase.filter(Boolean).length,
+          total: perCase.length,
+          // Named so the client knows the win is a token that still has to be spent, rather
+          // than assuming the gym already changed hands.
+          nextAction: won ? 'SPEND' : null,
+          rewardKarma: won ? challenge.rewardKarma : 0,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Spend a win on the gym it was won at.
+   *
+   * Two steps, in this order: the single-spend conditional update, then the ordinary capture
+   * path. If the capture throws after the token is burned the win is lost, which is the same
+   * survivable direction the rest of this file already chose for karma — and the error names
+   * it, so a player knows to run the challenge again rather than staring at an unchanged map.
+   */
+  public static async spendGauntlet(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const volunteerId = resolveActorId(req);
+      const { challenge, gymId } = await GauntletService.spend(volunteerId as string, req.params.attemptId as string);
+      const result = await GymService.battleOrContribute(
+        gymId,
+        volunteerId as string,
+        req.body.faction,
+        challenge.capturePower,
+        req.body.coordinates,
+        { viaGauntlet: true }
+      );
+      res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async battleOrContribute(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { faction, power, coordinates } = req.body;

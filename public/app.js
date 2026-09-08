@@ -1160,6 +1160,20 @@ const refresh = {
   inventory: coalesce(loadUserInventory),
 };
 
+/*
+ * The gym refetch, for `game.js` after a challenge win.
+ *
+ * A plain assignment, and NOT an entry in the `Object.defineProperties` block at the top of
+ * this file. Two reasons, one of which cost a whole broken page to learn: a top-level
+ * `function` declaration in a classic script creates a NON-CONFIGURABLE global property, so
+ * `defineProperties` throws `Cannot redefine property` on any name that already exists that
+ * way — and because that call defines every window accessor in one object literal, the throw
+ * took `campus`, `campusMeta` and `toWorld` down with it and the dashboard booted with four
+ * tabs and no data. `requirePlayerCoords` needed no exposing at all for exactly the same
+ * reason: being a top-level function declaration, it is already `window.requirePlayerCoords`.
+ */
+window.refreshGyms = () => refresh.gyms();
+
 let sseRetryMs = 1000;
 
 /** Maps the legacy colour classes callers pass to the signal variants. */

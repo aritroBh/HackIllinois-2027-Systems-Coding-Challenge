@@ -957,3 +957,22 @@ body.lite .viewport-hud { display: none; }
    z-index 7 clears the flat map, whose own 6 is set inline in `lite.js`. */
 body.lite .viewport-hud.br { display: flex; z-index: 7; }
 body.lite #hud-hint { display: none; }   /* "WASD to walk" describes the renderer, not this. */
+
+/* ---- The gauntlet: a gym's coding challenge, rendered inside the encounter message box ---- */
+.gaunt { display: flex; flex-direction: column; gap: 8px; }
+.gaunt-title { margin: 0; font-size: 20px; }
+/* The prompt is code. It keeps its own whitespace and scrolls rather than reflowing, because a
+   snippet re-wrapped at a narrow width is a different snippet than the one being asked about. */
+.gaunt-prompt {
+  margin: 0; padding: 8px; max-height: 30vh; overflow: auto;
+  background: var(--ink, #0b1220); border: 2px solid var(--line, #2a3d63);
+  font-family: var(--f-body); font-size: 15px; line-height: 1.25; white-space: pre;
+}
+.gaunt-choices { display: flex; flex-direction: column; gap: 4px; }
+.gaunt-choice { display: flex; align-items: center; gap: 8px; cursor: pointer; font-family: var(--f-body); font-size: 16px; }
+.gaunt-field { display: flex; flex-direction: column; gap: 2px; }
+.gaunt-input {
+  font-family: var(--f-body); font-size: 16px; padding: 6px 8px;
+  background: var(--ink, #0b1220); color: var(--cream, #f5f0e6); border: 2px solid var(--line, #2a3d63);
+}
+.gaunt-input:focus-visible, .gaunt-choice input:focus-visible { outline: 2px solid var(--orange, #ff5f05); outline-offset: 1px; }

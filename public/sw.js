@@ -155,7 +155,10 @@
   //        person whose privacy it describes, and "mint" stopped being a verb on a button.
   //        Also: the manifest had named two icon files that never existed, so the app could
   //        not be installed; they exist now and checkShell fails if they stop matching.
-  const VERSION = 'v59';
+  // `v60`: the gauntlet. Taking a rival gym can now require winning its coding challenge,
+  //        answered standing inside the gym's geofence — checked again on submit, so you
+  //        cannot start at the gym and answer from the bus.
+  const VERSION = 'v60';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

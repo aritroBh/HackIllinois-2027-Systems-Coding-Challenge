@@ -34,6 +34,7 @@ import {
 import { boothsSchema } from './booths.schema';
 import { raidsSchema } from './raids.schema';
 import { questsSchema } from './quests.schema';
+import { challengesSchema } from './challenges.schema';
 import { DOMAIN_EVENT_NAMES } from '../common/events/domainEvents';
 
 /**
@@ -112,6 +113,7 @@ export function loadPack(dir: string): ContentPack {
   // schema exists to prevent, with the schema present and unused.
   const quests = fs.existsSync(path.join(dir, 'quests.json')) ? readJson(dir, 'quests.json', questsSchema, issues) : null;
   const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
+  const challenges = fs.existsSync(path.join(dir, 'challenges.json')) ? readJson(dir, 'challenges.json', challengesSchema, issues) : null;
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
   // Venue keys in the game files, checked here rather than in `crossValidate` because these
   // files are optional and the pack object it receives does not carry them.
@@ -200,6 +202,8 @@ export function loadPack(dir: string): ContentPack {
     territories: territories.territories,
     beacons: beacons.beacons,
     loot,
+    challenges: challenges?.challenges ?? null,
+    challengesSalt: challenges?.answerSalt ?? null,
     campusMonumentIds,
   };
   issues.push(...crossValidate(partial));
