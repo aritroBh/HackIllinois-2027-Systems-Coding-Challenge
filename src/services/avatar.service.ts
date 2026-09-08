@@ -7,8 +7,12 @@
  * the round trip. Only then is the sha256 taken, which means the hash identifies the image
  * rather than the file.
  *
- * Sharing is opt-in and reviewed: an avatar is visible to its owner and to leads while
- * PENDING, and to other players once APPROVED. Three distinct reporters — or one lead —
+ * Sharing is opt-in and reviewed, and it takes **both**: an avatar is visible to its owner and
+ * to leads while PENDING, and to other players once it is APPROVED *and* its owner set
+ * `shareOptIn`. Approval alone does not publish — `fetch` requires the pair (see the note on it
+ * below, which has always said so while this paragraph said only "once APPROVED"). An approved
+ * avatar whose owner never opted in stays owner-and-lead-only, which is a support question rather
+ * than a leak, but the shorter sentence was believed and wrong. Three distinct reporters — or one lead —
  * unpublish it immediately and emit `AVATAR_UNPUBLISHED` on the `game` channel, which is
  * what evicts the texture from every connected renderer's cache.
  */
@@ -22,22 +26,59 @@ import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { presenceService } from '../presence/service';
 
-/** A walk sheet (128×48 or 128×32) or a single 32×32 head. */
+/**
+ * The four accepted geometries, and the list is closed.
+ *
+ * A frame is 32 wide and either 32 (a head) or 48 (a full body) tall; a walk sheet is four
+ * of those laid out horizontally, so 128 wide at the same two heights. `public/avatar.js`
+ * bakes a webcam capture into the 128×48 case — `FW = 32, FH = 48, FRAMES = 4` there — and
+ * the other three are accepted too, which is what lets a hand-drawn single frame or a
+ * head-only sheet through. An earlier version of this comment listed only three of the four.
+ *
+ * Checked twice against this list in `upload`: once against the width and height declared in
+ * the IHDR, before pngjs is allowed to allocate anything, and again against the decoded
+ * image — because the header is the uploader's claim and the decode is the truth.
+ */
 const ALLOWED_SIZES: ReadonlyArray<[number, number]> = [
   [128, 48],
   [128, 32],
   [32, 32],
   [32, 48],
 ];
+/**
+ * Exported so that this and the `express.raw` body limit in `avatar.routes.ts` are one
+ * constant rather than two numbers somebody has to keep equal by hand.
+ *
+ * Because they are equal, Express refuses anything larger with its own 413 before this
+ * service is reached, so the length check at the top of `upload` never fires through that
+ * route. It stands for any caller that is not that route, which would otherwise hand pngjs
+ * an arbitrarily large buffer with nothing in between.
+ */
 export const MAX_UPLOAD_BYTES = 64 * 1024;
+/** Per account per hour, in this process only — see `rateOk` for what that is worth. */
 const UPLOADS_PER_HOUR = 20;
+/** Distinct reporters, not reports: `flag` counts the set of reporter ids on the document. */
 const FLAGS_TO_UNPUBLISH = 3;
 
+/**
+ * account → recent upload times. In-process, so it is empty after a restart and is not
+ * shared between replicas: the hourly budget is per instance, and a redeploy hands everybody
+ * a fresh one. That is the honest bound on this. It is a nuisance limiter rather than a
+ * security control — the controls are the 64 KB cap, the closed size list and the re-encode.
+ */
 const recentUploads = new Map<string, number[]>();
 /** reporter → times, so one account cannot mass-report the field. */
 const recentFlags = new Map<string, number[]>();
 const FLAGS_PER_HOUR = 10;
 
+/**
+ * Tests and records in one call, so calling this is spending a slot rather than asking about
+ * one.
+ *
+ * A rejected attempt does not consume one: the count is compared before the push, so
+ * somebody hammering the endpoint stays at exactly twenty recorded attempts for the hour
+ * instead of extending their own lockout with every retry.
+ */
 function rateOk(accountId: string, now = Date.now()): boolean {
   const hourAgo = now - 3_600_000;
   // Lazy sweep: without it this map keeps one entry per account that ever uploaded, for
@@ -61,6 +102,9 @@ export function __resetAvatarRate(): void {
   recentFlags.clear();
 }
 
+/**
+ * Avatar customization and procedural pixel-art asset generation service for volunteer trainers.
+ */
 export class AvatarService {
   /**
    * Decode → validate dimensions → re-encode → hash → store. Returns the stored document;
@@ -133,7 +177,16 @@ export class AvatarService {
     return doc;
   }
 
-  /** The account's `avatarHash` is what the presence wire carries. */
+  /**
+   * The account's `avatarHash` is what the presence wire carries, so pointing it at this row
+   * is what actually changes anybody's sprite.
+   *
+   * The `invalidate` is the load-bearing half. The presence layer holds its own copy of an
+   * account for about thirty seconds, and without dropping it the tick keeps publishing the
+   * hash it already had — a new upload that visibly does nothing for half a minute.
+   * `unpublish` makes the same call for the same reason on the takedown path, where the stale
+   * copy would be a withdrawn image still being announced to peers who have not fetched it.
+   */
   private static async pointAccountAt(ownerId: string, doc: IAvatar): Promise<void> {
     await Volunteer.updateOne({ _id: ownerId }, { $set: { avatarHash: doc.hash } });
     presenceService.invalidate(ownerId);
@@ -167,6 +220,19 @@ export class AvatarService {
     throw ApiError.notFound('Avatar not found.', ErrorCode.NOT_FOUND);
   }
 
+  /**
+   * The moderation queue: PENDING *and* opted into sharing.
+   *
+   * An avatar whose owner never asked for it to be shared is deliberately absent, and stays
+   * PENDING for ever as a result. That is the correct resting state rather than a backlog,
+   * because `fetch` publishes a row only when it is APPROVED **and** `shareOptIn`: an
+   * unshared avatar is already visible to nobody but its owner and a proved lead, so there is
+   * nothing here for a reviewer to decide.
+   *
+   * `-bytes` because a queue page is hashes and dimensions, not several megabytes of PNG.
+   * The fifty is a hard stop with no cursor behind it — the route calls this with no argument
+   * — so a backlog past fifty is invisible until the front of it has been cleared.
+   */
   public static async pendingQueue(limit = 50): Promise<IAvatar[]> {
     return Avatar.find({ status: AvatarStatus.PENDING, shareOptIn: true })
       .select('-bytes')
@@ -174,6 +240,18 @@ export class AvatarService {
       .limit(limit);
   }
 
+  /**
+   * A lead's decision on one person's upload.
+   *
+   * Approving is necessary but not sufficient for the image to become visible. `fetch`
+   * requires APPROVED **and** `shareOptIn`, and this touches only the first, so approving an
+   * avatar its owner never opted to share leaves it exactly as private as it was. That is the
+   * right way round: a reviewer working through a queue cannot publish somebody by accident.
+   *
+   * Rejecting does more than set a status, and has to. The status alone would leave the hash
+   * on the owner's account and therefore on the presence wire until something else noticed;
+   * `unpublish` is what clears it and evicts the texture from every connected renderer.
+   */
   public static async review(hash: string, reviewerId: string, approve: boolean, ownerId: string): Promise<IAvatar> {
     // `ownerId` is required, not optional.
     //

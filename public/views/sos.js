@@ -41,8 +41,13 @@
     idle: 'Location not set yet.',
     locating: 'Finding you…',
     ok: 'Got your position. Pick a landmark below to override it.',
-    denied: 'No position from this device. Pick the nearest landmark below.',
+    denied: 'Location is off for this page. Pick the nearest landmark below.',
     unavailable: 'This browser has no location. Pick the nearest landmark below.',
+    // An insecure origin is not a missing API and not a refusal: the call fails no matter
+    // what the person does in site settings, so sending them there wastes time in the one
+    // flow where time is the point.
+    insecure: 'Location needs a secure page (https, or localhost). Pick the nearest landmark below.',
+    timeout: 'Still looking for your position. Pick the nearest landmark below.',
   };
 
   const state = {
@@ -108,11 +113,15 @@
 
   function locate() {
     if (!navigator.geolocation) { state.geo = 'unavailable'; paintGeo(); return; }
+    if (!window.isSecureContext) { state.geo = 'insecure'; paintGeo(); return; }
     state.geo = 'locating';
     paintGeo();
     navigator.geolocation.getCurrentPosition(
       (pos) => { state.coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }; state.geo = 'ok'; paintGeo(); },
-      () => { state.geo = 'denied'; paintGeo(); },
+      // Every failure read "denied", including a timeout, which sent people to check a
+      // permission they had already granted. The landmark picker below is the real fallback
+      // in all three cases, so each one names itself and points at the same next step.
+      (err) => { state.geo = err && err.code === 1 ? 'denied' : err && err.code === 3 ? 'timeout' : 'unavailable'; paintGeo(); },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
     );
   }

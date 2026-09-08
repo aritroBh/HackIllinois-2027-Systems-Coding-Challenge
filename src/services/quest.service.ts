@@ -137,6 +137,7 @@ function eventHour(at: Date): string {
   return `${eventDay(at)}T${hour.padStart(2, '0')}`;
 }
 
+/** The streak period a timestamp falls in: the hour, the day, or the whole event. */
 function windowBucket(window: QuestWindow, at: Date): string {
   if (window === 'HOURLY') return eventHour(at);
   if (window === 'DAILY') return eventDay(at);
@@ -189,6 +190,7 @@ function progressOf(quest: Quest, row: Pick<IQuestProgress, 'count' | 'distinct'
   return trailingRun(quest.window, row.distinct);
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -214,7 +216,22 @@ function distinctValue(quest: Quest, meta: Record<string, unknown>, at: Date): s
   return value.length > 0 && value.length <= 200 ? value : null;
 }
 
+/**
+ * Domain event quest engine tracking achievement milestones, sponsor table visits, and sticker album rewards.
+ */
 export class QuestService {
+  /**
+   * Every `event` name the active pack's quests declare, deduplicated.
+   *
+   * Exists so `economy/wiring.ts` can warn at boot about a quest naming an event no listener
+   * subscribes to. The catalogue is module-private and the subscriptions live in the wiring, so
+   * one of the two has to reach across; an accessor here is smaller than exporting the catalogue
+   * or widening `ContentPack` to carry quests.
+   */
+  public static declaredEvents(): string[] {
+    return [...new Set(questCatalog().all.map((quest) => quest.event).filter(Boolean))] as string[];
+  }
+
   /**
    * Read the catalog now, so a bad pack fails at boot rather than at the first player.
    *

@@ -16,6 +16,10 @@ import { IdxTable, JoinRecord, WireRow, encodeRows, toJsonRow } from './protocol
 import type { PresenceClient } from './transport';
 import type { Cohort, PresenceEntry, PresenceStore } from './store';
 
+/**
+ * Per-client presence connection session managing differential delta updates,
+ * tile index caching, and bandwidth-throttled position streaming.
+ */
 export class PresenceSession {
   public readonly idx = new IdxTable();
   private sentVersion = new Map<string, number>();
@@ -62,6 +66,16 @@ export class PresenceSession {
   /** SSE clients get a smaller cut: the fallback carries JSON rows over the event stream. */
   public readonly detailCap: number;
 
+  /**
+   * `detailCap` is settled once and never moves, because the transport cannot: a socket does
+   * not become an event stream. The load ladder's `detailBudget` is the part that varies, and
+   * `effectiveCap` is where the two are reconciled — the cohort is built from that figure, not
+   * from either half alone.
+   *
+   * `lead` is seeded from the role this connection authenticated with and then re-asserted
+   * every tick from the account facts; the field's own comment explains why a stale one is a
+   * disclosure rather than a cosmetic error.
+   */
   constructor(
     public readonly client: PresenceClient,
     private readonly store: PresenceStore,
@@ -248,6 +262,7 @@ export class PresenceSession {
     return out;
   }
 
+  /** Join frame: who arrived. Positions ride the rows, never this record. */
   private joinOf(e: PresenceEntry, idx: number): JoinRecord {
     return { idx, id: e.id, name: e.name, faction: e.faction, avatarHash: e.avatarHash, kind: e.kind };
   }
@@ -266,7 +281,20 @@ export class PresenceSession {
     return r;
   }
 
-  /** Build and send this tick's frame. Returns the number of rows sent. */
+  /**
+   * Build and send this tick's frame. Returns the number of rows sent.
+   *
+   * A binary client gets two frames, not one: a JSON head carrying the joins, the cluster
+   * counts and the row count, then the rows themselves as eight bytes each. Splitting them is
+   * safe because a WebSocket delivers in order, and `n` in the head is what tells the client
+   * how many rows are coming.
+   *
+   * A tick with nothing to say sends nothing, and the four things that count as something are
+   * the four terms of the early return: rows, joins, released slots, and a cluster payload that
+   * has changed. A full snapshot is exempt and goes out even when it is empty, because this is
+   * also the path that advances `lastSnapshotAt` and clears `needsFullSnapshot` — returning
+   * early would leave a session permanently owing a snapshot it never sent.
+   */
   send(tick: number, nowMs: number, metersPerUnit: number, cohort: Cohort | null = null): number {
     const full = this.idx.needsFullSnapshot || nowMs - this.lastSnapshotAt >= this.opts.snapshotEveryMs;
     if (full) {
@@ -400,14 +428,27 @@ export class PresenceSession {
 
 /** Faction id → the 3-bit wire slot. NEUTRAL is 0; the pack's order fixes the rest. */
 let factionOrder: string[] = [];
+/**
+ * Install the wire order from the content pack. Called once, from the service's constructor,
+ * which runs at import time because the service is a module singleton.
+ *
+ * NEUTRAL is forced into slot 0. The pack validator requires that faction to exist but says
+ * nothing about where it sits, and an unrecognised faction also maps to 0, so the two have to
+ * mean the same thing to a client. Eight slots is a hard ceiling from the wire format — the
+ * row's flag byte gives the faction three bits — so a pack listing more than eight factions in
+ * total loses the extras here and draws their members as neutral. Nothing warns about it: the
+ * schema caps nothing above a minimum of two.
+ */
 export function setFactionOrder(ids: string[]): void {
   factionOrder = ['NEUTRAL', ...ids.filter((f) => f !== 'NEUTRAL')].slice(0, 8);
 }
+/** Missing, unknown, and truncated-past-slot-seven all collapse to 0, which the client draws as NEUTRAL. */
 export function factionIndex(faction: string | null | undefined): number {
   if (!faction) return 0;
   const i = factionOrder.indexOf(faction);
   return i < 0 ? 0 : i;
 }
+/** The inverse, for a decoded row. Nothing in this tree calls it — `decodeRows` returns the raw index. */
 export function factionAt(index: number): string {
   return factionOrder[index] ?? 'NEUTRAL';
 }

@@ -1253,3 +1253,274 @@ found by checking it both ways in a browser rather than by reading it.
 file against a hand-built window rather than asserting on its source. 58 plan gates. `verify.sh`
 exit 0. The QR renders to a canvas that was exported and decoded by an independent decoder back
 to the exact minted token. Both review trees were hashed before and after: no reviewer wrote.
+
+---
+
+## Round nineteen — the seams that were not connected, 2026-09-07
+
+Two sessions worked this tree at once, in agreed lanes, talking directly rather than through a
+file. This is the server half. The round was framed by one question, borrowed from the other
+session and worth stating plainly because it outperformed everything else tried in nineteen
+rounds:
+
+> Not "is this sentence wrong", but **"does anything actually call the thing this sentence
+> promises?"**
+
+Sixteen agents ran it across `src/` and `docs/`, in two passes each — one writing, one
+adversarially fact-checking the first pass's own output on the grounds that new prose written
+quickly by someone who has just read the code is where this repository's false claims come from.
+
+### The headline: three content-pack files that did nothing
+
+`territories.json`, `beacons.json` and `loot.json` were parsed, cross-validated, served to every
+browser under `/dashboard/content` — and read by nobody. The seed built its fourteen gyms and
+twelve beacons from literals; `HackStopService` rolled against a drop table written inside the
+service. Each pack file held the same data as the literal it shadowed, so the two agreed by
+coincidence and nobody had noticed there were two.
+
+`territories.json`'s own `_about` said *"Read by `src/seed/seedData.ts`."* It was not. That is the
+worst form of this defect: specific enough to be believed, and sitting in the file it lies about.
+
+`src/common/utils/geo.ts` was the same shape one layer down — a fifteen-building gazetteer with
+coordinates and free-text hints, byte-for-byte identical to `venues.json`. The pack's copy is
+what the client rendered; the copy in `src/` is what the check-in geofence measured against. A
+fork that edited `venues.json`, exactly as the fork guide instructs, moved the pin on the map and
+not the geofence, and its volunteers were refused while standing at the right desk.
+
+### The shipped fork template could not run
+
+`content/example-campus` is what `docs/FORK_GUIDE.md` tells a fork to copy. It declares TEAM_RED
+and TEAM_BLUE. `GymSchema.controllingFaction` validated against `Object.values(Faction)` — three
+HackIllinois team ids compiled into `src/models/gym.model.ts` — so two validators disagreed about
+the same value: `crossValidate` passes any faction the pack declares, and Mongoose rejected
+anything not in the enum.
+
+It was demonstrated rather than argued. `example-campus` seeded only because its single territory
+is NEUTRAL, the one id both lists share. Setting that territory to TEAM_RED — a faction its own
+pack declares — produced `Gym validation failed … kind: 'enum', value: 'TEAM_RED'`. After the
+fix, the same command seeds, and a scratch fork with its own venues, territories, beacons and
+factions runs end to end.
+
+### The plugin system had never executed
+
+Activation read `env.PLUGINS`. `.env.example` ships it empty and nothing set it — not the demo
+script, not CI, not the Dockerfile, not `render.yaml`, not any test. So `pluginRegistry.activated()`
+was `[]` everywhere, `GET /api/v1/plugins` returned `[]` to a `public/plugins.js` that was wired
+and shipped and had never been handed anything, and `plugins/hello-nexus/` — "the worked example
+the fork guide points at" — had never run. `docs/PLUGINS.md` meanwhile said activation came from
+the pack's `event.json`, whose `plugins` array was parsed and read by nobody.
+
+It also had **zero tests**, and could not have had any: the four boot refusals called
+`process.exit(1)` from the constructor and `PluginRegistry` was not exported, so any test that
+reached a refusal would have taken the runner down with it. The four checks that exist
+specifically to fail loudly were the four nothing could prove still fired.
+
+### Two bugs that hurt the person, not the invariant
+
+**The graveyard-shift bonus paid the evening.** `surgePricing.ts` exists because the 3 a.m.
+rubbish run does not fill. Its circadian term read `getUTCHours()` with the peak at 03:30 *UTC* —
+21:30 in Chicago. Real 3:30 a.m. landed where the cosine is exactly zero: **1.375 of a possible
+2.5**, while the peak sat in the evening when shifts fill on their own. The comment beside it was
+half right, which is why it survived: reading a UTC clock *is* correct, and it then treated UTC as
+the event's clock. A second comment said the event timezone was "not yet something a pack can
+set"; it is a required pack field that two other files already read.
+
+**A momentary buffer fill froze a client and then evicted it.** `eventHub.sweep()` marked a
+client `lagging` from a heartbeat that did not flush, under a comment claiming "same backpressure
+bookkeeping as write()". It was not: `write()` attaches a `drain` listener to clear the flag, and
+only when the flag is not already set — so a flag set by `sweep` could never clear. The client
+was then sent no presence frames and was disconnected ten seconds later as unreachable, while
+perfectly healthy. The population that happens to is phones on a congested campus network.
+
+### A gym that told anyone who was where, and when
+
+`GET /pokeshift/gyms` has no session requirement and returned whole gym documents:
+`leaderVolunteerId`, `leaderName`, `lastBattledAt`, and `defenders[]` entries carrying
+`volunteerName`, `contributedPower` and `assignedAt`. A gym is a named campus building and
+contesting one requires standing within 75 m of it, so those fields said a named person was at a
+named place at a stated moment — to anyone who asked, in the default auth mode, with no
+credential and no audit row. The same disclosure had already been taken off the beacon listing
+when `lastSpunUsers` was removed from it.
+
+Gating the route would have been wrong — the territory map is meant to be readable by a hacker
+who has not signed in. What was sensitive was the half nothing rendered: the client reads
+`(g.defenders || []).length` and nothing else, checked rather than assumed.
+
+### The fifth guard that cannot fire
+
+`swap.service.ts` carried `if (shiftMap.size !== n) continue`, commented "incomplete mapping —
+skip rather than half-rotate", five lines below a check that already proved the n volunteer ids
+distinct over the same array. Deleting it changed no behaviour and reddened no test.
+
+### 105 false sentences
+
+47 in code comments, 58 in documentation, 100 repaired. The recurring shapes: claims of
+exclusivity ("the one response in this file that does not go through `ticketFor`" — three of the
+eight do not); ordering claims that read backwards (`resolveTicket`'s documented 403-then-409 is
+409-then-403, because the transition check runs first); comments naming callers that no longer
+call (`cellKeyForCluster` "remains for tests and for the lead heat map" — there is no heat map
+anywhere in this repository); and six SSE event types named in ARCHITECTURE.md's sequence
+diagrams that no code emits, so a client written from those diagrams subscribes to frames the
+server never sends.
+
+### Three tools, three wrong first versions
+
+Worth recording because the lesson generalises: **a gate's exit code is not its result.**
+
+`checkCommentsOnly.mjs` used a bare `ts.createScanner`, which has no parser context and cannot
+tell an opening backtick from a closing one — it scans to the next backtick and swallows whole
+functions. It accused eight innocent files. `checkPackDriven.mjs` stripped comments by deleting
+them, which deleted their newlines and shifted every line below, so it reported a real hit at
+`gym.model.ts:7` — inside the file header — for an enum member on line 45. And a jest assertion,
+`expect(sent).not.toHaveBeenCalled()`, failed for a reason other than the one in its name: the
+code legitimately broadcast its own `PLUGIN_DISABLED`.
+
+All three exited with the status expected of them. All three were caught by reading the output.
+The other session hit the same shape independently and it cost a failure attributed to the wrong
+lane — `Received: 0` read as "closed without a code" when it was that test's own escape-hatch
+timer winning a race with 85 ms of margin.
+
+### Two new gates
+
+`npm run comments:check` parses both versions of every changed `.ts` with the TypeScript parser,
+walks to the leaf tokens, discards JSDoc subtrees and trivia, and compares the streams — so a
+4,500-line comment diff can be *proved* to change no executable code rather than reviewed by eye.
+Deliberately not in `verify.sh`: it compares the working tree to a git ref and goes red on any
+legitimate code change.
+
+`npm run pack:check` turns CONTRIBUTING.md's oldest rule — *nothing in `src/` names a building, a
+faction or a colour* — into a gate, and needs no list of its own: it loads the active pack, takes
+every string that is that event's content, and fails if any appears in `src/`. Twenty-six known
+violations are enumerated in a baseline with a reason each. It is a baseline and not an exemption
+list because a new violation in a baselined file still fails, and an entry that stops matching is
+an **error** — so fixing something forces the list to shrink in the same change. Proved red three
+ways on the real case before being called done.
+
+### The state at the end
+
+375 tests across 34 files, up from 340. `lint`, `docs:check`, `csp:audit` and `pack:check` clean.
+`docs/EXTENDING.md` is new: the six seams in order of blast radius, what each costs, and what
+checks you. The plugin manifest is populated for the first time and the other session confirmed
+the tab renders, executes, and raises no CSP violation in a real browser.
+
+## Round twenty — the second pack, in a browser, 2026-09-07
+
+Three reviewers were launched against HEAD `20e933a`. Only one produced a verdict:
+
+| reviewer | outcome |
+|---|---|
+| muse | 3 findings, all verified by grep, all true, all fixed |
+| agy | **did not run** — individual quota exhausted, ~3h to reset |
+| opencode | still running when this was written |
+
+That agy did not run is recorded rather than rounded off. A round with one reviewer is a round
+with one reviewer, and "muse clean" is not "three reviewers clean".
+
+### What muse found
+
+All three were mine, and two were the same defect: **the fix lands and the sentence stays.**
+
+The presence tick was re-measured into `docs/PRESENCE.md` earlier the same day — p50 59 ms
+clustered, 162 ms scattered, longest block 12.2 ms — and the numbers that re-measurement replaced
+were left standing in `docs/DEMO.md` (still telling a demo-giver to lead with "about fifty
+milliseconds" and "about 115 ms") and in `docs/WORKFLOWS.md` ("never holds the event loop for more
+than about ten"). PRESENCE.md says in as many words that "about 115 ms is not a fair description of
+162 ms" — written by the same hand that left the other two files quoting it. Both now lead with
+the ratio, ~2.7x scattered over clustered, which is the claim that survives being run on another
+machine.
+
+`src/config/env.ts` said trusted egress gets a 10x allowance on "the two per-IP limiters that
+consult them ... never an exemption". Three consult it, and the third — `StreamLimits`'s `PER_IP`
+ceiling — skips the check outright. So an operator tuning `TRUSTED_EGRESS_CIDRS` from the env
+contract expects a bounded stream ceiling at 10x and has none. **That comment has now been wrong
+twice in the same spot**: it first said the ceilings "do not apply", and the correction introduced
+the count that was also wrong, in the more dangerous direction. Count the callers before writing
+"the two".
+
+Two stale counts: DEMO said 32 files / 347 tests, ARCHITECTURE's matrix said 29 / 306. It is 34 and
+375, measured by running the suite rather than by counting files. Both now carry a date and the
+word snapshot.
+
+### The gate that had to learn to read a line number
+
+Citing `src/presence/service.ts:608` made `docs:check` fail — the rule stripped one trailing
+punctuation mark and looked the whole string up as a path, so the most useful kind of citation in
+the docs was a guaranteed false positive. Rather than avoid the form, the rule now splits the line
+number off and checks both halves: the file exists, and the line is inside it. A citation pointing
+past the end of a file is exactly the drift this gate is for and was previously unrepresentable.
+Proved able to fail before being trusted: a planted `service.ts:9999` reports "has only 712 lines",
+a planted `nosuch.ts:12` reports the missing file, restoring goes green.
+
+What it deliberately does not check is whether the line still *says* what the sentence claims. No
+cheap check knows that, and a gate that pretends to is one that passes for the wrong reason.
+
+### The finding that mattered was not from a reviewer
+
+The server has been pack-driven for two days. The client had never been booted against a second
+pack. Doing it took one command:
+
+```sh
+CONTENT_PACK=example-campus PORT=3300 npm run demo
+```
+
+`public/app.js:918` throws `Cannot read properties of undefined (reading 'color')` and blanks the
+entire Turf Wars board. `renderFactionStrip` builds its tally correctly and pack-driven at :913 —
+`FACTION[g.controllingFaction] ? … : 'NEUTRAL'` — and four lines later, in the same function,
+renders from a hard-coded roster of `TEAM_KERNEL`, `TEAM_TENSOR`, `TEAM_SILICON`. `applyFactions`
+has already replaced `FACTION` with the pack's list, so the lookup is `undefined` and `.color`
+throws. The guard exists at :913 and is missing at :918.
+
+`GET /api/v1/pokeshift/gyms` returned 200 with correct data throughout. The server was right and
+the client threw before drawing a row — and `docs/FORK_GUIDE.md` is what tells a fork to start from
+`content/example-campus`, so this is the first thing a hacker following our own guide sees on the
+flagship feature.
+
+Three more of the same shape, none fatal: the Campus HUD control strip (`public/game.js:735`)
+renders three phantom factions at zero and never shows the pack's real ones; every avatar in a
+fork wears the neutral jacket (`public/avatar.js:423`); and `applyFactions` itself hands each of a
+fork's factions the *unclaimed* CSS class (`public/app.js:93`). Plus "1 monuments are strongholds"
+— a count made pack-driven an hour earlier, with no singular case.
+
+**Every server-side check passed on that pack**: `content:validate`, the boot gate, 375 tests, 58
+of 58 plan gates. They all run against the server. This class lives in the browser.
+
+### Why no gate was added for it, which is the honest part
+
+The obvious move is to extend `checkPackDriven` to `public/`. It was measured first: 74 hits, of
+which about 30 are honest documented fallbacks — a 40% false-positive rate, worse than the
+source-comment rule dropped that morning at nine-in-ten.
+
+The sharper reason is that a grep could not have found the P0 anyway.
+`['TEAM_KERNEL','TEAM_TENSOR','TEAM_SILICON','NEUTRAL']` is textually identical to the key set of
+`FACTION_DEFAULTS` one file away, which is correct and necessary. What separates them is whether
+anything rewrites the value before it is read, and that is a runtime property a text search cannot
+see. The thing that found it was booting the app under the other pack and reading the console.
+
+That is the gate worth having, and it needs a headless browser this repository does not depend on.
+Adding one hours before a demo was not a call to make quietly, so the procedure is written into
+`docs/FORK_GUIDE.md` §2 as a step a human runs, and the gap is stated there rather than papered
+over. A missing gate that somebody knows about beats a gate that fires on the wrong thing.
+
+### One fix of mine, verified against a fixture that could tell the difference
+
+`eventLocalHour` was checked with the two packs at the same instant: `hackillinois-2027`
+(`America/Chicago`) answered 14.63 while `example-campus` (`UTC`) answered 19.63. A version still
+reading `getUTCHours` would have returned 19.63 for both, so the fixture discriminates. The offset
+being five hours rather than six also confirms the reason `Intl` was used instead of a fixed offset
+— it is September, so Chicago is on CDT.
+
+### Verified after the fix, rather than taken on trust
+
+The session that owns `public/` fixed it in `048b64e`. The claim was not accepted on the strength
+of the commit message: the same reproduction was run again against a fresh boot of
+`example-campus`. The faction strip now renders **RED 0 held / BLUE 0 held / UNCLAIMED 1 held ·
+500 CP** — the pack's own factions, not three phantoms — the Clock Tower stronghold row draws with
+its REINFORCE button, the `TypeError` is gone from the console, and the count reads "1 monument
+**is** a stronghold", so the singular case was fixed with it.
+
+One console error remains and is expected: `campus model 404`, because `example-campus` has no
+baked campus until FORK_GUIDE §3 is done, and the Campus tab degrades to a RENDERER FAILED badge.
+FORK_GUIDE §2 now names that one line explicitly as the single expected exception. Telling a forker
+that *any* red line is a finding, when the very first boot always produces one, would be a check
+people learn to skip — which is the same failure as a gate that fires on the wrong thing, and it
+was introduced and removed in the same hour.

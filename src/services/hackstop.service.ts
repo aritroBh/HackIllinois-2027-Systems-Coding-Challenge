@@ -15,7 +15,8 @@
  *    identity: `6A9B…` and `6a9b…` would occupy separate keys and give one volunteer as
  *    many independent cooldowns as they cared to spell. `spinBeacon` lowercases before
  *    the value is used as a key anywhere. This was a live, demonstrated bypass, not a
- *    theoretical one; the before/after measurement is in the README's evidence table.
+ *    theoretical one — it was closed in `f3e58f2`, alongside the other casing-based guard
+ *    bypasses of that round.
  *    Normalising at the schema boundary alone would not be enough here — this service is
  *    also called directly, so the key is normalised where it is used as a key.
  *
@@ -32,10 +33,30 @@ import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
 import { KarmaService, KarmaSource } from './karma.service';
 import { domainEvents } from '../common/events/domainEvents';
+import { rollLoot, rollKarma } from '../economy/lootTable';
 
-/** The one radius every place-bound action in the game uses, spins and battles included. */
+/**
+ * The radius for deploying a gym-targeted power-up, and the last place-bound check in the game
+ * still using a literal.
+ *
+ * The other three are pack-driven: a spin reads the beacon's own `geofenceRadiusMeters` (which
+ * the seed resolves from the pack), and a gym battle and an attendance check-in both call
+ * `geofenceMetersFor` in `common/utils/geofence.ts`. This one has no venue to key on — a
+ * power-up deploy names a gym, and a `Gym` document stores coordinates rather than a venue key —
+ * so it would need the campus-wide value at best.
+ *
+ * An earlier version of this comment said all four "carry their own literal 75 — so they agree
+ * on the number without any of them sharing it", and described that as the design. It was, and
+ * the cost showed up the moment a pack wanted a different number: three of the four moved, and
+ * a fork widening its campus fence still gets 75 here.
+ */
 const GEOFENCE_RADIUS_METERS = 75;
 
+/**
+ * What one spin produced. `awardedKarma` is the figure the ledger actually granted after the
+ * raid multiplier and the daily `HACKSTOP` cap, not the amount that was rolled, so a player
+ * who has farmed beacons all afternoon sees the smaller number rather than a promise.
+ */
 export interface ISpinResult {
   hackStopId: string;
   beaconId: string;
@@ -51,6 +72,9 @@ export interface ISpinResult {
   nextAvailableAt: Date;
 }
 
+/**
+ * HackStop beacon interaction service managing 75m geofenced spins, inventory drops, and cooldown timers.
+ */
 export class HackStopService {
   /**
    * The active supply beacons, without the cooldown ledger.
@@ -103,7 +127,29 @@ export class HackStopService {
   }
 
   /**
-   * Evaluates 75m geodesic geofence and 5-min cooldown, awarding power-ups and karma on success.
+   * Spin a beacon: geofence, cooldown, loot, karma.
+   *
+   * Neither the radius nor the cooldown is a constant in this file. Both are read off the
+   * beacon document — `geofenceRadiusMeters` and `cooldownSeconds`, which the schema defaults
+   * to 75 m and 300 s — so a pack can loosen one beacon in a large atrium without touching
+   * any code, and the refusal messages quote the beacon's own numbers rather than these.
+   *
+   * The cooldown is consulted twice, for two different jobs. The read near the top is a cheap
+   * refusal that gives the ordinary double-tap a countdown instead of a rolled item it will
+   * never receive; it enforces nothing, because two requests can both pass a read. The
+   * conditional update further down is the enforcement, and when a caller loses that claim it
+   * is told the beacon is cooling down — the loot for that request has already been rolled by
+   * then and is simply discarded.
+   *
+   * **The cooldown is claimed before anything is granted, and nothing hands it back.** The
+   * inventory upsert and the karma award both run after the claim has committed, with no
+   * transaction spanning them, so a failure in between costs the player the item and the
+   * remainder of the cooldown. `BoothService.scan` deletes its guard row on that path; this
+   * does not, and what a lost guard costs is the difference between them: a booth pays once
+   * ever, so handing the row back is the only way it can ever be retried, whereas a spin comes
+   * round again on its own timer. Doing it the other way — grant first, claim
+   * after — would put the guard behind the loot, which is the shape that lets a double-tap
+   * collect twice.
    */
   public static async spinBeacon(
     beaconId: string,
@@ -153,29 +199,21 @@ export class HackStopService {
       }
     }
 
-    // Weights are server-side and never travel to the client, so rarity cannot be asked for.
-    const lootWeights: Array<{ type: PowerUpType; weight: number }> = [
-      { type: PowerUpType.COLD_BREW_ELIXIR, weight: 40 },
-      { type: PowerUpType.INSOMNIA_COOKIE_SHIELD, weight: 25 },
-      { type: PowerUpType.OVERCLOCK_SOLDER_CORE, weight: 20 },
-      { type: PowerUpType.RUBBER_DUCK_OMNISCIENCE, weight: 10 },
-      { type: PowerUpType.ANKER_GAUNTLET, weight: 5 },
-    ];
-
-    const roll = Math.random() * 100;
-    let cumulative = 0;
-    let awardedPowerUp = PowerUpType.COLD_BREW_ELIXIR;
-
-    for (const item of lootWeights) {
-      cumulative += item.weight;
-      if (roll <= cumulative) {
-        awardedPowerUp = item.type;
-        break;
-      }
-    }
-
+    // The odds come from the pack, the prices from the code.
+    //
+    // `loot.json` owns the weights and the karma band; `POWER_UP_CATALOG` owns each item's
+    // `karmaBonus`. That split is deliberate — a pack is public, served to every browser under
+    // `/dashboard/content`, and the amount an item pays is money. The join between the two is
+    // the `type` string, and `crossValidate` refuses at boot any pack that names a type the
+    // catalogue does not price, so `itemMeta` below cannot be undefined here.
+    //
+    // Both draws are still server-side and neither travels to the client, so rarity cannot be
+    // asked for. What changed is only where the table lives: it used to be a literal in this
+    // function that duplicated `loot.json` item for item and weight for weight, which meant a
+    // fork editing the pack changed nothing and had no way to find out.
+    const awardedPowerUp = rollLoot();
     const itemMeta = POWER_UP_CATALOG[awardedPowerUp];
-    let awardedKarma = Math.floor(Math.random() * 25) + 25 + itemMeta.karmaBonus;
+    let awardedKarma = rollKarma() + itemMeta.karmaBonus;
 
     // Atomically claim the cooldown slot. The conditional update only
     // matches when no fresh spin exists for this volunteer, so concurrent
@@ -293,14 +331,45 @@ export class HackStopService {
   }
 
   /**
-   * Retrieves volunteer's power-up inventory.
+   * The account's stacks, empties excluded.
+   *
+   * A stack spent down to zero is left in place rather than deleted — the unique
+   * `(volunteerId, itemType)` index means the next award of that item finds and reuses the
+   * row — so `quantity > 0` here is the whole reason "you have zero Anker Gauntlets" is not a
+   * line in every player's bag.
    */
   public static async getVolunteerInventory(volunteerId: string): Promise<IPowerUpInventory[]> {
     return PowerUpInventory.find({ volunteerId, quantity: { $gt: 0 } });
   }
 
   /**
-   * Consumes a power-up from inventory with atomic quantity decrement.
+   * Spend one item from the bag.
+   *
+   * **Only two of the five do anything.** The Overclocked Solder Core adds 250 control points
+   * to a gym and the Insomnia Cookie Shield makes one uncontestable for two hours. The Cold
+   * Brew Elixir, the Rubber Duck and the Anker Gauntlet are consumed and pay their karma
+   * bonus, and that is all they do: the effects `powerup.model` advertises for those three —
+   * a speed boost, an auto-resolved SOS ticket, a doubled territorial multiplier — appear
+   * nowhere in this codebase, and neither do the fatigue immunity and priority waitlist pass
+   * it claims for the Cookie Shield alongside the gym shield that method really does apply.
+   * That is an unwritten half of the game layer rather than a subtlety of this method, and
+   * the catalog text is the thing that is wrong about it.
+   *
+   * Everything that can refuse a use runs before the decrement, and the ordering is the whole
+   * safety argument: the decrement is not in a transaction with the effect, so a target that
+   * turns out to be missing, out of range or a rival's *after* the item had been spent would
+   * eat the item and pay its bonus for an effect that never landed.
+   *
+   * A `targetGymId` sent with an item that does not take one is still geofenced and still
+   * refused on a rival's gym, and then ignored, because the target block is keyed on the
+   * parameter rather than on the item type. Harmless in itself, but it means a client that
+   * attaches the nearest gym to every use will collect 403s that a Cold Brew Elixir never
+   * needed to earn.
+   *
+   * The karma bonus goes through the ledger like every other award, so the daily `POWERUP`
+   * cap can clamp it — but unlike a spin, a booth scan or a quest, nothing in the return value
+   * says what was granted. A capped player is told the item deployed and is left to notice
+   * their balance did not move.
    */
   public static async usePowerUp(
     volunteerId: string,

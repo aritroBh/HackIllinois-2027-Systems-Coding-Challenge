@@ -198,6 +198,11 @@ export function cssVars(event = null) {
     '/* Legacy aliases still referenced by older markup / the label layer. */': null,
     '--text': 'var(--cream)', '--text-2': 'var(--cream-dim)', '--text-3': 'var(--mute)', '--text-4': C.text4,
     '--cyan': 'var(--kernel)', '--violet': 'var(--tensor)', '--amber': 'var(--silicon)', '--mint': 'var(--live)',
+    // A HackStop beacon is not a faction. The campus legend pointed at `--tensor` for it,
+    // which resolves and looks right in the shipped pack while reading as a claim that
+    // beacons belong to Team Tensor. Aliased so the meaning is in the name; the value is
+    // deliberately unchanged, so nothing moves on screen.
+    '--beacon': 'var(--tensor)',
     '--hazard': 'var(--danger)', '--dim': 'var(--cream-dim)', '--faint': 'var(--mute)', '--void': 'var(--ground)',
     '--panel-hi': 'var(--edge)', '--text-main': 'var(--cream)', '--text-dim': 'var(--cream-dim)',
     '--hazard-coral': 'var(--danger)', '--amber-surge': 'var(--orange)', '--neon-green': 'var(--live)',

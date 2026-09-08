@@ -11,7 +11,6 @@
  */
 import { z } from 'zod';
 import { objectId } from './common';
-import { Faction } from '../models/gym.model';
 import { PowerUpType } from '../models/powerup.model';
 
 export const battleGymSchema = z.object({
@@ -20,12 +19,62 @@ export const battleGymSchema = z.object({
   }),
   body: z.object({
     volunteerId: objectId('Invalid Volunteer ObjectId').optional(), // legacy-mode fallback only; the session is the actor
-    faction: z.nativeEnum(Faction),
+    /*
+     * Shape only. The *set* of valid factions is the pack's, and it is checked in
+     * `faction.service.ts` where the pack is readable.
+     *
+     * This was `z.nativeEnum(Faction)`, which made the enum in `src/models/gym.model.ts` the
+     * authority on what a body may say — the same defect as the Mongoose validator it sat
+     * beside, one layer earlier and with a worse failure. A fork declaring TEAM_RED had every
+     * battle request rejected `400` by Zod before it ever reached a service, so the primary game
+     * mechanic simply did not work and nothing in the stack trace named a faction.
+     *
+     * It survived the fix to the model because a grep for `Faction.TEAM_` does not match
+     * `z.nativeEnum(Faction)` — the enum is read as an object here, not by member — and a
+     * comment was then written claiming nothing in `src/` read those members. Literally true,
+     * materially wrong.
+     */
+    faction: z
+      .string()
+      .min(1)
+      .max(40)
+      .regex(/^[A-Z][A-Z0-9_]*$/, 'A faction id is SCREAMING_SNAKE_CASE, as declared in factions.json'),
     power: z.number().min(10, 'Power must be at least 10').max(500, 'Power cannot exceed 500 per strike'),
     coordinates: z.object({
       latitude: z.number().min(-90).max(90),
       longitude: z.number().min(-180).max(180),
     }),
+  }),
+});
+
+/** Shared by every gauntlet route: you must say where you are, and it is checked server-side. */
+const coordinatesBody = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+
+export const startGauntletSchema = z.object({
+  params: z.object({ id: objectId('Invalid Gym ObjectId') }),
+  body: z.object({ coordinates: coordinatesBody }),
+});
+
+export const submitGauntletSchema = z.object({
+  params: z.object({ attemptId: objectId('Invalid attempt ObjectId') }),
+  body: z.object({
+    // Bounded here so the judge's cost is bounded before it is reached: at most eight answers
+    // of at most 200 characters is at most eight HMACs over 1.6 KB.
+    answers: z.array(z.string().max(200)).min(1).max(8),
+    coordinates: coordinatesBody,
+  }),
+});
+
+export const spendGauntletSchema = z.object({
+  params: z.object({ attemptId: objectId('Invalid attempt ObjectId') }),
+  body: z.object({
+    faction: z
+      .string().min(1).max(40)
+      .regex(/^[A-Z][A-Z0-9_]*$/, 'A faction id is SCREAMING_SNAKE_CASE, as declared in factions.json'),
+    coordinates: coordinatesBody,
   }),
 });
 

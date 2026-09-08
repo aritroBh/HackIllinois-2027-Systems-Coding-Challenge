@@ -24,9 +24,17 @@ let volunteersCache = [];
  * cache, so it is not only the bag that would be wrong.
  */
 let handoverGeneration = 0;
-// The session user's faction when signed in. The picker overrides it in this
-// tab only: no endpoint writes an account's faction, so a reload or the
-// `session` event below puts the server's value back.
+/** Which faction write owns the picker. A late response from an older one must not repaint. */
+let factionWriteGeneration = 0;
+/** True while a faction PATCH is in flight. State, so an unrelated repaint cannot clear it. */
+let factionWritePending = false;
+// The session user's faction when signed in.
+//
+// This used to say the picker overrode it "in this tab only: no endpoint writes an account's
+// faction". `PATCH /me/faction` exists now and `changeUserFaction` calls it, so the value
+// here is written through and survives a reload. Until an account binds a side the server
+// stores null, and `applyFactions` puts a playable team here so the map has colours — that
+// default is a display choice, not an allegiance, and the picker says so.
 let currentVolunteerFaction = window.Nexus?.session?.user?.faction || 'TEAM_KERNEL';
 let gymsCache = [];
 let hackStopsCache = [];
@@ -77,12 +85,11 @@ function esc(value) {
  * (labels, map colours, the gym list) sees the pack's values.
  */
 const FACTION_DEFAULTS = {
-  TEAM_KERNEL: { label: 'Team Kernel', short: 'Kernel', color: '#22d3ee', cls: 'c-cyan' },
-  TEAM_TENSOR: { label: 'Team Tensor', short: 'Tensor', color: '#a78bfa', cls: 'c-violet' },
-  TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24', cls: 'c-amber' },
-  NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa', cls: 'c-dim' },
+  TEAM_KERNEL: { label: 'Team Kernel', short: 'Kernel', color: '#22d3ee' },
+  TEAM_TENSOR: { label: 'Team Tensor', short: 'Tensor', color: '#a78bfa' },
+  TEAM_SILICON: { label: 'Team Silicon', short: 'Silicon', color: '#fbbf24' },
+  NEUTRAL: { label: 'Unclaimed', short: 'Unclaimed', color: '#7c8daa' },
 };
-const FACTION_CLS = { TEAM_KERNEL: 'c-cyan', TEAM_TENSOR: 'c-violet', TEAM_SILICON: 'c-amber', NEUTRAL: 'c-dim' };
 const FACTION = Object.fromEntries(Object.entries(FACTION_DEFAULTS).map(([k, v]) => [k, { ...v }]));
 
 /** Rebuilds `FACTION` (and the faction picker) from the pack's list. Returns false when the list is unusable. */
@@ -96,7 +103,6 @@ function applyFactions(list) {
       label: f.label || dflt.label,
       short: f.short || f.label || dflt.short,
       color: typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : dflt.color,
-      cls: FACTION_CLS[f.id] || 'c-dim',
       hqVenue: f.hqVenue || null,
       theme: f.theme || null,
     };
@@ -111,6 +117,15 @@ function applyFactions(list) {
 
   const playable = Object.keys(FACTION).filter((id) => id !== 'NEUTRAL');
   if (!FACTION[currentVolunteerFaction] || currentVolunteerFaction === 'NEUTRAL') currentVolunteerFaction = playable[0] || 'NEUTRAL';
+
+  // The campus legend names the teams too, and was static HTML: under any other pack it went
+  // on listing Kernel/Tensor/Silicon beside a map drawing Red and Blue.
+  const legend = document.getElementById('legend-factions');
+  if (legend) {
+    legend.innerHTML = Object.values(FACTION)
+      .map((f) => `<span><i style="--c: ${esc(f.color)}"></i> ${esc(f.label)}</span>`)
+      .join('');
+  }
 
   const sel = document.getElementById('user-faction-selector');
   if (sel) {
@@ -146,8 +161,25 @@ function applyBranding(content) {
   setAll('event-chip', [eventName, tagline].filter(Boolean).join(' · '));
   setAll('campus-label', ev.campus?.label);
   setAll('sticker-title', ev.branding?.stickerBookTitle);
+  // Two keys for one number, because the two sentences need different nouns.
+  //
+  // `monument-count` writes "N landmarks" for the Campus intro. The Turf Wars intro says
+  // "Fourteen monuments are strongholds" and had no span at all, so a fork with a different
+  // pack read its real count on one page and a hardcoded fourteen on the other — the
+  // mechanism that fixes it sitting one file away and already working. Reusing
+  // `monument-count` there would have produced "14 landmarks are strongholds"; a bare-number
+  // key keeps the sentence.
   const n = Array.isArray(content.monuments) ? content.monuments.length : 0;
-  if (n) setAll('monument-count', `${n} landmarks`);
+  if (n) {
+    // The whole clause, not just the noun.
+    //
+    // `example-campus` ships exactly one monument, and pluralising only the noun produced
+    // "1 landmark are strongholds" — the verb was static text outside the span. A count that
+    // comes from the pack drags its grammar with it, so the span covers the sentence.
+    setAll('monument-count', n === 1 ? '1 landmark is a stronghold' : `${n} landmarks are strongholds`);
+    setAll('monument-number', String(n));
+    setAll('monument-noun', n === 1 ? 'monument is a stronghold' : 'monuments are strongholds');
+  }
   if (Number.isFinite(ev.campus?.geofenceMeters)) setAll('geofence', `${ev.campus.geofenceMeters} m`);
   return true;
 }
@@ -157,6 +189,26 @@ function applyBranding(content) {
 const MAP_NEUTRAL = '#5d7096';
 
 const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
+
+/**
+ * A refusal the player can actually see.
+ *
+ * Three server refusals on this screen went to `logChaosTerminal` alone: the gym command, the
+ * spin and the item. (Not all of them — the quest-claim and shift-load refusals already
+ * toasted, and an earlier version of this note claimed "every", which was wrong.) That panel
+ * is a scrolling log on one tab; a player who taps Spin on the map and gets nothing back reads
+ * the silence as a dropped tap and taps again. These three now surface the way those others
+ * already did, while still leaving the full text in the log for anyone reading it.
+ *
+ * `what` names the command, not the verb: `battleOrFortifyGym` serves both Contest and
+ * Reinforce, so it passes "Gym" rather than "Battle" — telling somebody reinforcing an ally
+ * that their *battle* was refused names an action they did not take.
+ */
+function refuse(what, message) {
+  const text = String(message || 'That did not go through.');
+  logChaosTerminal(`[ERROR] ${what} refused: ${text}`);
+  window.game?.toast?.(text);
+}
 
 /**
  * The player's position as lat/lng, for proof-of-presence on spins and gym battles.
@@ -176,27 +228,57 @@ const factionOf = (f) => FACTION[f] || FACTION.NEUTRAL;
  * limit on the proof, but no proof at all.
  */
 function playerCoords() {
+  // A real device fix beats a sprite, and in lite mode it beats it *first*.
+  //
+  // This used to try the renderer's player before lite's `watchPosition`, on the stated
+  // premise that "lite mode has no renderer and therefore no placed trainer". That premise is
+  // false. Lite hides the canvas; it does not tear the renderer down, so anyone who opens
+  // Campus and then switches to lite keeps a player object sitting at the demo drop point on
+  // the Quad — and every action then measured from there.
+  //
+  // Two ways that hurt, and the second is worse. Standing on a HackStop with GPS on, the
+  // button read "213 m" and stayed disabled, because it was measuring the sprite. And the
+  // coordinates posted to the server for a spin, a battle or a deploy were the sprite's too —
+  // so in lite mode the geofence was evaluated at a fixed point on the Quad for everybody,
+  // whatever their phone said. That is a lockout for anyone genuinely at a stop and a free
+  // pass for anything within 75 m of that one spot.
+  //
+  // Outside lite the sprite is a control the player can see and steer, so their intent wins.
+  const liteFix = window.Nexus?.lite?.fix ?? null;
+  if (liteFix && window.Nexus?.flags?.lite) return liteFix;
   const p = typeof campus?.getPlayer === 'function' ? campus.getPlayer() : null;
   if (p && fromWorld) return fromWorld(p.x, p.z);
-  // Lite mode has no renderer and therefore no placed trainer, but it does run its own
-  // `watchPosition` — so it carries a *better* proof of presence than the 3D path, not a
-  // worse one: a real device fix rather than a sprite the player dragged somewhere. Without
-  // this the flat map told you a HackStop was "in range — spin it!" beside a Spin button
-  // that could never enable, which is two panels disagreeing about the same fact.
-  return window.Nexus?.lite?.fix ?? null;
+  return liteFix;
 }
 
 /**
  * Where the trainer is, or a refusal that says how to fix it.
  *
- * One message for both economy actions, because the remedy is the same: the map has to know
- * where you are before it can tell the server you are somewhere.
+ * One message for all three actions that need a position — Spin, gym Contest and a
+ * gym-targeted Deploy — because the remedy is the same: the map has to know where you are
+ * before it can tell the server you are somewhere. (It said "both" while guarding three.)
+ */
+/**
+ * The player's position, or null having *said so where they can see it*.
+ *
+ * This is the gate in front of Spin, gym Contest and a gym-targeted Deploy, and its only
+ * visible feedback was `window.Nexus?.toast?.(…)`. **`Nexus.toast` does not exist** — nothing
+ * in `nexus.js` or anywhere else defines it — so the optional call swallowed the message and
+ * the three actions it guards failed in complete silence. The other half, `logChaosTerminal`,
+ * writes to the console panel on the War Room tab, which is not the tab you are on when you
+ * press Spin.
+ *
+ * `game.toast` is the one that exists and the one every other caller in this file uses. The
+ * grep that found this checked every optional call on `Nexus`, `game` and `fx` against the
+ * members those objects actually carry at runtime; this was the only one missing, so it is a
+ * defect rather than a class — but the shape is worth remembering, because `?.` on a name
+ * that was never defined is indistinguishable from a call that chose to do nothing.
  */
 function requirePlayerCoords(what) {
   const at = playerCoords();
   if (at) return at;
   logChaosTerminal(`[BLOCKED] ${what} needs your position — open Campus and place your trainer first.`);
-  window.Nexus?.toast?.('Place your trainer on the map first.');
+  window.game?.toast?.(`${what} needs your position. Open Campus and place your trainer first.`);
   return null;
 }
 
@@ -445,6 +527,7 @@ const CLICK_ACTIONS = {
   'chaos-drop': () => simulateDropCascade(),
   'chaos-cycle': () => resolveCyclicTrade(),
   'loot-close': () => closeLootModal(),
+  'shift-details-close': () => { const el = document.getElementById('shift-details'); if (Nexus.dialog) Nexus.dialog.close(el); else el?.classList.remove('open'); },
   'campus-reset': () => campusResetView(),
   'campus-cinema': () => toggleCinema(),
   'gyms-refresh': () => loadGymsData(),
@@ -491,9 +574,43 @@ async function fetchVolunteers() {
   }
 }
 
+/**
+ * The caller's own registrations, by shift id, so the board can stop offering what they have.
+ *
+ * The quest board rendered "Accept quest" on every shift including the ones the signed-in
+ * account is already confirmed for — the seeded demo account opens on exactly that state —
+ * and pressing it answered `409 ALREADY_REGISTERED` into a console panel on a different tab.
+ * A control offering something you already have, refusing in a place you cannot see.
+ *
+ * `/me/shifts` is the same endpoint the Me tab reads; this is a second reader of it rather
+ * than a second source of truth, and it fails soft because the board is still useful without
+ * it — an unknown registration renders exactly the label it rendered before.
+ */
+let myRegistrations = new Map();
+
+async function loadMyRegistrations() {
+  // Whose registrations these are. See `handoverGeneration`.
+  //
+  // Without this, a `/me/shifts` already in flight when the browser changes hands resolves
+  // after the handover has cleared everything and writes the *previous* account's shifts into
+  // the incoming one's board — the same window `loadUserInventory` and `loadSOSTickets` each
+  // close, on the same endpoint shape.
+  const mine = handoverGeneration;
+  try {
+    const res = await Nexus.api('/api/v1/me/shifts', { lenient: true });
+    if (mine !== handoverGeneration) return;
+    const rows = res?.success ? (res.data?.shifts || []) : [];
+    myRegistrations = new Map(rows.map((r) => [String(r.shiftId || r._id), String(r.status || '')]));
+  } catch {
+    if (mine !== handoverGeneration) return;
+    myRegistrations = new Map();   // no session, or the call failed: fall back to the old labels
+  }
+}
+
 async function fetchShifts() {
   try {
-    shiftsCache = await apiGet('/api/v1/shifts');
+    const [shifts] = await Promise.all([apiGet('/api/v1/shifts'), loadMyRegistrations()]);
+    shiftsCache = shifts;
     renderShifts(shiftsCache);
     syncCampusActors();
   } catch (err) {
@@ -580,17 +697,101 @@ async function fetchLeaderboard() {
   }
 }
 
+/**
+ * The Details link on a quest card, which used to open nothing.
+ *
+ * It fetched the shift and wrote one line to `logChaosTerminal` — the console panel on the
+ * War Room tab. A person pressing "Details" on the Quests board therefore saw **nothing at
+ * all**, and the information they asked for was rendered on a tab they were not looking at,
+ * for a role that may not even be able to open it. It is one of several controls this session
+ * that sent their only output somewhere the presser cannot see; the spin, battle and item
+ * refusals were three more, and they now go through `refuse`.
+ *
+ * The panel is built here rather than shipped in `index.html` simply because it exists only
+ * while it is open. (An earlier note here justified that with `scripts/checkShell.mjs` gating
+ * hidden elements in that file. It has no such gate — it reads `index.html` closely, for
+ * script and link targets, the fallback nav, the tablist and the tab order, and it hashes the
+ * shell, but nothing there objects to a hidden element. The reason was invented to dress up a
+ * choice that needed no defending.)
+ *
+ * `Nexus.dialog` supplies the focus trap and Escape, and defaults `returnFocus` to whatever
+ * held focus at open time. `opener` is captured before the fetch instead, because by the time
+ * the panel opens focus may have moved — so this restores the control that was pressed rather
+ * than whatever happened to be focused a network round-trip later. On re-opening while a
+ * Details panel is already stacked, `dialogOpen` keeps the first opener; that is its rule, not
+ * this function's.
+ *
+ * The field names are `baseKarma`, `surge.karmaAward` and `requiredSkills`, taken from the
+ * live payload rather than from memory. The first draft guessed `karmaValue`/`karma` and
+ * `requiredCertifications`, and the panel then rendered "0 KARMA" and "No certifications
+ * required" for a quest worth 110 — plausible values, no error, nothing to notice. A wrong
+ * field name in a template is indistinguishable from a real zero.
+ */
 async function viewShiftDetails(shiftId) {
+  // Captured before the fetch: by the time the panel opens, focus may have moved, and the
+  // control that opened it is the place a keyboard user expects to be returned to.
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  let shift;
   try {
-    const shift = await apiGet(`/api/v1/shifts/${encodeURIComponent(shiftId)}`);
-    const confirmed = (shift.confirmedVolunteers || []).length;
-    const waitlisted = (shift.waitlistedVolunteers || []).length;
-    logChaosTerminal(
-      `[DETAILS] "${shift.title}" @ ${shift.location} — ${shift.filledSlots}/${shift.capacity} filled, ${confirmed} confirmed, ${waitlisted} waitlisted`
-    );
+    shift = await apiGet(`/api/v1/shifts/${encodeURIComponent(shiftId)}`);
   } catch (err) {
     logChaosTerminal(`[ERROR] Could not load shift: ${err.message}`);
+    window.game?.toast?.(`Could not load that quest: ${err.message}`);
+    return;
   }
+
+  const confirmed = (shift.confirmedVolunteers || []).length;
+  const waitlisted = (shift.waitlistedVolunteers || []).length;
+  logChaosTerminal(
+    `[DETAILS] "${shift.title}" @ ${shift.location} — ${shift.filledSlots}/${shift.capacity} filled, ${confirmed} confirmed, ${waitlisted} waitlisted`
+  );
+
+  const host = document.getElementById('shift-details') || (() => {
+    const el = document.createElement('div');
+    el.id = 'shift-details';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'shift-details-title');
+    document.body.appendChild(el);
+    return el;
+  })();
+
+  const when = (v) => { const d = new Date(v); return Number.isNaN(+d) ? '—' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const mine = myRegistrations.get(String(shift._id));
+  host.innerHTML = `
+    <div class="px loot-card" style="max-width:460px;text-align:left">
+      <div class="eyebrow">Quest</div>
+      <h3 id="shift-details-title">${esc(shift.title)}</h3>
+      <p class="ob-hint">${icon('pin', 'icon sm')} ${esc(shift.location)}</p>
+      <div class="ob-stats" style="margin:12px 0">
+        <span><b>${Number(shift.filledSlots) || 0}/${Number(shift.capacity) || 0}</b><small>PARTY</small></span>
+        <span><b>${waitlisted}</b><small>WAITING</small></span>
+        <span><b>${num(shift.surge ? shift.surge.karmaAward : shift.baseKarma)}</b><small>KARMA</small></span>
+      </div>
+      <p class="ob-hint">${esc(when(shift.startTime))} → ${esc(when(shift.endTime))}</p>
+      ${Array.isArray(shift.requiredSkills) && shift.requiredSkills.length
+        ? `<p class="ob-hint">Needs: ${shift.requiredSkills.map((c) => `<span class="badge-tag">${esc(humaniseCert(c))}</span>`).join('')}</p>`
+        : '<p class="ob-hint">No certifications required.</p>'}
+      ${mine ? `<p class="ob-hint">You are <b>${esc(String(mine).toLowerCase().replace(/_/g, ' '))}</b> on this quest.</p>` : ''}
+      <div class="btn-row" style="margin-top:14px">
+        <button class="pb pb-sm" type="button" data-action="shift-details-close">Close</button>
+      </div>
+    </div>`;
+  if (Nexus.dialog) {
+    Nexus.dialog.open(host, {
+      returnFocus: opener,
+      initialFocus: host.querySelector('button'),
+      // Deliberately no `onClose` teardown: the host is looked up by id and reused, and
+      // removing it made a later close re-resolve to `null` — which `dialogClose` reads as
+      // "close the topmost dialog", so a stale close could shut the encounter stage instead.
+      // There is no per-open state to clear here, unlike the encounter's `state.encounter`.
+    });
+  } else host.classList.add('open');
+}
+
+/** ALL_CAPS certification ids read badly in a sentence. */
+function humaniseCert(v) {
+  return String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /* ------------------------------------------------------------------ *
@@ -662,7 +863,17 @@ function renderShifts(shifts) {
             <div class="big-num" style="color:var(--harvest)">+${num(karma)}<span class="hud-label" style="display:block;text-align:right">karma</span></div>
           </div>
           <div class="btn-row">
-            <button class="pb ${full ? 'pb-ghost' : ''} pb-sm" data-action="claim" data-id="${esc(shift._id)}">${full ? 'Join waitlist' : 'Accept quest'}</button>
+            ${(() => {
+              // Already on it: say so, and do not offer a button that can only be refused.
+              const mine = myRegistrations.get(String(shift._id));
+              if (mine === 'CONFIRMED' || mine === 'CHECKED_IN') {
+                return `<button class="pb pb-ghost pb-sm" type="button" disabled title="You are already on this quest">${mine === 'CHECKED_IN' ? 'Checked in' : "You're on this"}</button>`;
+              }
+              if (mine === 'WAITLISTED') {
+                return '<button class="pb pb-ghost pb-sm" type="button" disabled title="You are on the waitlist for this quest">On the waitlist</button>';
+              }
+              return `<button class="pb ${full ? 'pb-ghost' : ''} pb-sm" data-action="claim" data-id="${esc(shift._id)}">${full ? 'Join waitlist' : 'Accept quest'}</button>`;
+            })()}
             <button class="link" data-action="details" data-id="${esc(shift._id)}">Details</button>
           </div>
         </div>
@@ -757,7 +968,19 @@ function renderFactionStrip() {
     tally[k].held += 1;
     tally[k].cp += Number(g.controlPoints) || 0;
   }
-  strip.innerHTML = ['TEAM_KERNEL', 'TEAM_TENSOR', 'TEAM_SILICON', 'NEUTRAL'].map((k) => {
+  // The pack's factions, not this repository's three.
+  //
+  // The tally four lines up is already pack-driven — `FACTION[g.controllingFaction] ? … :
+  // 'NEUTRAL'` — and then this rendered from a hardcoded roster. `applyFactions` replaces
+  // `FACTION` wholesale, so under any pack that is not hackillinois-2027 `FACTION['TEAM_KERNEL']`
+  // is undefined, `f.color` threw, and the throw propagated out of `renderGymsList` into
+  // `loadGymsData`: **the entire Turf Wars board rendered nothing**, faction strip and all,
+  // against a server that had answered 200 with the gyms in it. `docs/FORK_GUIDE.md` sends a
+  // fork to `content/example-campus`, so that was the first thing a stranger following our own
+  // guide saw on the flagship feature. NEUTRAL last because it is the absence of a side.
+  const order = Object.keys(FACTION).filter((k) => k !== 'NEUTRAL');
+  if (FACTION.NEUTRAL) order.push('NEUTRAL');
+  strip.innerHTML = order.map((k) => {
     const f = FACTION[k];
     const t = tally[k] || { held: 0, cp: 0 };
     return `
@@ -785,7 +1008,15 @@ function renderGymsList() {
     const f = factionOf(g.controllingFaction);
     const pct = Math.max(0, Math.min(100, Math.round((g.controlPoints / (g.maxControlPoints || 1)) * 100) || 0));
     const ally = g.controllingFaction === currentVolunteerFaction || g.controllingFaction === 'NEUTRAL';
-    const defenders = (g.defenders || []).length;
+    // The count, because the list is not ours to see.
+    //
+    // GET /pokeshift/gyms used to return whole gym documents, and each holder came with a
+    // volunteer name, a contributed power and a timestamp — a named person at a named
+    // building you must be within 75 m of to contest, at a stated time, to an
+    // unauthenticated caller with no audit row. The route projects to `defenderCount` now
+    // and the array is gone from the payload entirely, so there is nothing to fall back to
+    // and no branch here that could take one.
+    const defenders = Number(g.defenderCount) || 0;
     const mon = monumentForGym(g);
 
     return `
@@ -812,6 +1043,38 @@ function renderGymsList() {
   }).join('');
 }
 
+/**
+ * The campus geofence from the pack, for callers with no specific stop or venue.
+ *
+ * A literal 75 sat in the HackStop list as the fallback for a stop with no radius of its own,
+ * next to a button that falls back to `PROX_RADIUS` — so on a pack whose campus radius is not
+ * 75 the label and the control beside it disagreed.
+ *
+ * There are four readers of `event.campus.geofenceMeters` in the client: this and
+ * `applyBranding` in this file, `applyGeofence` in game.js, and `geofenceMetres` in
+ * views/me.js — three files that do not import one another.
+ *
+ * They agree on the *precedence*, because they do not implement it: venue-then-campus-then-75
+ * is resolved server-side in `geofenceMetersFor`, and each of these reads an already-resolved
+ * field. What they do **not** share is the missing-field fallback, and it is worth saying so
+ * rather than claiming they cannot disagree. If the field vanishes after a valid pack has
+ * loaded, this returns a fresh 75, `applyGeofence` early-returns and keeps whatever
+ * `PROX_RADIUS` already held, and `applyBranding` leaves the old string on screen. That
+ * divergence needs a pack to lose a field mid-session, which nothing does today.
+ *
+ * This sentence has now been wrong twice: it first claimed "one place" when there are four
+ * readers, then said "three" having missed the one in its own file, then said "none of them
+ * computes anything" when all four compute a fallback. Recorded because the correction is
+ * where the errors kept being introduced. What they share is the *field*, and the
+ * precedence above it is resolved server-side, so they cannot disagree about the rule even
+ * though they each read it separately. Claiming one place was flattering; the property that
+ * matters is that none of them implements the precedence.
+ */
+function packGeofenceMetres() {
+  const m = Number(Nexus.content?.event?.campus?.geofenceMeters);
+  return Number.isFinite(m) && m > 0 ? m : 75;
+}
+
 function renderHackStopsList() {
   const markup = hackStopsCache.length === 0
     ? `<div class="empty-state">${icon('radio')}<div>No beacons deployed.</div></div>`
@@ -822,8 +1085,8 @@ function renderHackStopsList() {
             <div class="name">${esc(stop.name)}</div>
             <div class="where">${esc(stop.locationName)}</div>
           </div>
-          <span class="dist" data-dist>${Number(stop.geofenceRadiusMeters) || 75} m</span>
-          <button class="pb pb-ghost pb-sm" data-action="spin" data-beacon="${esc(stop.beaconId)}" data-lat="${Number(stop.latitude)}" data-lon="${Number(stop.longitude)}" disabled title="Walk to within 75 m to spin">Spin</button>
+          <span class="dist" data-dist>${Number(stop.geofenceRadiusMeters) || packGeofenceMetres()} m</span>
+          <button class="pb pb-ghost pb-sm" data-action="spin" data-beacon="${esc(stop.beaconId)}" data-lat="${Number(stop.latitude)}" data-lon="${Number(stop.longitude)}" data-radius="${Number(stop.geofenceRadiusMeters) || ''}" disabled title="Walk closer to spin">Spin</button>
         </div>`).join('');
 
   // The beacon list appears on both the campus and turf-wars tabs.
@@ -897,6 +1160,20 @@ const refresh = {
   inventory: coalesce(loadUserInventory),
 };
 
+/*
+ * The gym refetch, for `game.js` after a challenge win.
+ *
+ * A plain assignment, and NOT an entry in the `Object.defineProperties` block at the top of
+ * this file. Two reasons, one of which cost a whole broken page to learn: a top-level
+ * `function` declaration in a classic script creates a NON-CONFIGURABLE global property, so
+ * `defineProperties` throws `Cannot redefine property` on any name that already exists that
+ * way — and because that call defines every window accessor in one object literal, the throw
+ * took `campus`, `campusMeta` and `toWorld` down with it and the dashboard booted with four
+ * tabs and no data. `requirePlayerCoords` needed no exposing at all for exactly the same
+ * reason: being a top-level function declaration, it is already `window.requirePlayerCoords`.
+ */
+window.refreshGyms = () => refresh.gyms();
+
 let sseRetryMs = 1000;
 
 /** Maps the legacy colour classes callers pass to the signal variants. */
@@ -920,7 +1197,7 @@ function connectSSE() {
   // dead dashboard with no visible sign that it had stopped updating.
   eventSource.onopen = () => {
     sseRetryMs = 1000;
-    setSseStatus('SSE Live', 'c-mint');
+    setSseStatus('Live', 'c-mint');
   };
   eventSource.onerror = () => {
     eventSource.close();
@@ -1292,11 +1569,16 @@ async function quickSignUp(shiftId, btn) {
       logChaosTerminal(`[EVENT] ${vol.name} claimed a slot (status ${json.status})`);
       window.fx?.burstAt(btn, json.status === 'CONFIRMED' ? '#34f5a0' : '#ffb020', 26);
       fetchShifts();
+      loadMyRegistrations().then(() => renderShifts(shiftsCache));
     } else {
+      // Said where the user is, not only in the War Room console. This refusal was invisible
+      // on every tab that carries the quest board, which is every tab that has one.
       logChaosTerminal(`[ERROR] Sign-up rejected: ${json.message}`);
+      window.game?.toast?.(json.message || 'That quest could not be claimed.');
     }
   } catch (err) {
     logChaosTerminal(`[ERROR] ${err.message}`);
+    window.game?.toast?.(err.message);
   }
 }
 
@@ -1320,7 +1602,9 @@ async function loadSOSTickets() {
 }
 
 /*
- * `SOS_SAMPLES` and `simulateHackerSOS` used to sit here, behind a `sos-simulate` action.
+ * SOS_SAMPLES and simulateHackerSOS used to sit here, behind a sos-simulate action.
+ * (Unbackticked deliberately: none of the three exists any more, and a backtick in this
+ * repository is a claim that the thing is there to be found.)
  *
  * It posted a fixture as a real ticket — "Alex (Hardware Hacker)", a seat number, a medical
  * or hardware category, a description — into the queue that volunteers actually work, and
@@ -1374,12 +1658,160 @@ async function triggerAdonixSync() {
  * PokéShift
  * ------------------------------------------------------------------ */
 
-function changeUserFaction(faction) {
-  currentVolunteerFaction = faction;
+/**
+ * Show the picker as what it is: a one-time choice, then a statement of fact.
+ *
+ * Allegiance binds on the first side you take and `GymService` has always enforced that —
+ * the client names a faction on every battle request, so without a lock one account could
+ * reinforce a stronghold as an ally and attack it as a rival in the same minute.
+ * `PATCH /me/faction` shares that rule rather than restating it, and answers 409 for a
+ * change. A picker left live against that rule is a control that always fails, which is
+ * worse than no control.
+ */
+function paintFactionPicker(faction, locked, pending = false) {
   const sel = document.getElementById('user-faction-selector');
-  if (sel) sel.style.borderColor = factionOf(faction).color;
-  renderGymsList();
-  window.game?.onFactionChange();
+  if (!sel) return;
+  if (faction && [...sel.options].some((o) => o.value === faction)) {
+    sel.value = faction;
+    // `.value` is a property assignment: no attribute mutation, no `change` event, so the
+    // pixel dropdown in front of this select has no way to notice. Without this the button
+    // kept showing the side a failed PATCH had just rolled back from.
+    sel.dispatchEvent(new CustomEvent('pxsel:sync'));
+  }
+  sel.style.borderColor = factionOf(faction || currentVolunteerFaction).color;
+  // `pending` disables without claiming the lock. The write is in flight and a second pick
+  // during it is what this closes, but "Locked to Team Kernel" is not true until the server
+  // has said so — and a label that asserts the outcome before the outcome exists is the
+  // habit this dashboard has spent the day removing.
+  // `factionWritePending` is consulted as well as the argument, because every other caller —
+  // `onSessionChange`, the handover, boot — passes two arguments and would otherwise re-enable
+  // the control in the middle of a write it knows nothing about. A paint argument alone made
+  // "disabled while writing" a property of one call site rather than of the state.
+  sel.disabled = !!locked || !!pending || factionWritePending;
+  sel.title = (pending || factionWritePending)
+    ? 'Taking that side…'
+    : locked
+      ? `Locked to ${factionOf(faction).label}. Allegiance is chosen once and cannot be changed.`
+      : 'Choose once. Allegiance cannot be changed afterwards.';
+  const label = sel.closest('.actions')?.querySelector('.hud-label');
+  if (label) {
+    label.textContent = (pending || factionWritePending) ? 'Your faction · saving'
+      : locked ? 'Your faction · locked' : 'Your faction · choose once';
+  }
+}
+
+/**
+ * Take a side, and make the server the one that decides.
+ *
+ * The picker wrote a module variable and nothing else: the HUD, the gym list and every
+ * battle request used the chosen side while `GET /me/card` still said NEUTRAL, so the two
+ * halves of the app disagreed about which team the player was on. The write is optimistic so
+ * the HUD does not lag a round trip behind the click, and rolled back on refusal — the only
+ * refusal that matters, 409, means the server knows a side this browser did not.
+ */
+async function changeUserFaction(faction) {
+  const previous = currentVolunteerFaction;
+  const generation = ++factionWriteGeneration;
+  factionWritePending = true;
+  currentVolunteerFaction = faction;
+  // Disabled for the duration of the write — disabled, not locked.
+  //
+  // Nothing stopped a second pick while the first PATCH was in flight, and each call closes
+  // over its own `previous`. Two overlapping writes could then finish in the order that made
+  // the loser's rollback authoritative: the earlier click failing *after* the later one
+  // succeeded restores a side the server does not hold. It self-heals on the next pick — the
+  // 409 path re-reads the card — but until then the HUD and the gym list are labelled for the
+  // wrong team. There is no reason to allow a second pick during the first; allegiance is a
+  // one-time choice and the control has nothing useful to say while it is being made.
+  //
+  // `pending`, not `locked`, and the distinction is the whole point of the third state: the
+  // lock strings assert an outcome the server has not granted yet. An earlier version of this
+  // very sentence said "locked for the duration", which asserted it in prose instead.
+  paintFactionPicker(faction, false, true);
+
+  // A write that never settles must not disable this control for ever.
+  //
+  // `fetch` has no timeout. A blackholed request on a flaky radio leaves the promise pending
+  // for minutes, and neither `catch` nor `finally` runs — so the picker sits at "saving",
+  // disabled, with no way back but a reload. The guard is a generation counter rather than a
+  // bare timer: re-enabling on a timeout alone would re-open the overlapping-write race this
+  // state exists to close, because a late response could still arrive and repaint after a
+  // newer pick had started.
+  const giveUp = setTimeout(() => {
+    if (generation !== factionWriteGeneration) return;
+    factionWritePending = false;
+    currentVolunteerFaction = previous;
+    paintFactionPicker(previous, false);
+    renderGymsList();
+    window.game?.onFactionChange();
+    // Not "nothing was saved" — the client cannot know that. A request that has not answered
+    // in fifteen seconds may still be in flight, and may already have bound the side. Saying
+    // so plainly is the difference between a status and a guess.
+    logChaosTerminal('[ERROR] Faction change had no answer in 15s; it may or may not have been saved.');
+    window.game?.toast?.('No answer from the server. Reload to see which side you are on.');
+  }, 15000);
+
+  try {
+    // Inside the `try`: these paint from `currentVolunteerFaction`, and a throw here used to
+    // reject the whole function before the PATCH was sent, stranding the picker at "saving"
+    // with no request in flight to settle it.
+    renderGymsList();
+    window.game?.onFactionChange();
+    const res = await Nexus.api('/api/v1/me/faction', { method: 'PATCH', body: { faction } });
+    if (generation !== factionWriteGeneration) return;   // a newer pick owns the control now
+    // Cleared before the terminal paint, not in `finally`: the paint below reads this flag,
+    // and clearing it afterwards would render "saving" over a settled result.
+    factionWritePending = false;
+    // `bound: false` is a success, not a refusal: re-sending the side you already hold
+    // answers 200 so a retry after a dropped response is not an error.
+    paintFactionPicker(res?.data?.faction || faction, true);
+    logChaosTerminal(`[FACTION] ${factionOf(faction).label}${res?.data?.bound ? ' — allegiance bound.' : ''}`);
+  } catch (err) {
+    if (generation !== factionWriteGeneration) return;   // superseded; do not repaint
+    factionWritePending = false;                          // before the paints below read it
+    // A 409 means the server holds a side this browser did not know about — the account
+    // bound it somewhere else, another tab or another device. Rolling back to `previous` and
+    // locking *that* would pin this tab to a faction the server will refuse on every battle
+    // until the page is reloaded, which is worse than the disagreement it is reacting to. So
+    // the server's answer is fetched and adopted.
+    //
+    // `previous` is restored on every other path — a non-409 failure, and also a 409 whose
+    // follow-up card read throws or comes back NEUTRAL. Those two are nearly-dead defensive
+    // branches (a 409 contradicts a NEUTRAL card), and they leave the picker **unlocked**,
+    // which is the point: an unlocked picker showing a stale side is one click from the
+    // truth, and a locked one is not.
+    if (err.status === 409) {
+      try {
+        const card = await Nexus.api('/api/v1/me/card');
+        const held = card?.data?.faction;
+        if (held && held !== 'NEUTRAL') {
+          currentVolunteerFaction = held;
+          paintFactionPicker(held, true);
+        } else {
+          currentVolunteerFaction = previous;
+          paintFactionPicker(previous, false);
+        }
+      } catch {
+        // Could not ask. Leave the picker unlocked rather than lock in a guess.
+        currentVolunteerFaction = previous;
+        paintFactionPicker(previous, false);
+      }
+    } else {
+      currentVolunteerFaction = previous;
+      paintFactionPicker(previous, false);
+    }
+    renderGymsList();
+    window.game?.onFactionChange();
+    // The server's own words: a 409 names the side they are actually on, which is the one
+    // thing the reader needs and the one thing a canned message could not know.
+    logChaosTerminal(`[ERROR] ${err.message}`);
+    window.game?.toast?.(err.message);
+  } finally {
+    clearTimeout(giveUp);
+    // Only the newest write clears it; an older one settling late must not re-enable a
+    // control the newer one is still using.
+    if (generation === factionWriteGeneration) factionWritePending = false;
+  }
 }
 
 /**
@@ -1429,7 +1861,7 @@ async function battleOrFortifyGym(gymId, btn) {
   // stop, which is what a geofence is for.
   const gym = gymsCache.find((g) => g._id === gymId);
   if (!gym) {
-    logChaosTerminal('[ERROR] Gym not in cache — refresh the territory list.');
+    refuse('Gym', 'That stronghold is not loaded yet. Refresh the territory list and try again.');
     return;
   }
   const at = requirePlayerCoords('Contesting a gym');
@@ -1453,24 +1885,91 @@ async function battleOrFortifyGym(gymId, btn) {
       window.fx?.burstAt(btn, factionOf(currentVolunteerFaction).color, captured ? 54 : 22);
       logChaosTerminal(`[GYM ${json.data.action}] ${json.data.message}`);
       pulseMonumentFor(gymId);
-      loadGymsData();
+      // Awaited, and the result handed back.
+      //
+      // The encounter overlay read `gymsCache` the instant this function returned, to decide
+      // whether the banner had changed hands. `loadGymsData()` was fire-and-forget, so the
+      // row it read was the *pre-battle* row: a capture compared the old holder against
+      // itself, found no change, and reported "X is at <old CP>" instead of announcing the
+      // capture. The one line in the whole encounter anybody waits for was the one line that
+      // could not be right. `json.data` carries `action`, `controllingFaction`,
+      // `newControlPoints` and `karmaAwarded` from the write itself, which no cache read can
+      // race, so callers that need the outcome take it from here.
+      await loadGymsData();
       fetchStats();
-    } else {
-      logChaosTerminal(`[ERROR] Gym battle failed: ${json.message}`);
+      return json.data;
     }
+    refuse('Gym', json.message);
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Gym', err.message);
   }
+  return null;
 }
 
 async function loadHackStopsData() {
+  // Whose cooldowns these are. See `handoverGeneration`.
+  //
+  // `yourNextSpinAt` on this payload is per-caller, so the list is not public data the way the
+  // gym list is: a response for A that lands after the browser has changed hands seeds A's
+  // spin ledger into B's map, and B's Spin buttons sit disabled counting down a cooldown that
+  // belongs to somebody else. Same window `loadMyRegistrations` closes, same endpoint shape.
+  const mine = handoverGeneration;
   try {
-    hackStopsCache = await apiGet('/api/v1/pokeshift/hackstops');
+    const rows = await apiGet('/api/v1/pokeshift/hackstops');
+    if (mine !== handoverGeneration) return;
+    hackStopsCache = rows;
+    // The per-caller cooldowns ride along on this payload; take them every time rather than
+    // trying to keep a local model in step with a ledger the server already sends.
+    seedSpinCooldowns(hackStopsCache);
     renderHackStopsList();
+    window.game?.gateSpins?.();
     syncCampusActors();
   } catch (err) {
     console.error('Failed to load hackstops:', err);
   }
+}
+
+/**
+ * When each HackStop is next spinnable, by beacon id.
+ *
+ * A beacon has a `cooldownSeconds` (300 in the shipped pack) and the server refuses an early
+ * spin with `SCHEDULE_CONFLICT — Available again in 279 seconds`. The client tracked none of
+ * it: the Spin button stayed enabled and labelled "Spin" for the whole five minutes, so
+ * every click in that window was a request the server was always going to reject. That is
+ * the labelled-control-that-always-fails shape, and this one lasts five minutes after every
+ * single success — the most reachable instance of it in the app.
+ *
+ * **Seeded from the server, not inferred.** `GET /pokeshift/hackstops` returns
+ * `yourNextSpinAt` per beacon for the signed-in caller — the ledger the refusal is computed
+ * from — so every load of the stop list carries the truth for that account. The first version
+ * of this instead scheduled `now + cooldownSeconds` on success and regex-parsed "in N seconds"
+ * out of the refusal text, which was wrong in four ways at once: it was blind after a reload
+ * until one click had already failed, blind to a spin from the player's other device, blind to
+ * a change of account, and it broke on the contended-race refusal ("spin already recorded. Try
+ * again shortly."), which carries no number at all — the regex yielded `NaN` and the gate never
+ * armed. Reading the field the server already publishes has none of those failure modes.
+ *
+ * The local write on success stays, as an optimistic update so the button greys immediately
+ * rather than after the next list refresh. The server's value overwrites it on every load.
+ */
+const spinCooldowns = new Map();
+
+/** Take the per-caller cooldowns straight off a hackstops payload. */
+function seedSpinCooldowns(stops) {
+  spinCooldowns.clear();
+  for (const s of stops || []) {
+    const next = s?.yourNextSpinAt ? Date.parse(s.yourNextSpinAt) : NaN;
+    if (Number.isFinite(next) && next > Date.now()) spinCooldowns.set(String(s.beaconId), next);
+  }
+}
+
+/** Seconds left on a beacon's cooldown, or 0. */
+function spinCooldownLeft(beaconId) {
+  const until = spinCooldowns.get(beaconId);
+  if (!until) return 0;
+  const left = Math.ceil((until - Date.now()) / 1000);
+  if (left <= 0) { spinCooldowns.delete(beaconId); return 0; }
+  return left;
 }
 
 async function spinHackStop(beaconId, lat, lon, btn) {
@@ -1497,11 +1996,20 @@ async function spinHackStop(beaconId, lat, lon, btn) {
       logChaosTerminal(`[HACKSTOP] Spun ${json.data.name} → ${item.name} (+${json.data.awardedKarma} karma)`);
       loadUserInventory();
       fetchStats();
+      const stop = hackStopsCache.find((h) => h.beaconId === beaconId);
+      const secs = Number(stop?.cooldownSeconds) || 0;
+      if (secs > 0) spinCooldowns.set(beaconId, Date.now() + secs * 1000);
+      window.game?.gateSpins?.();
     } else {
-      logChaosTerminal(`[ERROR] HackStop spin failed: ${json.message}`);
+      // A refusal means the ledger disagrees with us, whatever the wording. Re-read the list
+      // rather than parsing prose: `yourNextSpinAt` is authoritative and the two refusal
+      // messages do not share a shape — one quotes seconds, the other says "try again
+      // shortly" and carries no number.
+      if (/cooling down/i.test(json.message || '')) void loadHackStopsData();
+      refuse('Spin', json.message);
     }
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Spin', err.message);
   }
 }
 
@@ -1605,7 +2113,7 @@ async function deployPowerUp(itemType, btn) {
     if (!at) return;
     const placed = gymsCache.filter((g) => Number.isFinite(g.latitude) && Number.isFinite(g.longitude));
     if (!placed.length) {
-      logChaosTerminal('[BLOCKED] No gyms loaded — refresh the territory list.');
+      refuse('Item', 'No strongholds are loaded yet. Refresh the territory list and try again.');
       return;
     }
     targetGym = placed.reduce((best, g) => (metresBetween(at, g) < metresBetween(at, best) ? g : best), placed[0]);
@@ -1633,10 +2141,10 @@ async function deployPowerUp(itemType, btn) {
       loadGymsData();
       fetchStats();
     } else {
-      logChaosTerminal(`[ERROR] Could not use item: ${json.message}`);
+      refuse('Item', json.message);
     }
   } catch (err) {
-    logChaosTerminal(`[ERROR] ${err.message}`);
+    refuse('Item', err.message);
   }
 }
 
@@ -1668,6 +2176,19 @@ async function bootCampus() {
   const canvas = document.getElementById('campus-3d-canvas');
   if (!canvas) { campusBooting = false; return; }
 
+  // A failed boot leaves `campus` null, so the early return above does not catch it and the
+  // next visit to the tab boots again. A *successful* boot is a no-op on return. So this only
+  // repeats while it is failing — which is exactly when it appends a notice, and appending is
+  // what stacked a second copy under the first. Clear all of them, not one: removing a single
+  // node and appending a new one leaves any count above one unchanged for ever.
+  const showCampusNotice = (html) => {
+    const host = document.getElementById('campus-viewport');
+    if (!host) return;
+    host.querySelectorAll('.campus-notice').forEach((n) => n.remove());
+    host.insertAdjacentHTML('beforeend',
+      `<div class="empty-state campus-notice" style="position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px">${html}</div>`);
+  };
+
   try {
     const { createCampusRenderer } = await import('/dashboard/gl/campus3d.js');
     const renderer = createCampusRenderer(canvas, {
@@ -1677,10 +2198,8 @@ async function bootCampus() {
     });
 
     if (!renderer) {
-      setGlStatus('WebGL2 unavailable', 'c-amber');
-      document.getElementById('campus-viewport')?.insertAdjacentHTML('beforeend',
-        '<div class="empty-state" style="position:absolute;inset:0;display:grid;place-items:center;">' +
-        'This browser has no WebGL2. The campus map needs it; every other panel still works.</div>');
+      setGlStatus('3D unavailable', 'c-amber');
+      showCampusNotice('This browser cannot draw the 3D campus. Everything else on this page still works.');
       campusBooting = false;
       return;
     }
@@ -1722,7 +2241,9 @@ async function bootCampus() {
     });
     window.toWorld = toWorld;
 
-    setGlStatus('WebGL2 · live', 'c-mint');
+    setGlStatus('3D campus · live', 'c-mint');
+    // A boot that succeeds clears whatever the last failed one left on screen.
+    document.getElementById('campus-viewport')?.querySelectorAll('.campus-notice').forEach((n) => n.remove());
     // The bake time is a boot fact; the counts live in the telemetry strip.
     const stats = document.getElementById('gl-stats');
     if (stats) stats.innerText = `baked in ${ms}ms`;
@@ -1738,8 +2259,28 @@ async function bootCampus() {
     window.game?.onCampusReady();
   } catch (err) {
     console.error('Campus renderer failed:', err);
-    setGlStatus('Renderer failed', 'c-hazard');
-    logSosTerminal(`[ERROR] Campus renderer: ${err.message}`);
+    // A missing model is a *setup* problem rather than a bug — as is the absent WebGL2 handled
+    // above — and it is the one that looked exactly like the campus having been deleted: an
+    // empty grid, no
+    // buildings, no monuments, and a status chip reading "Renderer failed" — which names the
+    // renderer, the one part that was working. A pack only has a campus once `npm run campus`
+    // has baked one, and a pack that ships without it (example-campus does) hits this on
+    // every load. Say which pack, and say what to run.
+    const missingModel = /campus model 40\d/.test(err.message || '');
+    if (missingModel) {
+      // `pack` is the descriptor's documented id field; `event.id` also carries it, but this
+      // is the handle nexus.js names. Quoted in the command below because the fallback string
+      // contains a space and an unquoted `CONTENT_PACK=this pack` is a broken shell line.
+      const pack = window.Nexus?.content?.pack || window.Nexus?.content?.event?.id || 'this-pack';
+      setGlStatus('No campus model', 'c-amber');
+      logSosTerminal(`[ERROR] Content pack "${pack}" has no baked campus model. Run: CONTENT_PACK=${pack} npm run campus`);
+      showCampusNotice(
+        `The content pack <b>${esc(pack)}</b> has no baked campus model yet, so there is nothing to draw. ` +
+        `Build one with <code>CONTENT_PACK=${esc(pack)} npm run campus</code>. Every other panel still works.`);
+    } else {
+      setGlStatus('Renderer failed', 'c-hazard');
+      logSosTerminal(`[ERROR] Campus renderer: ${err.message}`);
+    }
   } finally {
     campusBooting = false;
   }
@@ -1937,7 +2478,7 @@ function renderMonumentDetail(mon) {
         ${facts.length ? `<ul class="mon-facts">${facts.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : `<div class="mc-text">${esc(mon.blurb || '')}</div>`}
         ${info?.approximate ? '<div class="mc-text">Details from general knowledge — no source article was available.</div>' : ''}
         ${gym ? `
-          <div class="mon-meta" style="--c:${f.color}"><span class="f">${esc(f.short)}</span><span class="dot"></span><span>Lv ${Number(gym.level) || 1}</span><span class="dot"></span><span>${(gym.defenders || []).length} defending</span></div>
+          <div class="mon-meta" style="--c:${f.color}"><span class="f">${esc(f.short)}</span><span class="dot"></span><span>Lv ${Number(gym.level) || 1}</span><span class="dot"></span><span>${Number(gym.defenderCount) || 0} defending</span></div>
           <div class="mc-cp"><span>CP</span><div class="pxbar"><i style="width:${pct}%;background:${f.color}"></i></div><span>${num(gym.controlPoints)}/${num(gym.maxControlPoints)}</span></div>
         ` : '<div class="mc-text">Uncontested — no stronghold registered here yet.</div>'}
       </div>
@@ -2096,10 +2637,13 @@ async function loadMonumentInfo() {
 
 /** Sign-in / sign-out at runtime: re-point everything that keys on "me". */
 function onSessionChange(user) {
-  if (user?.faction && user.faction !== currentVolunteerFaction) {
+  if (user?.faction && user.faction !== 'NEUTRAL') {
     currentVolunteerFaction = user.faction;
-    const sel = document.getElementById('user-faction-selector');
-    if (sel && [...sel.options].some((o) => o.value === user.faction)) sel.value = user.faction;
+    paintFactionPicker(user.faction, true);
+  } else if (user) {
+    // A different account signed in on this device and has not taken a side. The previous
+    // account's lock must not carry over to them.
+    paintFactionPicker(currentVolunteerFaction, false);
   }
   if (user) {
     loadUserInventory();
@@ -2117,6 +2661,20 @@ async function init() {
     applyFactions(content?.factions);
     applyBranding(content);
   }).catch((err) => console.warn('Content pack not applied:', err.message));
+  // Branding again on every `content`, so the strings stay with the pack.
+  //
+  // `applyBranding` writes the geofence into three `data-brand` spans, and `game.js` and
+  // `views/me.js` now take the same number from the same place. Those two follow the event;
+  // this ran once and did not, so a re-settled pack would have left three spans quoting a
+  // radius the rest of the page had stopped using.
+  //
+  // Only branding re-runs, and the honest reason is that nothing needs the other half yet —
+  // not, as this comment previously claimed, that `applyFactions` "would undo a bound
+  // allegiance". It would not: it preserves a non-NEUTRAL `currentVolunteerFaction`, re-sets
+  // `sel.value` to it, and never touches `sel.disabled`, so both the value and the lock
+  // survive. A pack that renames its factions mid-session would genuinely need it re-run,
+  // and that false reason would have talked the next reader out of doing so.
+  Nexus.onEvent('content', (content) => applyBranding(content));
   loadMonumentInfo(); // independent of the API; no need to await
   hydrateSprites();
   window.Sprites?.ready.then(() => hydrateSprites()).catch(() => {});
@@ -2124,10 +2682,15 @@ async function init() {
   // One round trip to /me (plus dev-login in the demo) before the first
   // fetch, so inventory and the trainer card belong to the right account.
   const me = await Nexus.session.ready;
-  if (me?.faction) {
+  // A bound side is restored *and* locked. NEUTRAL and null both mean unbound — the seeded
+  // accounts ship that way — and are deliberately not restored, because `applyFactions` has
+  // already put a playable side in `currentVolunteerFaction` so the map has colours to draw
+  // with. That default is a display choice, not an allegiance, and the picker says so.
+  if (me?.faction && me.faction !== 'NEUTRAL') {
     currentVolunteerFaction = me.faction;
-    const sel = document.getElementById('user-faction-selector');
-    if (sel && [...sel.options].some((o) => o.value === me.faction)) sel.value = me.faction;
+    paintFactionPicker(me.faction, true);
+  } else {
+    paintFactionPicker(currentVolunteerFaction, false);
   }
   // The boot session has already been emitted by the time this listener is attached — the
   // `await` above is what waits for it — so the account signed in at page load never reaches
@@ -2151,8 +2714,58 @@ async function init() {
   Nexus.onEvent('session:handover', () => {
     handoverGeneration += 1;
     userInventoryCache = [];
-    currentVolunteerFaction = 'NEUTRAL';
     renderUserInventory();
+
+    // The two per-account caches this session added, which the handover did not know about.
+    //
+    // `myRegistrations` decides whether the quest board says "You're on this", and it survived
+    // a handover intact: an account that held nothing was shown the departing account's shifts
+    // as its own, with those cards disabled — so it could see what somebody else had signed up
+    // for *and* could not claim them itself. Measured before the fix: the incoming account held
+    // one shift and the board marked three as theirs.
+    //
+    // `spinCooldowns` is the same shape with a smaller blast radius: a stop the previous
+    // account spun would sit greyed out with a countdown for somebody who had never touched it.
+    // Both are cleared here and refilled by the reload below, under the new generation.
+    myRegistrations = new Map();
+    spinCooldowns.clear();
+    // The faction write belongs to the account that started it.
+    //
+    // `handoverGeneration` did not touch `factionWriteGeneration`, so a PATCH still in flight
+    // across a handover passed its own generation guard and painted A's confirmed side, locked,
+    // under B's session — and B's picker sat disabled at "saving" until A's response landed.
+    // Bumping the write generation makes that response a no-op the way it already is for a
+    // superseded pick.
+    factionWriteGeneration += 1;
+    factionWritePending = false;
+    renderShifts(shiftsCache);
+
+    // The incoming account's side, re-derived — not a blanket NEUTRAL.
+    //
+    // This line was `currentVolunteerFaction = 'NEUTRAL'` and it was wrong in both
+    // directions. `session` fires before this and has already set the new account's faction,
+    // so blanking it here threw away a side the server *does* hold: their battles then went
+    // out as NEUTRAL and were refused until a reload — an entitled user losing the feature.
+    // And for an account with no side, the picker was never repainted, so it went on
+    // displaying the *previous* account's team, unlocked, while this variable said NEUTRAL.
+    // A control showing a team the page does not believe in.
+    const incoming = Nexus.session.user?.faction;
+    if (incoming && incoming !== 'NEUTRAL') {
+      currentVolunteerFaction = incoming;
+      paintFactionPicker(incoming, true);
+    } else {
+      // Unbound: the same display default boot uses, and explicitly not locked.
+      const playable = Object.keys(FACTION).filter((id) => id !== 'NEUTRAL');
+      currentVolunteerFaction = playable[0] || 'NEUTRAL';
+      paintFactionPicker(currentVolunteerFaction, false);
+    }
+    // And everything that renders *from* the faction, which the picker repaint alone does not
+    // reach. `onSessionChange` and the 409 path both do this pair; this handler did neither,
+    // so the gym list kept Contest/Reinforce labels computed for the previous account's side
+    // and `game.js`'s own handover listener — registered before this one — had already baked
+    // that side into the trainer. Both healed only on the next fetch or tab switch.
+    renderGymsList();
+    window.game?.onFactionChange();
     // And load the new account's own things.
     //
     // `setUser` emits `session` and then `session:handover` synchronously, so the sign-in
@@ -2163,6 +2776,15 @@ async function init() {
     // here for the same reason; this handler was the one that only cleared.
     void loadUserInventory();
 
+    // And the map's own per-account ledger.
+    //
+    // Clearing `spinCooldowns` above only empties it; nothing refilled it, because no handover
+    // path called this loader. The incoming account's stops then showed no cooldown at all —
+    // every Spin button live — until something else happened to refetch the list, and a spin
+    // the server was always going to refuse looked available. Under the new generation, so a
+    // response for the departing account cannot land in it.
+    void loadHackStopsData();
+
     // The distress queue too, and this one matters more than the bag.
     //
     // A lead reads `GET /sos/tickets` unredacted: seat numbers, hacker names, descriptions,
@@ -2171,6 +2793,8 @@ async function init() {
     // looking at the previous lead's open medical calls — data their own session would have
     // been handed redacted. Cleared, repainted empty, then reloaded under the new session,
     // which returns whatever the new account is actually entitled to.
+    void fetchShifts();   // repopulates `myRegistrations` for whoever just arrived
+
     openSosTicketsCache = [];
     renderSOSTicketsList(openSosTicketsCache);
     syncCampusActors();

@@ -10,8 +10,9 @@
  *    table refuses (`reason: 'TOTAL'`) rather than growing. A slot is a few hundred bytes of
  *    bookkeeping here plus whatever the socket itself costs, so eleven thousand of them is a
  *    ceiling that protects the process without ever being the thing that turns anyone away.
- *    Every ceiling in this file is an environment variable, because the right number is a
- *    property of the venue rather than of the software.
+ *    It, `PER_IP` and `ANON_SLOTS` are environment variables, because the right number for
+ *    those three is a property of the venue rather than of the software. `PER_ACCOUNT` and
+ *    `ANON_PER_IP` are compiled-in literals; changing either is a code change.
  *  - **`PER_ACCOUNT` = 2, across transports.** Phone + laptop both work. A third connection
  *    replaces the *oldest connection of the same transport* and never touches the other
  *    transport — a WebSocket reconnect must not tear down the SSE leg that is still
@@ -60,6 +61,10 @@ export type AcquireRequest = {
   ip: string;
 };
 
+/**
+ * `evict`, when present, is a slot the table has already released and whose socket is still
+ * open — closing it is the caller's job, and `tryAcquire` explains what happens if it does not.
+ */
 export type AcquireResult =
   | { ok: true; slot: SlotHandle; evict?: SlotHandle }
   | { ok: false; reason: 'TOTAL' | 'PER_IP' | 'ANON' };
@@ -93,6 +98,16 @@ interface Cidr {
   mask: number;
 }
 
+/**
+ * Dotted quad to an unsigned 32-bit integer, or null for anything that is not one.
+ *
+ * The `>>> 0` on the way out is not decoration. JavaScript's bitwise operators work on
+ * *signed* 32-bit values, so `10.0.0.1` accumulates to a positive number and `192.168.0.1`
+ * accumulates to a negative one; without coercing both ends to unsigned, a comparison against
+ * a masked base would fail for exactly the half of the address space that starts above 127 —
+ * which includes the venue's own ranges. The mask in `parseCidrList` and the comparison in
+ * `ipInCidrs` coerce for the same reason.
+ */
 function ipv4ToInt(ip: string): number | null {
   const parts = ip.split('.');
   if (parts.length !== 4) return null;
@@ -135,6 +150,12 @@ export function parseCidrList(raw: string | undefined): Cidr[] {
   return out;
 }
 
+/**
+ * Membership test. Normalises first, so a v4 peer that Node reported as `::ffff:a.b.c.d` on a
+ * dual-stack listener matches a plain v4 range in the list rather than silently missing it.
+ * An address that is not IPv4 after normalisation is not in any range, which is the direction
+ * that fails closed for a trust list.
+ */
 export function ipInCidrs(ip: string | undefined, cidrs: readonly Cidr[]): boolean {
   if (!ip || cidrs.length === 0) return false;
   const n = ipv4ToInt(normaliseIp(ip));
@@ -150,6 +171,12 @@ export function trustedEgressCidrs(): readonly Cidr[] {
   return envCidrs;
 }
 
+/**
+ * Whether an address is one the operator has vouched for. Also used by the rate limiter, so
+ * "the venue's NAT" means one thing across the whole process. The default argument is the
+ * parsed environment list; the table passes its own when it was constructed with an explicit
+ * one, which is how a test gets a trusted range without touching the environment.
+ */
 export function isTrustedEgress(ip: string | undefined, cidrs: readonly Cidr[] = trustedEgressCidrs()): boolean {
   return ipInCidrs(ip, cidrs);
 }
@@ -158,6 +185,17 @@ export function isTrustedEgress(ip: string | undefined, cidrs: readonly Cidr[] =
 // The table.
 // ---------------------------------------------------------------------------
 
+/**
+ * The table itself: pure bookkeeping over slot handles, with no knowledge of sockets,
+ * requests or Express. That separation is why `tryAcquire` returns a slot to evict rather
+ * than closing anything — see the note there, because this file cannot detect a caller that
+ * takes the handle and never closes the connection behind it.
+ *
+ * The constructor's options exist for tests, which need small ceilings and an explicit trusted
+ * list; production constructs the singleton at the bottom of this file with no arguments, so
+ * it takes `totalSlots`, `perIp` and `anonSlots` from the validated environment and
+ * `perAccount` and `anonPerIp` from the literals above.
+ */
 export class StreamLimits {
   public static readonly TOTAL_SLOTS = env.STREAM_TOTAL_SLOTS;
   public static readonly PER_ACCOUNT = 2;
@@ -190,6 +228,33 @@ export class StreamLimits {
     this.trusted = opts.trustedCidrs ? parseCidrList(opts.trustedCidrs.join(',')) : null;
   }
 
+  /**
+   * Take a slot, or say which ceiling refused it.
+   *
+   * The order of the decisions is load-bearing. Per-account replacement is chosen *first*, and
+   * the total ceiling below is tested against a count that already discounts the slot about to
+   * be freed: a reconnecting phone whose previous socket has not finished closing must not be
+   * refused by a table that is full of its own predecessor. Anonymous callers are then held
+   * against their own pool and their own per-IP cap — which apply even on trusted egress,
+   * because without an account there is nothing else to bound them by. The general per-IP
+   * ceiling is last and is skipped entirely for trusted egress, where thousands of legitimate
+   * people arrive from one address.
+   *
+   * **`evict` in the result is a slot this table has already released.** The accounting is
+   * done; the socket on the other end is still open and still receiving. Closing it is the
+   * caller's job — the SSE hub does it through `evictBySlot`, the presence WebSocket through
+   * its own slot map — and a caller that ignores the field turns "two connections per account"
+   * into an unbounded number of live sockets that the table believes are two.
+   *
+   * Replacement happens only when the account already holds a connection of the *same*
+   * transport. At the cap with nothing of this transport to replace, the connection is
+   * admitted rather than refused, so a WebSocket reconnect can never tear down the SSE leg
+   * still delivering ops events.
+   *
+   * An address the server could not determine arrives here as the literal `'unknown'` and
+   * shares one bucket with every other such caller. That is the safe direction, but it means a
+   * misconfigured proxy presents as a `PER_IP` refusal rather than as an unbounded pool.
+   */
   public tryAcquire(req: AcquireRequest): AcquireResult {
     const ip = normaliseIp(req.ip || 'unknown');
 
@@ -276,6 +341,8 @@ export class StreamLimits {
     }
   }
 
+  /** Read-only snapshot, reported by `GET /health` — but only to a caller who has proved
+   *  lead, since connection counts describe the crowd rather than the process. */
   public stats(): StreamLimitStats {
     const byTransport: Record<StreamTransport, number> = { sse: 0, ws: 0 };
     for (const slot of this.slots.values()) byTransport[slot.transport] += 1;
@@ -291,4 +358,9 @@ export class StreamLimits {
   }
 }
 
+/**
+ * The process-wide table. Both long-lived transports acquire from this one instance, which is
+ * the point of the file: an account's SSE stream and its presence WebSocket land in the same
+ * `byAccount` list rather than each transport handing out a fresh allowance of its own.
+ */
 export const streamLimits = new StreamLimits();

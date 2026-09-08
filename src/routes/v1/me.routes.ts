@@ -1,6 +1,35 @@
 /**
- * `/api/v1/me` — the signed-in account. M1 ships the account card; M5 adds shifts, quests,
- * inventory, stickers and presence preferences.
+ * `/api/v1/me` — the signed-in account's own view of itself. M1 ships the account card; M5
+ * adds shifts, quests, inventory, stickers and presence preferences.
+ *
+ *   GET   /me             requireAccount                 profile; email withheld unless proved
+ *   PATCH /me/presence    requireSession, requireAccount the opt-in toggle (a write)
+ *   GET   /me/shifts      requireSession, requireAccount the rota, and the next workable shift
+ *   GET   /me/inventory   requireSession, requireAccount power-ups held
+ *   GET   /me/card        requireSession, requireAccount the offline trainer card
+ *   GET   /me/sos         requireSession, requireAccount the caller's own live distress call
+ *   GET   /me/quests      requireSession, requireAccount quest progress
+ *   GET   /me/stickers    requireSession, requireAccount the sticker book
+ *
+ * **Read the gate column before adding a route here.** "Me" is not self-evidently safe: in
+ * `AUTH_MODE=legacy` an identity can be *claimed* with `?volunteerId=<id>`, and account ids
+ * are public — `GET /volunteers` and the leaderboard hand them to anonymous callers. So on
+ * `requireAccount` alone, every route on this router answers "tell me about *that named
+ * person*" to anyone who asks. Seven of the eight carry `requireSession` today and the
+ * comment above each one says what it was disclosing before it did — a rota, a live medical
+ * call, a sticker book — which is the same fix arrived at seven times over several review
+ * rounds. `requireSession` is the default for anything on this file, and `requireAccount`
+ * beside it is what makes the `req.account!` in each handler safe to write.
+ *
+ * `GET /` is the one exception and pays for it in the handler instead: a caller whose source
+ * is not `session` gets the same shape with `email` nulled, because the rest of the payload
+ * is already readable from the leaderboard.
+ *
+ * Every GET here sends `Cache-Control: no-store`, and that is a rule rather than a habit:
+ * these responses are keyed only on the URL, `private` does not partition by cookie, and
+ * nothing sends `Vary: Cookie` — so a cacheable `/me` on a shared laptop hands the previous
+ * occupant's account to the next one from disk, past every server-side guard. Two routes here
+ * were fixed for exactly that.
  */
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireAccount, requireSession } from '../../middleware/identity';
@@ -11,10 +40,12 @@ import { SOSTicket, SOSTicketStatus } from '../../models/sosTicket.model';
 import { QuestService } from '../../services/quest.service';
 import { StickerService } from '../../services/sticker.service';
 import { AuthService } from '../../services/auth.service';
+import { bindFaction, playableFactions } from '../../services/faction.service';
 import { presenceService } from '../../presence/service';
 import { presenceStore } from '../../presence/store';
 import { dropSseSession } from '../../presence/sseTransport';
 import { patchPresencePrefSchema } from '../../schemas/presence.schema';
+import { chooseFactionSchema } from '../../schemas/volunteer.schema';
 import { validate } from '../../middleware/validate';
 import { ApiError } from '../../common/errors/apiError';
 import { ErrorCode } from '../../common/errors/errorCodes';
@@ -62,6 +93,53 @@ meRouter.get('/', requireAccount, async (req: Request, res: Response, next: Next
  * one-request way to take any named person off the map, with no session and (because a
  * claimed identity is not a session) no CSRF check either.
  */
+/**
+ * Choose a side, once.
+ *
+ * The dashboard has had a faction picker since the game layer shipped, and it wrote nothing.
+ * `public/app.js` keeps `currentVolunteerFaction` in a module variable, defaults it to the first
+ * playable faction, and no endpoint existed to persist it — a comment beside it said so plainly.
+ * The visible consequence was two panels disagreeing about the same fact: the campus HUD said
+ * TEAM KERNEL while `GET /me/card` said NEUTRAL for the same account in the same second, and a
+ * reload silently moved you to whichever faction the pack happened to list first.
+ *
+ * Allegiance is chosen once and is then locked, which is not this route's rule — it is the rule
+ * `GymService` has always enforced, because the client names a faction on every battle request
+ * and without a lock one account could reinforce as an ally and attack as a rival at will. Both
+ * callers go through `bindFaction` so there is one implementation of "when is this settled".
+ *
+ * Idempotent on the same faction: asking again for the side you already hold answers 200 with
+ * `bound: false`, because a client retrying a request it is unsure landed must not be told it
+ * has done something wrong. A different faction is 409 `FACTION_ALLEGIANCE_LOCKED`.
+ *
+ * `requireSession`, not `requireAccount`. This writes to an account, and in `legacy` mode a
+ * caller-asserted `?volunteerId=` satisfies `requireAccount` — which would let anyone bind a
+ * stranger to a faction for the rest of the event, permanently, since the choice cannot be
+ * undone. That is the same class of hole as the presence toggle and the avatar moderation
+ * routes, and it gets the same gate.
+ */
+meRouter.patch('/faction', requireSession, requireAccount, validate(chooseFactionSchema), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await bindFaction(req.account!.id, req.body.faction);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * The faction ids this event actually has, for a picker that should not hard-code them.
+ *
+ * Open to any signed-in account and deliberately dull: it is the pack's own `factions.json`
+ * minus NEUTRAL, which the client already fetches wholesale from `/api/v1/content`. It exists so
+ * a client can render the picker without knowing which pack it is talking to.
+ */
+meRouter.get('/faction/options', requireAccount, (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: { factions: playableFactions() } });
+});
+
 meRouter.patch('/presence', requireSession, requireAccount, validate(patchPresencePrefSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.account!.id;

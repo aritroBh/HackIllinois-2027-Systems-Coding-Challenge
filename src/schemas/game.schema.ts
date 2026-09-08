@@ -8,7 +8,7 @@
  *
  * `code` is bounded but not shaped. It is typed off a sign by someone who has been awake for
  * a day and a half, so separators and casing reach the service, which normalises them; a
- * strict pattern here would turn a hyphen into a 422 instead of a scan.
+ * strict pattern here would turn a hyphen into a 400 instead of a scan.
  */
 import { z } from 'zod';
 import { objectId } from './common';
@@ -23,6 +23,11 @@ export const scanBoothSchema = z.object({
   }),
 });
 
+/**
+ * `limit` is coerced from the query string and clamped to 100 with a default of 25. The clamp
+ * is the point: this route sorts on an indexed field and returns names and karma totals, so an
+ * unbounded limit is a whole-roster export dressed up as a leaderboard.
+ */
 export const leaderboardQuerySchema = z.object({
   query: z.object({
     limit: z.coerce.number().int().min(1).max(100).default(25),

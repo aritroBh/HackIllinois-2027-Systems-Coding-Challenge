@@ -35,7 +35,27 @@ function projectionFor(req: Request): string {
   return lead ? '-identities -sessionVersion -__v' : '-email -phone -identities -sessionVersion -__v';
 }
 
+/**
+ * Controller providing volunteer profile management, directory search with role-based PII redaction, and karma adjustments.
+ */
 export class VolunteerController {
+  /**
+   * Creates an account. 201, projected exactly as the reads are, so a lead sees the contact
+   * details come back and anybody else does not.
+   *
+   * The explicit destructure is the second of two mass-assignment guards rather than the
+   * only one. `validate` has already replaced `req.body` with the parsed result and dropped
+   * every unknown key, so `karmaPoints` or `badges` never reach this line; the destructure is
+   * what still holds if that schema is ever loosened. `role` is not in the accepted shape at
+   * all and is left entirely to the model's default.
+   *
+   * `kind` is the one field whose meaning depends on who is asking — honoured for a proved
+   * lead+ session, ignored for everyone else — which is what lets the registration desk create
+   * a hacker account while a self-service caller cannot make themselves one. Note that the
+   * route is `requireRole('ORGANIZER')`, so the `SHIFT_LEAD` arm of that test cannot be
+   * reached over HTTP today; it is the check being written against the desk's role rather
+   * than against this particular route's gate.
+   */
   public static async createVolunteer(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // ponytail: picklist — `role` is never taken from the client (forced VOLUNTEER).
@@ -58,6 +78,17 @@ export class VolunteerController {
     }
   }
 
+  /**
+   * The staff directory. Volunteers only, unless a proved lead+ asks for everybody with
+   * `?kind=ALL`; the comment below records why the axis is `kind` rather than `role`, and why
+   * a caller who asks without the standing gets the narrow answer instead of an error.
+   *
+   * Sorted newest-first and unpaginated (plan M5), so this grows with the event.
+   *
+   * The parameter is named `_req` from a time when the handler genuinely ignored the request.
+   * It does not any more — the caller's query and account both decide the answer — and the
+   * underscore now reads as a promise the body does not keep.
+   */
   public static async listVolunteers(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       // Volunteers only, unless the caller asks for everybody.
@@ -92,6 +123,16 @@ export class VolunteerController {
     }
   }
 
+  /**
+   * One account, 404 when there is none. The projection is the whole of the authorisation
+   * here: `projectionFor` decides whether email and phone come back, and identities and
+   * `sessionVersion` come back to nobody.
+   *
+   * The route carries no role middleware, so in `legacy` mode this is readable anonymously by
+   * design — that is the open demo. Which is precisely why `projectionFor` turns on
+   * `source === 'session'` and not on the role alone; its own comment records what a caller
+   * could read from this endpoint when it did not.
+   */
   public static async getVolunteerById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const volunteer = await Volunteer.findById(req.params.id).select(projectionFor(req));

@@ -1,0 +1,57 @@
+[
+  {
+    "file": "src/models/volunteer.model.ts",
+    "needle": "SIEBEL",
+    "reason": "The prestige rank SIEBEL_GUARDIAN contains a building name. Flavour, not a functional dependency: a fork works, its 1,000-1,999 rank is just named after somebody else's building. Renaming is a data migration (the id is persisted on every Volunteer), a client change, and a change to tests/prestige.test.ts, so it needs owner agreement rather than a unilateral rename."
+  },
+  {
+    "file": "src/services/checkin.service.ts",
+    "needle": "SIEBEL",
+    "reason": "Awards the SIEBEL_GUARDIAN badge. Same rank id as above and must be renamed with it, not separately."
+  },
+  {
+    "file": "src/config/swagger.ts",
+    "needle": "Siebel Center Atrium",
+    "reason": "An OpenAPI `example:` value. Should be read from pack.venues so a fork's API docs show its own buildings; cosmetic, and the Swagger definition is one large literal that wants restructuring as a piece rather than patching one example."
+  },
+  {
+    "file": "src/config/swagger.ts",
+    "needle": "TEAM_KERNEL",
+    "reason": "OpenAPI enum example. As above."
+  },
+  {
+    "file": "src/config/swagger.ts",
+    "needle": "TEAM_TENSOR",
+    "reason": "OpenAPI enum example. As above."
+  },
+  {
+    "file": "src/config/swagger.ts",
+    "needle": "TEAM_SILICON",
+    "reason": "OpenAPI enum example. As above."
+  },
+  {
+    "file": "src/seed/seedData.ts",
+    "needle": "Siebel Center Atrium",
+    "reason": "Demo shift locations. Territories, beacons and venue coordinates now come from the pack; the six demo *shifts* do not, because there is no shifts schema in a pack yet. Adding one is the right fix and is a schema change worth doing deliberately."
+  },
+  {
+    "file": "src/seed/seedData.ts",
+    "needle": "Kenney Gym",
+    "reason": "As above, a demo shift location."
+  },
+  {
+    "file": "src/seed/seedData.ts",
+    "needle": "SIEBEL",
+    "reason": "Seeded badge and prestige ids (SIEBEL_GUARDIAN). Tied to the rank rename above."
+  },
+  {
+    "file": "src/services/adonixSync.service.ts",
+    "needle": "Siebel Center Atrium",
+    "reason": "Fallback demo events for the Adonix adapter. Adonix is HackIllinois's own upstream, so this whole adapter is event-specific by construction — the seam for a different event is a new adapter in src/auth/ and a new sync service, not a pack file."
+  },
+  {
+    "file": "src/services/adonixSync.service.ts",
+    "needle": "Kenney Gym",
+    "reason": "As above."
+  }
+]

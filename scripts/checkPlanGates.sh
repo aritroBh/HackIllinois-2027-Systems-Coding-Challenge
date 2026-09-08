@@ -21,9 +21,71 @@
 # Relative to this script, not to an absolute path baked in on one machine.
 cd "$(dirname "$0")/.."
 pass=0; fail=0
+# A failing gate prints what actually broke, not just that something did.
+#
+# This used to send both streams to /dev/null, so a red line here gave a reader a name and
+# nothing else. That is the defect this repository has written down more than once — a gate's
+# exit code is not its result — sitting in the gate runner itself, and it cost real time: the
+# label below said "geometry winding audit clean" while the command ran the whole quick suite,
+# so a service-worker version mismatch was reported as a geometry failure and sent the reader
+# into `public/gl/` to look for a triangle that was wound the right way all along.
+#
+# A gate's own output is captured rather than streamed, so a passing gate prints its `ok` line
+# and nothing else — the value of this list is that it is scannable. (An earlier version of this
+# sentence said a passing gate "stays silent", which it plainly is not: it prints one line per
+# gate, 58 of them.)
+#
+# Which lines to show is the part that was wrong on the first attempt. That version took
+# `tail -8`, on the stated premise that "the failure is almost always at the end". For anything
+# run through npm that premise is exactly inverted: tsc's `file.ts:42: error` or the validator's
+# message prints first, and npm then appends a dozen lines of `npm ERR! ... ELIFECYCLE`. So the
+# last eight lines were reliably the wrapper's epilogue and the real cause was reliably dropped
+# — a failure printer that printed everything except the failure, inside a comment block whose
+# own anecdote is about a gate that sent the reader to the wrong file.
+#
+# Two changes. npm's own epilogue is dropped, and long output is shown from both ends with the
+# middle elided rather than betting on which end holds the cause — it is at the top for a
+# compiler and at the bottom for a shell script, and six lines either way costs nothing.
+#
+# What npm 11 actually emits, measured rather than assumed, because an earlier version of this
+# block asserted "npm then appends a dozen lines of `npm ERR! ... ELIFECYCLE`" two paragraphs
+# above another line saying that exact token matches nothing npm prints — the same comment
+# describing two different npms. Measured on 11.19.0: a failing *script* gets no `npm error`
+# epilogue at all, but npm does *prepend* two echo lines — `> pkg@version script` and the command
+# it ran — which the filter keeps deliberately, because knowing which script failed is worth two
+# of the six lines. (The first version of this paragraph said the tool's own output "is the whole
+# of it", which those two lines contradict.) Only npm failing *itself* — a missing script —
+# prints an epilogue, about six lines, all prefixed `npm error`, lowercase.
+#
+# So the filter earns its keep on one case, not the common one, and the pattern must match
+# `npm error`, lowercase. npm has emitted that since v7 and this repo is
+# on 11.19.0; a filter written as `npm ERR!` matches nothing npm currently prints, which is what
+# the first version of this line did while claiming chatter was "dropped outright".
+#
+# And the justification needs stating properly, because it is conditional. When a *script*
+# fails, the cause is the tool's own output (`src/foo.ts:42 - error TS...`) and the trailing
+# `npm error code 2 / path / command failed` lines are pure noise worth dropping. When *npm
+# itself* fails — a missing script — `npm error Missing script: "x"` is the only line there is,
+# and the filter would eat the entire message. That is what the all-noise fallback below exists
+# for, and it is the reason the fallback is not merely defensive.
 check() { # name, command
-  if eval "$2" >/dev/null 2>&1; then printf '  ok    %s\n' "$1"; pass=$((pass+1));
-  else printf '  FAIL  %s\n' "$1"; fail=$((fail+1)); fi
+  local out body n
+  if out=$(eval "$2" 2>&1); then printf '  ok    %s\n' "$1"; pass=$((pass+1)); return; fi
+  printf '  FAIL  %s\n' "$1"; fail=$((fail+1))
+
+  body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$' | grep -vE '^npm (error|ERR!|WARN|warn|notice)')
+  # Everything the command said was wrapper noise: better the noise than nothing at all.
+  [ -z "$body" ] && body=$(printf '%s\n' "$out" | grep -vE '^[[:space:]]*$')
+  [ -z "$body" ] && body='(the command failed and printed nothing)'
+
+  n=$(printf '%s\n' "$body" | wc -l | tr -d ' ')
+  if [ "$n" -le 12 ]; then
+    printf '%s\n' "$body" | sed 's/^/          | /'
+  else
+    printf '%s\n' "$body" | head -6 | sed 's/^/          | /'
+    printf '          | ... %s more line(s) ...\n' "$((n - 12))"
+    printf '%s\n' "$body" | tail -6 | sed 's/^/          | /'
+  fi
 }
 
 echo "M0 — commit baseline, legal, prod boot guards, compose"
@@ -95,7 +157,10 @@ check "boot warms the game catalogs"    "grep -q 'BoothService.warm' src/economy
 
 echo "M7 — renderer fidelity"
 check "crown recipes data-driven"       "test -d design/hand/crowns && test \$(ls design/hand/crowns/*.json | wc -l) -ge 14"
-check "geometry winding audit clean"    "bash scripts/verify.sh quick"
+# Named for what it runs, not for one of the twenty things inside it. `verify.sh quick` is the
+# winding audit *and* the shell lockstep, the event bridge, the docs and pack gates and the rest,
+# so a failure here can come from any of them — which is why the runner above now prints it.
+check "verify.sh quick (all)"           "bash scripts/verify.sh quick"
 
 echo "M8 — plugins, docs, CI"
 check "plugin registry + guard"         "test -f src/plugins/registry.ts -a -f src/plugins/index.ts"

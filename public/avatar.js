@@ -307,12 +307,28 @@ export function renderPreview(canvas, imageData, scale = 8) {
  * Sprite — chibi body under the pixel head, 4-frame walk cycle
  * ------------------------------------------------------------------ */
 
+/**
+ * Jacket colours for the shipped pack, and the fallback for anything else.
+ *
+ * These are ids this repository happens to ship. A fork's factions are not among them, so
+ * `FACTION_COLORS[faction] || NEUTRAL` dressed **every** trainer in a fork in the unclaimed
+ * grey — the one colour that means "on no side" — while the rest of that fork's UI drew their
+ * team's real colour from the pack. `factionColour` below prefers the pack's own value and
+ * keeps this table only as the pre-pack default.
+ */
 export const FACTION_COLORS = {
   TEAM_KERNEL: '#22D3EE',
   TEAM_TENSOR: '#A78BFA',
   TEAM_SILICON: '#FBBF24',
   NEUTRAL: '#8E9090',
 };
+
+/** The pack's colour for a faction id, else this file's default, else neutral grey. */
+export function factionColour(id) {
+  const list = globalThis.Nexus?.content?.factions;
+  const fromPack = Array.isArray(list) ? list.find((f) => f && f.id === id)?.color : null;
+  return fromPack || FACTION_COLORS[id] || FACTION_COLORS.NEUTRAL;
+}
 
 // 32 wide × 22 tall body, rows 26..47 of the frame. Legend:
 // . transparent  O outline  J jacket  j jacket shade  S skin  P pants
@@ -420,7 +436,7 @@ function shade(hex, k) {
  * stand, right step. `frameAt(canvas, i)` returns the source rect.
  */
 export function sprite(headImageData, { faction = 'NEUTRAL', cap = true, skin = '#F1C9A5' } = {}) {
-  const jacket = FACTION_COLORS[faction] || FACTION_COLORS.NEUTRAL;
+  const jacket = factionColour(faction);
   const FW = 32, FH = 48, FRAMES = 4;
 
   const sheet = document.createElement('canvas');

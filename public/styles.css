@@ -181,10 +181,24 @@ img.pxi, canvas.pxi { image-rendering: pixelated; image-rendering: crisp-edges; 
 .panel-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
 .panel-head h3 { font-size: 23px; }
 
+/* Silkscreen 700, not 400, on every small pixel caption.
+ *
+ * `#08152B` on `#35B8C4` measures 7.75:1 — AAA, twice over — and the Sync Adonix button and
+ * the venues chip were still reported as hard to read. The ratio was never the problem.
+ * Silkscreen at 10 px draws single-pixel stems, and a single dark pixel on a bright fill is
+ * the one case where antialiasing has nowhere to land: the stem is averaged toward the
+ * background and thins, while the 2 px border beside it stays fully black. The glyphs read
+ * lighter than the box they sit in, which is why the brightest fill in the palette looked
+ * the worst even though it scored the best.
+ *
+ * Doubling the stem is the fix a contrast ratio cannot express. It costs nothing:
+ * silkscreen-700-latin.woff2 is already in public/fonts and already listed in the @font-face
+ * block at the top of this file, so it was being downloaded and never used.
+ */
 .pb, .btn {
   --face: var(--orange); --base: var(--orange-dk); --txt: var(--ink);
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  font-family: var(--f-hud); font-size: 10px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
+  font-family: var(--f-hud); font-size: 10px; font-weight: 700; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
   color: var(--txt); background: var(--face);
   border: 2px solid var(--ink); padding: 9px 14px; min-height: 30px;
   box-shadow: 0 4px 0 0 var(--base), 0 4px 0 2px var(--ink);
@@ -209,7 +223,7 @@ select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .sticker, .tag {
-  display: inline-block; font-family: var(--f-hud); font-size: 10px; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
+  display: inline-block; font-family: var(--f-hud); font-size: 10px; font-weight: 700; line-height: 1; letter-spacing: 0.6px; text-transform: uppercase;
   padding: 5px 8px; background: var(--harvest); color: var(--ink);
   border: 2px solid var(--ink); box-shadow: var(--shadow-sm);
   transform: rotate(-5deg); white-space: nowrap;
@@ -220,7 +234,7 @@ select.pb { appearance: none; -webkit-appearance: none; padding-right: 22px; }
 .sticker.rare, .tag.is-patina { background: var(--patina-lt); }
 .sticker.flat, .tag { transform: none; box-shadow: none; background: var(--inset); color: var(--cream-dim); border-color: var(--edge); }
 .tag.is-orange { background: var(--orange); color: var(--ink); border-color: var(--ink); transform: rotate(-4deg); box-shadow: var(--shadow-sm); }
-.badge-tag { display: inline-block; font-family: var(--f-hud); font-size: 10px; padding: 3px 6px; margin: 2px 4px 2px 0; background: var(--inset); border: 2px solid var(--edge); color: var(--cream-dim); text-transform: uppercase; }
+.badge-tag { display: inline-block; font-family: var(--f-hud); font-size: 10px; font-weight: 700; padding: 3px 6px; margin: 2px 4px 2px 0; background: var(--inset); border: 2px solid var(--edge); color: var(--cream-dim); text-transform: uppercase; }
 
 .signal { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-hud); font-size: 11px; color: var(--prairie-lt); text-transform: uppercase; letter-spacing: 0.5px; }
 .signal::before { content: ''; width: 8px; height: 8px; background: currentColor; }
@@ -405,7 +419,13 @@ tr.is-top .rank-pill { background: var(--orange); color: var(--ink); }
 #hud-nearest .near-dist span { font-size: 14px; color: var(--cream-dim); }
 #hud-nearest .segbar { width: 220px; }
 #hud-nearest .segbar i.on { background: var(--patina-lt); }
-.telemetry { display: flex; gap: 12px; font-family: var(--f-hud); font-size: 10px; color: var(--mute); text-transform: uppercase; background: rgba(8,21,43,0.86); padding: 6px 10px; border: 2px solid var(--ink); }
+/* Wraps rather than clipping. The labels were `bldg`/`mon`/`dist`, which fit because they were
+   abbreviations nobody could read; spelling them out costs width, and a fixed-width row silently
+   truncated the last two entries instead of moving them. Wrapping is the cheaper half of that
+   trade — the strip is telemetry, not a layout anchor. The max-width keeps the wrapped rows
+   inside the bottom-left corner instead of growing across the viewport into the nearest-HackStop
+   readout, which is what the extra width did on first attempt. */
+.telemetry { display: flex; flex-wrap: wrap; row-gap: 2px; gap: 12px; max-width: 168px; font-family: var(--f-hud); font-size: 10px; color: var(--mute); text-transform: uppercase; background: rgba(8,21,43,0.86); padding: 6px 10px; border: 2px solid var(--ink); }
 .telemetry b { font-family: var(--f-num); font-size: 16px; color: var(--cream); margin-right: 3px; }
 .world-labels { position: absolute; inset: 0; pointer-events: none; z-index: 3; overflow: hidden; }
 .world-label { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 8px; background: rgba(8,21,43,0.9); border: 2px solid var(--c, var(--cream-dim)); white-space: nowrap; transition: opacity 120ms linear; }
@@ -485,6 +505,80 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .enc-stage .enc-art.enemy { grid-column: 2; grid-row: 1 / span 2; display: grid; place-items: end center; padding-bottom: 8px; }
 .enc-stage .enc-art.you { grid-column: 1; grid-row: 2; display: grid; place-items: end center; padding-bottom: 8px; }
 .enc-stage .jrpg.you { grid-column: 2; grid-row: 3; }
+
+/* A locked pixel dropdown. The native `disabled` is mirrored onto the button by pxselect.js;
+   this is what makes it look unavailable rather than merely behave that way. */
+.pxsel.is-disabled .pxsel-btn { cursor: not-allowed; filter: none; }
+.pxsel.is-disabled .pxsel-caret { opacity: 0.35; }
+
+/* The "a new version is ready" bar. Bottom-centre, above the ambient canvas and below the
+   encounter dialog, so it never covers a command the user is reaching for. */
+.sw-update {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 80;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+  max-width: calc(100vw - 32px); padding: 12px 16px;
+  background: var(--panel); border: 2px solid var(--ink); box-shadow: var(--shadow);
+  font-family: var(--f-body); font-size: 16px; color: var(--cream);
+}
+.sw-update .pb { margin-bottom: 0; }
+
+/* The quest Details panel. Built in script, so it only exists while open. */
+#shift-details { position: fixed; inset: 0; z-index: 95; display: none; place-items: center;
+  background: rgba(4, 10, 22, 0.72); padding: 20px; }
+#shift-details.open { display: grid; }   /* `Nexus.dialog.open` adds .open, same as #encounter */
+
+/* Where the trainer's position came from. `warn` is the case that matters: a demo placement
+   or a GPS fix outside the map, both of which look exactly like a real position without it. */
+.hud-label.pos { margin-top: 3px; letter-spacing: 0.4px; color: var(--mute); }
+.hud-label.pos.ok { color: var(--prairie-lt); }
+.hud-label.pos.warn { color: var(--harvest); }
+
+/* Battle theatrics.
+ *
+ * Every rule below is inside `prefers-reduced-motion: no-preference`. game.js also refuses
+ * to add these classes when the query matches, so the guard is doubled deliberately: the JS
+ * reads the query once at load, and a viewer who changes the setting mid-session keeps the
+ * stale answer until reload. CSS re-evaluates immediately, and it is the half that actually
+ * moves anything. Neither guard gates the write — the battle has already been decided by
+ * the time any of this runs. */
+@media (prefers-reduced-motion: no-preference) {
+  .enc-stage.is-hit { animation: enc-shake 300ms steps(3); }
+  .enc-stage.is-crit { animation: enc-shake-hard 540ms steps(4); }
+  /* Two flashes rather than one: a single brightness pulse on a dark panel reads as a
+     rendering hiccup, two reads as a hit. */
+  .enc-stage .jrpg.is-struck { animation: enc-flash 270ms steps(2) 2; }
+  .enc-float { animation: enc-rise 1000ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards; }
+}
+@keyframes enc-shake {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-6px, 3px); }
+  50% { transform: translate(5px, -4px); }
+  75% { transform: translate(-3px, -2px); }
+}
+@keyframes enc-shake-hard {
+  0%, 100% { transform: translate(0, 0); }
+  15% { transform: translate(-13px, 6px); }
+  35% { transform: translate(11px, -8px); }
+  55% { transform: translate(-8px, -5px); }
+  75% { transform: translate(6px, 4px); }
+  90% { transform: translate(-3px, 0); }
+}
+@keyframes enc-flash {
+  0%, 100% { filter: none; }
+  50% { filter: brightness(2.3) saturate(0.35); }
+}
+@keyframes enc-rise {
+  from { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -62px) scale(1.25); }
+}
+/* Fixed, not absolute: it is positioned from a `getBoundingClientRect()`, which is already
+   viewport-relative, and the encounter host is a scrolled, transformed dialog. */
+.enc-float {
+  position: fixed; z-index: 90; pointer-events: none;
+  font-family: var(--f-hud); font-size: 15px; font-weight: 700; letter-spacing: 0.5px;
+  text-shadow: 2px 2px 0 var(--ink), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink);
+  transform: translate(-50%, 0);
+}
 .enc-stage .jrpg.cmd { grid-column: 1; grid-row: 3; display: flex; flex-direction: column; gap: 4px; }
 .enc-stage .jrpg.msg { grid-column: 1 / span 2; grid-row: 4; font-size: clamp(16px, 2.6vh, 22px); color: var(--cream); min-height: 72px; padding-right: 40px; }
 .enc-name { font-family: var(--f-head); font-size: 22px; color: var(--cream); margin: 4px 0; }
@@ -680,6 +774,23 @@ body.cinema .viewport { position: fixed; inset: 0; z-index: 90; aspect-ratio: au
 .ob-stats b { font-family: var(--f-num); font-size: 26px; line-height: 0.9; color: var(--orange); font-weight: 400; }
 .ob-stats small { font-family: var(--f-hud); font-size: 10px; color: var(--mute); }
 
+/* The Me tab's trainer card: sprite, team, and the two ladders over one karma balance. */
+.me-card { display: flex; gap: 14px; align-items: flex-start; margin: 4px 0 14px; }
+.me-face {
+  flex: none; width: 76px; min-height: 76px; display: flex; align-items: center; justify-content: center;
+  background: var(--inset); border: 2px solid var(--ink); box-shadow: inset 2px 2px 0 var(--edge);
+}
+.me-face .pxi { display: block; image-rendering: pixelated; }
+.me-facts { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+.me-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The faction chip carries its team's colour on the border and the text, never as a fill:
+   the three team colours are picked to read against the dark ground, not to be sat on. */
+.me-chips .tag { transform: none; box-shadow: none; }
+.me-meter .hud-label { display: block; margin-bottom: 4px; color: var(--cream-dim); }
+.pxbar > i.is-tier { background: var(--patina-lt); }
+.me-badges { display: flex; flex-wrap: wrap; gap: 0; margin-top: 10px; }
+@media (max-width: 560px) { .me-card { flex-direction: column; } }
+
 @media (max-width: 720px) {
   #onboard { padding: 12px; }
   .ob-panel { padding: 22px 16px 16px; }
@@ -852,3 +963,22 @@ body.lite .viewport-hud { display: none; }
    z-index 7 clears the flat map, whose own 6 is set inline in `lite.js`. */
 body.lite .viewport-hud.br { display: flex; z-index: 7; }
 body.lite #hud-hint { display: none; }   /* "WASD to walk" describes the renderer, not this. */
+
+/* ---- The gauntlet: a gym's coding challenge, rendered inside the encounter message box ---- */
+.gaunt { display: flex; flex-direction: column; gap: 8px; }
+.gaunt-title { margin: 0; font-size: 20px; }
+/* The prompt is code. It keeps its own whitespace and scrolls rather than reflowing, because a
+   snippet re-wrapped at a narrow width is a different snippet than the one being asked about. */
+.gaunt-prompt {
+  margin: 0; padding: 8px; max-height: 30vh; overflow: auto;
+  background: var(--ink, #0b1220); border: 2px solid var(--line, #2a3d63);
+  font-family: var(--f-body); font-size: 15px; line-height: 1.25; white-space: pre;
+}
+.gaunt-choices { display: flex; flex-direction: column; gap: 4px; }
+.gaunt-choice { display: flex; align-items: center; gap: 8px; cursor: pointer; font-family: var(--f-body); font-size: 16px; }
+.gaunt-field { display: flex; flex-direction: column; gap: 2px; }
+.gaunt-input {
+  font-family: var(--f-body); font-size: 16px; padding: 6px 8px;
+  background: var(--ink, #0b1220); color: var(--cream, #f5f0e6); border: 2px solid var(--line, #2a3d63);
+}
+.gaunt-input:focus-visible, .gaunt-choice input:focus-visible { outline: 2px solid var(--orange, #ff5f05); outline-offset: 1px; }

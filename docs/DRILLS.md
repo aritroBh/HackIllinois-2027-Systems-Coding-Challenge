@@ -8,9 +8,11 @@ Record the date, the commit, and the outcome. A drill that was not run is not a 
 
 Someone photographs a check-in code and posts it in Discord.
 
-Mint a token, wait forty seconds, and present it. Expect a rejection. Present a valid token twice and expect the second to be refused. Present one volunteer's token as another volunteer and expect a refusal.
+Mint a token, wait seventy seconds, and present it. Expect a rejection. Present a valid token twice and expect the second to be refused. Present one volunteer's token as another volunteer and expect a refusal.
 
-The defence is a thirty-second window, a single-use nonce cache, and a binding to both the shift and the person. All three matter: drop any one and the screenshot works.
+Seventy rather than forty, because the window is wider than the rotation. Tokens are bound to a thirty-second slice and verification accepts a slice within one of the current one, so a token minted at the top of its slice is still good sixty seconds later and one minted at the bottom dies at thirty. Forty seconds is inside that spread: the drill would pass or fail depending on when in the second you happened to mint, which is the worst possible property for a check meant to tell you the defence still works.
+
+The defence is that bounded window, a single-use nonce cache backed by a unique index on `CheckIn.nonce`, and a binding to both the shift and the person. All three matter: drop any one and the screenshot works.
 
 ## 2. The spoofed position
 
@@ -28,13 +30,15 @@ As an anonymous caller, name a lead's id and request `GET /api/v1/presence`, the
 
 ## 4. Delegation as impersonation
 
-A shift lead may register a volunteer at the desk. Confirm that is the only thing they may do as someone else.
+A shift lead may register a volunteer at the desk, and cancel that registration again. Confirm those two are the only things they may do as someone else.
 
-As a lead, send `onBehalfVolunteerId` naming a victim to a HackStop spin, an SOS resolve, a check-out, and a gym battle. Expect every one of them to act as the lead, never as the victim. Then send it to `POST /registrations` and expect the victim to be registered.
+As a lead, send `onBehalfVolunteerId` naming a victim to a HackStop spin, an SOS resolve, a check-out, and a gym battle. Expect every one of them to act as the lead, never as the victim. Then send it to `POST /registrations` and expect the victim to be registered, and to `DELETE /registrations/:id` and expect the victim's registration cancelled — both of those opt in through `resolveOnBehalf`, and nothing else in the tree calls it.
 
 ## 5. Adonix down, SMTP down
 
-Stop whatever Adonix points at and load the sign-in screen. Expect the provider to report itself disabled and badge codes to keep working. Unset `SMTP_URL` and expect the magic-link option to disappear rather than to fail on submit.
+Stop whatever Adonix points at and load the sign-in screen. Expect badge codes to keep working, and expect the Adonix button to still be there: `GET /auth/providers` reports `adonix` enabled from the `ADONIX_ENABLED` flag alone and never probes the upstream, so an outage shows up as a failed exchange four seconds after somebody presses the button, not as a provider that withdrew itself. That is the honest expectation, and the drill is confirming the blast radius rather than a graceful degrade: nothing about the outage may reach the badge-code path. If you want the button gone during an outage, unset `ADONIX_ENABLED` — there is nothing automatic to wait for.
+
+Then unset `SMTP_URL` and expect the magic-link option to disappear rather than to fail on submit. This one only holds with `NODE_ENV=production`, because outside production the console mailer counts as a mailer and the option stays offered with no SMTP configured. A staging box running as `development` will fail this drill for a reason that is not a defect.
 
 Badge codes are the adapter with no dependencies. If an outage in someone else's service can stop people signing in, the fallback is not real.
 
@@ -42,7 +46,9 @@ Badge codes are the adapter with no dependencies. If an outage in someone else's
 
 A thousand people share four egress addresses. Confirm nobody is locked out by an anti-abuse limit meant for a single attacker.
 
-From one address, open more than eight hundred streams and expect refusals; put that address in `TRUSTED_EGRESS_CIDRS` and expect them to be admitted. Then confirm an authenticated request never counts against an IP bucket by making several hundred from one address as different accounts.
+From one address, open more than three thousand signed-in streams — `STREAM_PER_IP`, and two connections per account, so more than fifteen hundred accounts — and expect refusals; put that address in `TRUSTED_EGRESS_CIDRS` and expect them to be admitted. Then confirm an authenticated request never counts against an IP bucket by making several hundred from one address as different accounts.
+
+Sign the streams in. The anonymous ceilings — the eight-hundred-slot `STREAM_ANON_SLOTS` pool and a cap of twenty anonymous streams per address — are checked before the trusted-egress test and are never lifted by it, so an anonymous run from one address stops at twenty and adding the range changes nothing. That is deliberate rather than an oversight, and it is the answer to give an operator who reports the venue being throttled after listing its ranges: a stream with no account behind it has nothing else to bound it by, so the list cannot help them.
 
 ## 7. The avatar
 

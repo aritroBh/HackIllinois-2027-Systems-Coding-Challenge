@@ -6,19 +6,90 @@
  * and the baked 3D model. Everything HackIllinois/UIUC-specific lives in
  * `content/hackillinois-2027/`; the code reads the pack and never a literal.
  *
- * Validation is Zod per file plus cross-references in `validatePack()`: every venue key a
- * territory, beacon or monument names must exist, every faction a territory names must
- * exist, and the monument ids must equal the ids baked into `campus.json`. A typo here is
- * a geofence anchored to the wrong building, which is exactly the class of bug the
- * original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
+ * This file holds the files every pack must have. The optional ones live beside it and are
+ * loaded the same way — `booths.schema.ts`, `raids.schema.ts`, `quests.schema.ts` and
+ * `challenges.schema.ts`, the last of which carries the gauntlet's questions and is the one
+ * place a pack ships something that must not be readable.
+ *
+ * Validation is Zod per file plus cross-references in `crossValidate()` at the bottom of this
+ * file: every venue key a territory, beacon or monument names must exist, every faction a
+ * territory names must exist, and the monument ids must equal the ids baked into `campus.json`.
+ * A typo here is a geofence anchored to the wrong building, which is exactly the class of bug
+ * the original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
+ *
+ * (This paragraph named a `validatePack()` for a long time. No function by that name has ever
+ * existed here: the sentence and `crossValidate` landed in the same commit, so it was wrong the
+ * day it was written and stayed wrong through every review since. Neither gate that could have
+ * caught it can — `npm run docs:check` reads documents, not source comments, and the compiler
+ * does not typecheck prose. A reader who went looking for it found nothing.)
  */
 import { z } from 'zod';
+import type { Challenge } from './challenges.schema';
+import fs from 'fs';
+import path from 'path';
 import { KARMA_SOURCES } from '../common/karmaSources';
+import { POWER_UP_CATALOG } from '../models/powerup.model';
+import { REPO_ROOT } from '../common/utils/repoRoot';
 
+/**
+ * The running server's version, read from `package.json` once at import.
+ *
+ * Read rather than hard-coded so it cannot drift from the number a release actually ships as —
+ * a version gate whose idea of "this server" is a stale literal is worse than no gate. Falls
+ * back to `0.0.0` if the file cannot be read, which fails *closed*: any pack demanding a
+ * non-zero version — both shipped packs demand 1.0.0 — then looks newer than the server and is
+ * refused loudly, rather than every pack silently passing. A pack asking for `0.0.0` would still
+ * load, which is the honest limit of the fallback and not worth a second branch: an unreadable
+ * `package.json` is a broken install, and this is only meant to make that noisy rather than
+ * permissive.
+ */
+export const SERVER_VERSION: string = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+// A tuple rather than `{ lat, lng }` because that is how these appear in the JSON and in the
+// baked model, and because a tuple cannot be silently transposed by a key typo the way an
+// object can — `[lng, lat]` is a mistake a reviewer sees, `{ latitude: <a longitude> }` is not.
 const latLng = z.tuple([z.number().min(-90).max(90), z.number().min(-180).max(180)]);
+// Order is south, west, north, east — GeoJSON's is west, south, east, north, so do not assume.
+// Four bare numbers: no latitude/longitude ranges and, more to the point, no check that south is
+// below north or west of east. Be clear about what that costs rather than claiming it is caught
+// elsewhere. `inBbox` reads the tuple as an inclusive rectangle, so an inverted box does not
+// error — it accepts nothing, and every presence sample on the real campus is refused as
+// OFF_CAMPUS. The bake is what usually finds it first, because a box enclosing nothing extracts
+// nothing and `crossValidate` then reports every declared monument as missing from `campus.json`;
+// that is a consequence, not a check written for the purpose.
 const bbox = z.tuple([z.number(), z.number(), z.number(), z.number()]); // south, west, north, east
+// Six-digit hex only. Shorthand and `rgba()` are refused because these strings are written
+// straight into CSS custom properties and into the renderer's material colours, and the two
+// do not accept the same set.
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
+/**
+ * `event.json` — the one required file, and the pack's own header.
+ *
+ * `packVersion: z.literal(1)` is the compatibility gate and it works: a pack declaring
+ * anything else fails to parse and the server refuses to boot, rather than reading a future
+ * format with today's field names.
+ *
+ * `minServerVersion` **is** a gate. `crossValidate` compares it against the server's own version
+ * from `package.json` and refuses a pack that demands a newer server than the one about to run
+ * it. It was not a gate for a long time — required, shaped as a string, and compared to nothing,
+ * so a pack could demand a server it would then happily run against an older one, which is the
+ * one kind of mismatch on this page that failed silently instead of at boot.
+ *
+ * Most of the nested defaults exist so `example-campus` — a fork's starting point — is short.
+ * The two blocks where a default is a *decision* rather than a convenience are `presence`
+ * (accuracy, speed and fuzz limits, which are privacy and anti-spoof settings) and
+ * `karmaCaps` / `bountyCap` / `hackerBountyBudgetPerDay`, which are the economy's ceilings.
+ * Note that `karmaCaps` defaults to `{}` and an empty map means *uncapped* — which is why
+ * `crossValidate` below refuses a pack that leaves any source unpriced rather than letting the
+ * default stand.
+ */
 export const eventSchema = z.object({
   packVersion: z.literal(1),
   minServerVersion: z.string(),
@@ -57,12 +128,31 @@ export const eventSchema = z.object({
       maxDetail: z.number().int().positive().default(60),
     })
     .default({}),
+  /**
+   * The gauntlet: whether taking a rival gym requires winning its coding challenge.
+   *
+   * Defaulted rather than required, and off by default, for two reasons. A pack that ships no
+   * `challenges.json` — `content/example-campus` does not — would otherwise make every rival
+   * gym permanently uncapturable, which is a dead mechanic that boots green. And a fork
+   * pulling this commit keeps the behaviour it already had until it opts in.
+   *
+   * `GauntletService.requiredForCapture()` additionally refuses to honour a `true` here when
+   * the pack ships no challenges, so the flag cannot lock a board it has nothing to unlock.
+   */
+  gauntlet: z
+    .object({ requiredForCapture: z.boolean().default(false) })
+    .default({}),
   karmaCaps: z.record(z.number().int().nonnegative()).default({}),
   bountyCap: z.record(z.number().int().positive()).default({}),
   hackerBountyBudgetPerDay: z.number().int().nonnegative().default(600),
   plugins: z.array(z.string()).default([]),
 });
 
+/**
+ * One entry in the gazetteer. `hints` is the free-text matcher's vocabulary — the phrases an
+ * organiser might type into a shift's `location` that should resolve here — and
+ * `radiusMeters` overrides the campus-wide geofence for a venue that needs a different one.
+ */
 export const venueSchema = z.object({
   name: z.string().min(1),
   latitude: z.number().min(-90).max(90),
@@ -70,6 +160,19 @@ export const venueSchema = z.object({
   hints: z.array(z.string().min(1)).default([]),
   radiusMeters: z.number().positive().optional(),
 });
+/**
+ * The gazetteer as a whole, keyed by venue key.
+ *
+ * A record rather than an array because every cross-reference in the pack names a venue by
+ * key, and a record makes "does this key exist" a lookup instead of a scan — `crossValidate`
+ * checks it for monuments, territories, beacons, booths and raids.
+ *
+ * The `_`-prefix convention is why this needs a `superRefine` and a `transform` rather than a
+ * plain record: a pack is hand-edited JSON with no room for comments, so `_about` carries the
+ * documentation, and it must be a string, must be tolerated, and must not survive into the
+ * loaded pack as a venue with no coordinates. Real keys are checked as SCREAMING_SNAKE_CASE
+ * here, which is what stops a lowercase key silently failing every cross-reference later.
+ */
 export const venuesSchema = z
   .record(z.string(), z.union([venueSchema, z.string()]))
   .superRefine((rec, ctx) => {
@@ -89,6 +192,19 @@ export const venuesSchema = z
     return out;
   });
 
+/**
+ * A landmark with hand-authored 3D detail, as opposed to the nine thousand buildings the
+ * pipeline extrudes generically.
+ *
+ * The `.refine()` is the load-bearing part: a monument needs `match` (an OSM name the bake
+ * resolves) or `at` (a centroid given outright), because without one the pipeline has nothing
+ * to attach the silhouette to and the landmark would simply not appear — a failure that shows
+ * up as a missing building on a map rather than as an error.
+ *
+ * `height` overrides whatever the bake inferred, and exists for the cases where OSM is
+ * confidently wrong: a dome tagged as one storey. `crown` is the hand-written silhouette on
+ * top.
+ */
 export const monumentSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
@@ -109,6 +225,12 @@ export const monumentSchema = z
   .refine((m) => !!m.match || !!m.at, { message: 'a monument needs `match` (OSM name) or `at` (centroid)' });
 export const monumentsSchema = z.object({ _about: z.string().optional(), monuments: z.array(monumentSchema).min(1) });
 
+/**
+ * A faction as the client renders it. The `color` lives here and **only** here — the server
+ * enum in `gym.model.ts` carries ids and no hex, because a colour duplicated in a source
+ * comment is a second source of truth that nothing checks, and this repository has already
+ * shipped a stale copy of exactly this palette.
+ */
 export const factionSchema = z.object({
   id: z.string().regex(/^[A-Z0-9_]+$/),
   label: z.string().min(1),
@@ -117,8 +239,28 @@ export const factionSchema = z.object({
   hqVenue: z.string().optional(),
   theme: z.string().optional(),
 });
+/**
+ * `min(2)` plus the NEUTRAL requirement in `crossValidate` means a pack ships at least one
+ * contestable faction and the unclaimed state. A one-faction pack would be a territory game
+ * that cannot be played.
+ */
 export const factionsSchema = z.object({ _about: z.string().optional(), factions: z.array(factionSchema).min(2) });
 
+/**
+ * The intended starting state of one gym — which faction holds it, at how many control points,
+ * against which monument.
+ *
+ * `src/seed/seedData.ts` reads `pack.territories` and creates one gym per entry, taking each
+ * one's coordinates from `pack.venues[venue]`. `crossValidate` is what makes that safe to do
+ * without further checks: it has already confirmed that every territory names a real venue, a
+ * real monument and a real faction, and that `cp <= max`.
+ *
+ * This comment used to say the answer was nothing, and it was right at the time — the seed built
+ * fourteen gyms from a hard-coded array, so a fork could edit this file, watch it validate, and
+ * get the shipped territories anyway. The fix landed and the sentence outlived it, which is the
+ * defect this repository produces most; it was found by an external reviewer reading the fix and
+ * the prose beside it in the same pass.
+ */
 export const territorySchema = z.object({
   name: z.string().min(1),
   locationName: z.string().min(1),
@@ -131,6 +273,10 @@ export const territorySchema = z.object({
 });
 export const territoriesSchema = z.object({ _about: z.string().optional(), territories: z.array(territorySchema) });
 
+/**
+ * A HackStop's placement. Cross-referenced against the pack's venues and checked for a duplicate
+ * id, and — like territories above — exactly what the seeder creates beacons from.
+ */
 export const beaconSchema = z.object({
   id: z.string().regex(/^[A-Z0-9_]+$/),
   name: z.string().min(1),
@@ -140,6 +286,20 @@ export const beaconSchema = z.object({
 });
 export const beaconsSchema = z.object({ _about: z.string().optional(), beacons: z.array(beaconSchema) });
 
+/**
+ * The drop table the server actually rolls against.
+ *
+ * `src/economy/lootTable.ts` builds it from `pack.loot` at import and `HackStopService` calls
+ * into that, so the weights here decide the odds and `karmaMin`/`karmaMax` decide the payout
+ * band. Weights are relative and are normalised against their own total, so they need not sum
+ * to any particular number.
+ *
+ * `crossValidate` checks `karmaMin <= karmaMax`; `lootTable.ts` additionally refuses to boot on
+ * an item `type` that `POWER_UP_CATALOG` does not price, which used to be a crash inside one
+ * unlucky player's spin instead.
+ *
+ * This said "declared, validated, and read by nothing" until the day it stopped being true.
+ */
 export const lootSchema = z.object({
   _about: z.string().optional(),
   karmaMin: z.number().int().nonnegative(),
@@ -147,7 +307,22 @@ export const lootSchema = z.object({
   items: z.array(z.object({ type: z.string().min(1), weight: z.number().positive() })).min(1),
 });
 
-/** Sticker book. Extra keys are allowed (the UI grows), but ids, names and the pixel grid are shaped. */
+/**
+ * Sticker book. Extra keys are allowed (the UI grows), but ids, names and the pixel grid are shaped.
+ *
+ * The three constants on `palette` and `pixel` are one decision, not three, and they come from
+ * `public/sprites.js`: it decodes a sticker by mapping `palette[0]` to the letter `a`,
+ * `palette[1]` to `b` and so on (`String.fromCharCode(97 + i)`), then reading each character of
+ * each row as an index into that map. So sixteen palette entries is exactly the alphabet
+ * `a`–`p`, which is why the row pattern is `[a-p-]` — a `q` would be a colour that cannot exist
+ * — and `-` is the transparent cell. Sixteen rows of sixteen characters is the grid the renderer
+ * draws; `sprites.js` re-checks those two lengths at fetch time and skips a malformed sticker
+ * with a warning rather than blanking the whole book, so a pack that gets this wrong loses one
+ * sticker in the client and fails here at boot on the server.
+ *
+ * Only `items` is shaped. `gym_badges`, which the same file carries and `sprites.js` also reads,
+ * is not described here at all — it survives as an unvalidated extra key.
+ */
 export const memorabiliaSchema = z.object({
   _about: z.string().optional(),
   palette_note: z.string().optional(),
@@ -195,6 +370,23 @@ export type Territory = z.infer<typeof territorySchema>;
 export type Beacon = z.infer<typeof beaconSchema>;
 export type Loot = z.infer<typeof lootSchema>;
 
+/**
+ * The pack as the rest of the server sees it: parsed, cross-checked, and flattened so a caller
+ * reads `pack.monuments` rather than `pack.monuments.monuments`.
+ *
+ * `factionIds` is a `Set` of the same ids `factions` already carries, built once at load for
+ * membership tests, and nothing in `src/` reads it today — only `tests/content.test.ts`. It is a
+ * convenience waiting for a caller rather than a live index.
+ *
+ * The reason it has no caller is *not* the one this comment used to give. It said the gym battle
+ * path validated against the `Faction` enum in `gym.model.ts` via `pokestop.schema.ts`, which
+ * stopped being true when that schema moved to a shape-only check and `faction.service.ts` took
+ * over the real validation — reading `pack.factions` directly and building its own list. So the
+ * pack *is* the authority now; `factionIds` is simply not the object it reads.
+ * `campusMonumentIds` is null rather than empty when `campus.json` has not been built
+ * — the two mean different things, and treating "not baked yet" as "baked with no monuments"
+ * would make every monument look missing.
+ */
 export interface ContentPack {
   dir: string;
   event: EventConfig;
@@ -205,12 +397,21 @@ export interface ContentPack {
   territories: Territory[];
   beacons: Beacon[];
   loot: Loot;
+  /**
+   * Coding challenges, when the pack ships `challenges.json`. Null means this event has none,
+   * which is different from having an empty list: null is "no such file", and the gauntlet
+   * requirement refuses to engage without challenges to serve.
+   */
+  challenges: Challenge[] | null;
+  /** The salt this pack's answer digests were generated with. Null when it ships no challenges. */
+  challengesSalt: string | null;
   /** Monument ids baked into campus.json, when the file exists (null when it has not been built yet). */
   campusMonumentIds: string[] | null;
   /** Files present in the pack directory that the client may fetch under /dashboard/content/. */
   files: string[];
 }
 
+/** One complaint, addressed well enough to fix: which file, which path inside it, what is wrong. */
 export interface PackIssue {
   file: string;
   path: string;
@@ -220,6 +421,35 @@ export interface PackIssue {
 /** Cross-reference checks that Zod cannot express file-by-file. */
 export function crossValidate(pack: Omit<ContentPack, 'factionIds' | 'files'>): PackIssue[] {
   const issues: PackIssue[] = [];
+
+  /*
+   * The version gate.
+   *
+   * Compared numerically, field by field, rather than with `localeCompare` — "1.10.0" sorts
+   * before "1.9.0" as a string, which would let a pack needing 1.10 boot on 1.9 while refusing
+   * the reverse. Missing fields read as 0, so "2" and "2.0.0" are the same demand.
+   *
+   * Only a pack demanding something *newer* is refused. A pack that asks for an older server
+   * than the one running it is fine and says nothing: that is the ordinary case of a pack
+   * outliving a release.
+   */
+  const asParts = (version: string): number[] => version.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const demanded = asParts(pack.event.minServerVersion);
+  const running = asParts(SERVER_VERSION);
+  for (let i = 0; i < Math.max(demanded.length, running.length); i += 1) {
+    const want = demanded[i] ?? 0;
+    const have = running[i] ?? 0;
+    if (want === have) continue;
+    if (want > have) {
+      issues.push({
+        file: 'event.json',
+        path: 'minServerVersion',
+        message: `pack needs server ${pack.event.minServerVersion}; this server is ${SERVER_VERSION}`,
+      });
+    }
+    break;
+  }
+
   const venueKeys = new Set(Object.keys(pack.venues));
   const factionIds = new Set(pack.factions.map((f) => f.id));
   const monumentIds = new Set(pack.monuments.map((m) => m.id));
@@ -266,6 +496,31 @@ export function crossValidate(pack: Omit<ContentPack, 'factionIds' | 'files'>): 
     seenBeacon.add(b.id);
   }
   if (pack.loot.karmaMin > pack.loot.karmaMax) issues.push({ file: 'loot.json', path: 'karmaMin', message: 'karmaMin exceeds karmaMax' });
+  /*
+   * Every loot item must be something the catalogue prices.
+   *
+   * The pack chooses the odds and `POWER_UP_CATALOG` chooses the payouts, so the `type` string is
+   * the join between them; a typo there used to be a clean `content:validate`, a clean boot, and
+   * then a crash inside one unlucky player's spin when `POWER_UP_CATALOG[awarded]` came back
+   * undefined.
+   *
+   * `lootTable.ts` also throws on this at import, and that guard stays — but it fires at *server
+   * boot*, and `npm run content:validate` never imports that module. So the one command a fork
+   * runs before deploying passed a pack the server would later refuse. Checking it here is what
+   * makes the failure arrive when somebody is still editing the file.
+   *
+   * Two comments elsewhere already claimed `crossValidate` did this. They were wrong when
+   * written; this is the line that makes them true.
+   */
+  for (const [i, item] of pack.loot.items.entries()) {
+    if (!Object.prototype.hasOwnProperty.call(POWER_UP_CATALOG, item.type)) {
+      issues.push({
+        file: 'loot.json',
+        path: `items[${i}].type`,
+        message: `unknown power-up "${item.type}"; known types are ${Object.keys(POWER_UP_CATALOG).join(', ')}`,
+      });
+    }
+  }
   if (pack.campusMonumentIds) {
     const baked = new Set(pack.campusMonumentIds);
     for (const id of monumentIds) if (!baked.has(id)) issues.push({ file: 'campus.json', path: id, message: 'monument missing from the baked model — rebuild with npm run campus' });

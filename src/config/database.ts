@@ -38,9 +38,19 @@ type MemoryReplSet = import('mongodb-memory-server').MongoMemoryReplSet;
 let replSet: MemoryReplSet | null = null;
 
 /**
- * Connect to MongoDB.
- * If MONGODB_URI is provided, connects directly.
- * Otherwise, spins up an in-memory MongoDB replica set with WiredTiger for ACID transactions.
+ * Connect, by whichever of the two modes this process is configured for, and return the URI
+ * actually used.
+ *
+ * The return value is currently unused — `src/index.ts` and the seeder both discard it — and
+ * is kept because the in-memory path *invents* its URI, so this is the only place that
+ * address exists. Anything that needs to hand it to another process (a second seeder, a
+ * benchmark harness) has nowhere else to read it from.
+ *
+ * There is no retry and no backoff here. A configured URI that does not answer is a
+ * misconfiguration or an outage, and failing at boot is what makes `/ready` mean something —
+ * a process that started anyway and reconnects later would report itself healthy to an
+ * orchestrator while every request hangs. Reconnection *after* a successful connect is
+ * Mongoose's own business and is what `/ready` reports on.
  */
 export async function connectDatabase(): Promise<string> {
   if (env.MONGODB_URI) {
@@ -67,7 +77,16 @@ export async function connectDatabase(): Promise<string> {
 }
 
 /**
- * Disconnect from MongoDB and shut down in-memory replica set if active.
+ * Tear down, in the order that matters: the client first, then the server it was talking to.
+ *
+ * Stopping the replica set with sockets still open makes `mongod` go away underneath an active
+ * connection, which surfaces as connection errors during shutdown — noise on a path that is
+ * already finishing, and in the test suite an open handle that keeps the process alive.
+ *
+ * Both halves are guarded — `readyState !== 0`, `replSet` non-null — so this is safe to call
+ * twice and safe to call against a connection this module did not open. The seeder needs
+ * exactly that: it connects only when nobody has connected for it, and then disconnects
+ * unconditionally at the end of its chain.
  */
 export async function disconnectDatabase(): Promise<void> {
   if (mongoose.connection.readyState !== 0) {

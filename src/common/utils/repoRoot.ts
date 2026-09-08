@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+
 /**
  * Where the repository root is, found rather than assumed.
  *
@@ -16,10 +19,10 @@
  * more than either layout needs. If the walk somehow finds nothing, the caller gets the
  * two-levels-up answer that was the old behaviour, which is wrong in the same way it always
  * was rather than wrong in a new way.
+ *
+ * @param from Starting directory path to walk upwards from.
+ * @returns Absolute path to the repository root directory containing package.json.
  */
-import fs from 'fs';
-import path from 'path';
-
 export function findRepoRoot(from: string): string {
   let dir = from;
   for (let depth = 0; depth < 8; depth += 1) {

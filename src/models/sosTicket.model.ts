@@ -11,10 +11,29 @@
  * dispatchers cannot assign two responders to the same incident.
  *
  * `karmaBounty` is the reward paid on resolution — higher for urgent or unpleasant work,
- * which is what makes anyone take the 3 a.m. spill.
+ * which is what makes anyone take the 3 a.m. spill. It is committed when the ticket is
+ * created, not when it is resolved: reserving it against the creator's daily budget in
+ * `bountyLedger` and inserting this document are the third of the system's three
+ * transactional paths, so a ticket never exists with its bounty uncommitted and budget is
+ * never spent on a ticket that failed to insert.
+ *
+ * The lifecycle above is the common path and not the whole grammar — `SOS_TRANSITIONS` below
+ * is, including the acknowledge and on-scene steps and the reassignment edge back to OPEN.
+ *
+ * **This is the most privacy-sensitive collection here.** A row says where a named person is
+ * and what is wrong with them, sometimes medically. Reads are redacted for anyone who is not
+ * a proved lead or a party to the ticket, and "proved" carries the weight: in
+ * `AUTH_MODE=legacy` a claimed id is one string, so a claimed-lead check on a read is not a
+ * check. `src/common/types/account.ts` has the rule and the count of times it was got wrong.
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/**
+ * What kind of help is needed. Nothing on the server branches on it — it is carried into the
+ * broadcasts and shown to responders so somebody can decide whether they are the right person
+ * to walk over. `requiredSkill`, which dispatch actually filters the candidate pool by, is a
+ * separate field precisely so that a category can be added without touching the matcher.
+ */
 export enum SOSTicketCategory {
   HARDWARE_MALFUNCTION = 'HARDWARE_MALFUNCTION',
   SPILL_CLEANUP = 'SPILL_CLEANUP',
@@ -23,6 +42,12 @@ export enum SOSTicketCategory {
   LOGISTICS_SUPPLIES = 'LOGISTICS_SUPPLIES',
 }
 
+/**
+ * How badly it is needed. This selects the per-urgency bounty ceiling in the pack's
+ * `bountyCap`, which is the one server decision that reads it; beyond that it rides along in
+ * the broadcasts for the responder's benefit. It does not reorder the candidate pool and it
+ * does not change which transitions are legal.
+ */
 export enum SOSTicketUrgency {
   LOW = 'LOW',
   MEDIUM = 'MEDIUM',
@@ -44,7 +69,17 @@ export enum SOSTicketStatus {
   CANCELLED = 'CANCELLED',
 }
 
-/** Terminal states have no outgoing edges; every other move must appear here. */
+/**
+ * The whole grammar, as a table rather than a chain of `if`s in the service.
+ *
+ * A table is checkable and a chain is not: a missing edge here is a 409 the caller can read,
+ * whereas a missing branch in a service is a status silently overwritten. `RESOLVED` and
+ * `CANCELLED` map to empty arrays deliberately — a state with no outgoing edges is how a
+ * terminal state is spelled, and it is what stops a resolved ticket being reopened by a late
+ * request that was in flight when somebody closed it.
+ *
+ * Terminal states have no outgoing edges; every other move must appear here.
+ */
 export const SOS_TRANSITIONS: Readonly<Record<SOSTicketStatus, readonly SOSTicketStatus[]>> = {
   [SOSTicketStatus.OPEN]: [SOSTicketStatus.DISPATCHED, SOSTicketStatus.RESOLVED, SOSTicketStatus.CANCELLED],
   // Reassignment sends a ticket back to OPEN; a responder may also resolve without ever
@@ -56,10 +91,31 @@ export const SOS_TRANSITIONS: Readonly<Record<SOSTicketStatus, readonly SOSTicke
   [SOSTicketStatus.CANCELLED]: [],
 };
 
+/**
+ * The only legality question, asked before any status write.
+ *
+ * The `?? []` is not defensive noise about a missing key: `from` arrives as whatever is
+ * stored on a document, and a row written by an older build — or by hand — can carry a status
+ * this table does not name. Answering `false` there refuses the move, which is the right way
+ * for an unknown state to fail; an unguarded index would throw on `.includes` and turn an
+ * unrecognised ticket into a 500.
+ *
+ * Note that this answers "is the move legal", not "may this caller make it". Whether the
+ * transition is *raced* is decided separately, by a compare-and-swap in `SOSService` naming
+ * the status that was read — so two responders resolving at once produce one resolution and
+ * one 409 rather than two payouts.
+ */
 export function canTransition(from: SOSTicketStatus, to: SOSTicketStatus): boolean {
   return (SOS_TRANSITIONS[from] ?? []).includes(to);
 }
 
+/**
+ * One line of the ticket's own audit trail, appended by the same update that makes the move,
+ * so the history cannot disagree with the status. `by` is nullable because some transitions
+ * have no actor: the escalation sweep and an auto-resolve both write a row with nobody's name
+ * on it, and recording that honestly is better than attributing it to whoever happened to
+ * trigger the tick.
+ */
 export interface ISOSHistoryEntry {
   status: SOSTicketStatus;
   at: Date;

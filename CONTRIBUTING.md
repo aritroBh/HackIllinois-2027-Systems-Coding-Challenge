@@ -37,10 +37,28 @@ be read.
 * Validation is Zod, in `src/schemas/`. Routers are `src/routes/v1/*.routes.ts`.
   Controllers are static classes returning `{ success: true, data }`. Services own the
   logic, throw `ApiError`, and broadcast through `eventHub` **after** the database write.
-* Configuration is read through `src/config/env.ts` and nowhere else. Reading
-  `process.env` directly bypasses both the schema and the production boot guards.
-* Nothing in `src/` names a building, a faction or a colour. Those live in a content pack.
-  See [docs/CONTENT-PACKS.md](docs/CONTENT-PACKS.md).
+* Configuration is read through `src/config/env.ts`. Reading `process.env` directly bypasses
+  both the schema and the production boot guards, so anything with a default, a range, or a
+  production check belongs there.
+
+  Four places read `process.env.NODE_ENV` directly — `src/index.ts`, `src/seed/seedData.ts`,
+  `src/common/sse/eventHub.ts` and `src/services/adonixSync.service.ts` — each guarding a
+  side effect that must not happen under the test runner (starting a listener, wiping
+  collections, arming a heartbeat, calling upstream). They agree with the parsed value; they
+  read it raw because they run at import, before or beside the env module. `FORCE_SEED` is the
+  one genuinely unvalidated flag, and it is a deliberate operator escape hatch rather than
+  configuration. This said "and nowhere else", which a reader could check in one grep and find
+  false.
+* Colours, labels, venues and landmarks belong in a content pack rather than in `src/`. See
+  [docs/CONTENT-PACKS.md](docs/CONTENT-PACKS.md). This is checked, not just asked for:
+  `npm run pack:check` reads the active pack and fails if any of that event's content strings
+  appear in `src/`. What is still there is enumerated with a reason each in
+  `scripts/pack-driven-baseline.json`, and the gate refuses anything new.
+
+  Two exceptions used to be named here — a closed faction enum, and a second copy of the venue
+  gazetteer that the check-in geofence and SOS dispatch measured from while the client read the
+  pack's. Both are closed: the schema validator reads `pack.factions`, and `geo.ts` derives from
+  `pack.venues`.
 * Frontend files under `public/` are plain browser scripts served under
   `script-src 'self'`. No build step, no inline handlers, no external origins. Register
   actions with `Nexus.registerAction` and tabs with `Nexus.registerTab`, and escape
@@ -55,8 +73,9 @@ One change per pull request, with a description that says what failure it preven
 changes a security boundary, an invariant or the identity model, say so in the description
 and update the doc in `docs/` that covers it in the same change.
 
-If you are adding behaviour specific to one event, it probably belongs in a plugin rather
-than in a service. See [docs/PLUGINS.md](docs/PLUGINS.md).
+If you are adding behaviour specific to one event, it probably belongs in a plugin or a
+content pack rather than in a service. [docs/EXTENDING.md](docs/EXTENDING.md) lists the six
+seams in order of blast radius; work down it and stop at the first that fits.
 
 ## Reporting a vulnerability
 

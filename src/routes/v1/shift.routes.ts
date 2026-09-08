@@ -1,11 +1,25 @@
 /**
- * Shift routes — `/api/v1/shifts`.
+ * Shift routes — `/api/v1/shifts`. The scheduling core's own resource: a shift is a window,
+ * a venue and a capacity, and everything else in the system points at one.
  *
- * Each entry pairs a path with its Zod schema and a controller method. `validate(...)`
- * runs first and rejects malformed input with a 400 before any handler executes, so
- * controllers below can treat their inputs as well-formed.
+ *   GET    /shifts          no gate                     the board
+ *   GET    /shifts/:id      no gate                     one shift
+ *   POST   /shifts          requireRole('SHIFT_LEAD')   define one
+ *   PATCH  /shifts/:id      requireRole('SHIFT_LEAD')   edit one
+ *   DELETE /shifts/:id      requireRole('ORGANIZER')    soft delete (flips `isActive`)
+ *   GET    /shifts/:id/roster  requireSession + requireRole('SHIFT_LEAD')
  *
- * `DELETE` is a soft delete (flips `isActive`); it does not remove the document.
+ * Two different gates, and the difference is the rule the repository keeps rediscovering.
+ * The writes take `requireRole` alone, which reads the role off `req.account` without asking
+ * how it was established — fine, because in `legacy` mode believing a claimed identity for an
+ * *action* is the documented open-demo contract, and in `required` mode there is no claimed
+ * identity to believe. The roster adds `requireSession` because it is a *disclosure*: it names
+ * who is signed up, who has arrived, and roughly where they are, and a claimed id would make
+ * that readable by anyone who knows a lead's public account id.
+ *
+ * Each entry pairs a path with its Zod schema and a controller method. `validate(...)` runs
+ * first and rejects malformed input with a 400 before any handler executes, so controllers
+ * below can treat their inputs as well-formed.
  */
 import { Router } from 'express';
 import { ShiftController } from '../../controllers/shift.controller';

@@ -142,11 +142,13 @@ export interface RaidBoard {
 const announcedOpen = new Set<string>();
 const announcedClosed = new Set<string>();
 
+/** UPCOMING before the window, OPEN inside it, CLOSED after. */
 function stateOf(raid: RaidWindow, nowMs: number): RaidState {
   if (nowMs < raid.startsAtMs) return 'UPCOMING';
   return nowMs < raid.endsAtMs ? 'OPEN' : 'CLOSED';
 }
 
+/** Client-facing raid snapshot: static fields plus derived state and countdown. */
 function summarise(raid: RaidWindow, nowMs: number, joinCount: number): RaidSummary {
   const state = stateOf(raid, nowMs);
   return {
@@ -164,6 +166,7 @@ function summarise(raid: RaidWindow, nowMs: number, joinCount: number): RaidSumm
   };
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -173,6 +176,9 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
+/**
+ * Boss raid window scheduler coordinating timed cooperative events and campus-wide karma multipliers.
+ */
 export class RaidService {
   /**
    * Read the catalog now, so a bad pack fails at boot rather than at the first player.
@@ -340,6 +346,33 @@ export class RaidService {
    * changes with the content, and the pack is read once anyway.
    */
   public static subscribe(): () => void {
+    /*
+     * A raid may name a real event this service does not enrol on, and that has to be said out
+     * loud rather than discovered from an empty roster.
+     *
+     * `crossValidate`'s sibling check in `content/loader.ts` refuses an event name that does not
+     * exist at all. It cannot refuse this one: `sos.resolved` is a perfectly real event, it is
+     * simply not in `JOINABLE_EVENTS` — because it carries no `accountId`, so there is nobody to
+     * enrol. A pack asking for an SOS-response raid therefore validates, boots, and records zero
+     * joins for the whole window.
+     *
+     * `raids.schema.ts` claimed for a long time that this was "an empty roster, which the service
+     * reports". It did not report anything. This is the report, and it is here rather than in the
+     * loader because the list of what is joinable lives here and importing it there would make a
+     * cycle.
+     */
+    const joinable = new Set<string>(JOINABLE_EVENTS);
+    for (const raid of raidCatalog().all) {
+      for (const name of raid.joinEvents ?? []) {
+        if (!joinable.has(name)) {
+          console.warn(
+            `[raids] raid "${raid.id}" joins on "${name}", which carries no account to enrol — ` +
+              `its roster will stay empty. Joinable events: ${JOINABLE_EVENTS.join(', ')}.`
+          );
+        }
+      }
+    }
+
     const offs = JOINABLE_EVENTS.map((name) =>
       domainEvents.on(name, (payload) => {
         // `sos.resolved` is not joinable precisely because it carries no `accountId`; every

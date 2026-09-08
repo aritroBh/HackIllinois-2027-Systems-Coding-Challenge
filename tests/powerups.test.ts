@@ -12,6 +12,7 @@ import { app } from '../src/app';
 import { env } from '../src/config/env';
 import { Volunteer, AccountKind, VolunteerRole } from '../src/models/volunteer.model';
 import { Gym, Faction } from '../src/models/gym.model';
+import { HOLDER, RIVAL } from './helpers/factions';
 import { Shift, ShiftCategory } from '../src/models/shift.model';
 import { Registration, RegistrationStatus } from '../src/models/registration.model';
 import { uniqueKey } from './helpers/uniqueKey';
@@ -24,7 +25,7 @@ const SIEBEL = { latitude: 40.11380, longitude: -88.22470 };
 /** About 1.4 km away — comfortably outside any 75 m fence, and still on the pack's campus. */
 const FAR = { latitude: 40.12640, longitude: -88.22470 };
 
-async function player(faction: Faction = Faction.TEAM_KERNEL) {
+async function player(faction: Faction = HOLDER) {
   return Volunteer.create({
     name: `P ${Math.random().toString(36).slice(2, 7)}`,
     email: `pu-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@illinois.edu`,
@@ -74,8 +75,8 @@ describe('a gym item is spent where the gym is', () => {
     // Both gym items help their target: the core adds control points, the shield makes the
     // gym uncontestable for two hours. Spending one on a rival's stronghold entrenches it —
     // a way to hand the other side two hours of immunity, from inside your own inventory.
-    const me = await player(Faction.TEAM_KERNEL);
-    const theirs = await gym(Faction.TEAM_TENSOR);
+    const me = await player(HOLDER);
+    const theirs = await gym(RIVAL);
     await give(me._id, PowerUpType.INSOMNIA_COOKIE_SHIELD);
 
     await expect(
@@ -211,7 +212,7 @@ describe('an account that never picked a side cannot buff every side', () => {
       kind: AccountKind.VOLUNTEER, role: VolunteerRole.VOLUNTEER,
     });
     expect(drifter.faction ?? null).toBeNull();
-    const theirs = await gym(Faction.TEAM_TENSOR);
+    const theirs = await gym(RIVAL);
     await give(drifter._id, PowerUpType.INSOMNIA_COOKIE_SHIELD);
 
     await expect(

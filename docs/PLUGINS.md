@@ -6,10 +6,12 @@ a HUD widget. It is deliberately small.
 
 ## The trust model
 
-**A plugin is first-party code.** It lives in this repository or in a content pack, it is
+**A plugin is first-party code.** It lives in this repository, under `plugins/<name>/`, it is
 read and reviewed the way core code is read and reviewed, and it is enabled by the people
 running the event. There is no plugin marketplace, no remote loading, and no way to point
-the server at a URL and have it run what comes back.
+the server at a URL and have it run what comes back. A content pack cannot carry a plugin
+either: `CATALOG` in `src/plugins/registry.ts` is a literal array of static imports, and
+nothing under `src/plugins/` ever reads the pack directory.
 
 That single decision is what makes the rest of the design simple. Because plugin code is
 trusted, hooks run in-process, on the same event loop, with the same database handles as
@@ -21,8 +23,11 @@ rather than a hostile one:
 
 * A hook that throws, or takes longer than two seconds, fails that hook only. The domain
   operation has already been committed by the time hooks run.
-* Five consecutive failures disable the plugin. A `PLUGIN_DISABLED` event goes out on the
-  ops channel so somebody sees it.
+* Five consecutive failures disable the plugin, and a `PLUGIN_DISABLED` event goes out on the
+  announce channel. **Nothing in the dashboard renders it yet** — `public/plugins.js` forwards
+  the type onto the client bus and no view subscribes — so an operator learns about a disabled
+  plugin from `GET /health`'s plugin stats or the server log, not from the screen. This bullet
+  said "so somebody sees it", which overstated a mechanism that stops one step short of a person.
 * A disabled plugin's routes and assets both return 404, and the manifest stops listing it.
   Express cannot unmount a router at runtime, so every plugin route and every plugin asset
   path runs through the same `registry.enabled(name)` guard rather than being removed.
@@ -37,7 +42,20 @@ built. Do not enable it as a plugin instead.
 The registry knows every plugin by static import, so `tsc` type-checks all of them whether
 or not they run. Which ones are *active* is configuration: the content pack's `event.json`
 lists the plugins the event wants under `plugins`, and the deployment can narrow that
-further. A plugin that is not active is inert, and its routes and assets do not exist.
+further with the `PLUGINS` environment variable. A plugin that is not active is inert, and
+its routes and assets do not exist.
+
+That paragraph described an intention for a long time rather than the code. `event.json`'s
+`plugins` array was parsed by the schema and read by nobody; activation came only from
+`PLUGINS`, which `.env.example` ships empty and which nothing in this repository set — not
+the demo script, not CI, not the Dockerfile, not `render.yaml`. So no plugin had ever run in
+any configuration this project ships, and a fork that followed this page got silence. Both
+halves are true now, and `tests/plugins.test.ts` holds them to it.
+
+`PLUGINS` **narrows and cannot add**. A name in it that the pack does not list is a boot
+refusal, not a silent no-op — the failure this whole mechanism exists to avoid. Use it to
+switch something off for one deployment: a staging box that should not post to a live
+scoreboard names only what it wants.
 
 ## The hooks
 
@@ -52,15 +70,17 @@ They cannot veto anything. This is the whole list:
 | `onGymCaptured` | a territory changes faction |
 | `onSpin` | a HackStop spin pays out |
 
-A hook receives the resulting document and returns a promise. If you need to react to
+A hook receives a small event object and returns a promise. **Not the document** — the payloads in `src/plugins/types.ts` carry ids as strings and times as epoch milliseconds, never a Mongoose document, because by the time a hook runs the record may have moved on and because an id survives being forwarded as JSON. Do your own read if you need the current state. If you need to react to
 something not on this list, add a hook to the bus in a reviewed change rather than reaching
 into a service from a plugin.
 
 ## Server routes
 
 A plugin may mount routes under `/api/v1/plugins/<name>`. They sit behind the same identity
-middleware and the same rate limiter as core routes, they are restricted to an allow-listed
-set of methods, and they answer 404 while the plugin is disabled. Nothing about a plugin
+middleware and the same rate limiter as core routes, and they answer 404 while the plugin is
+disabled. Nothing constrains *which* methods a plugin registers — `mountPlugins` hands it a
+bare Express router — so the review of the plugin is what stands between a fork and a
+`DELETE` nobody meant to publish. Nothing about a plugin
 route is exempt from the rules in [IDENTITY.md](IDENTITY.md): the session cookie is still
 the only identity, and a cookie-authenticated mutation still needs its CSRF nonce.
 
@@ -68,9 +88,8 @@ the only identity, and a cookie-authenticated mutation still needs its CSRF nonc
 
 There is one path and one manifest.
 
-Every plugin's client files are served same-origin under `/dashboard/plugins/<name>/`,
-whether the plugin lives in the repository or in the content pack. `GET /api/v1/plugins` is
-the single manifest:
+Every plugin's client files are served same-origin under `/dashboard/plugins/<name>/`, read
+off disk from `plugins/<name>/public/`. `GET /api/v1/plugins` is the single manifest:
 
 ```json
 [{ "name": "hello-nexus", "version": "1.0.0", "assets": [{ "url": "/dashboard/plugins/hello-nexus/hello.js", "sha256": "…" }] }]

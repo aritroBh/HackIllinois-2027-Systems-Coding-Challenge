@@ -50,6 +50,72 @@
 
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /**
+   * The geofence the desk scanner will actually apply to *this* shift's venue.
+   *
+   * The copy quoted a literal 75 while the server resolved the number from the pack. It is
+   * the only place the rule is stated to the person it applies to, so a pack that widens or
+   * narrows the fence would have had this panel telling a volunteer to stand somewhere the
+   * scanner disagrees with.
+   *
+   * The venue's own resolved `geofenceMeters` wins, because a shift happens at one place and
+   * that place may override. `resolveVenue` already returns the whole venue object, so this
+   * is a field read rather than a second copy of the precedence rule — the ordering lives
+   * once, in `geofenceMetersFor` on the server, and both fields arrive already resolved.
+   */
+  const geofenceMetres = (location) => {
+    const venue = location ? resolveVenue(location) : null;
+    const m = Number(venue?.geofenceMeters ?? N.content?.event?.campus?.geofenceMeters);
+    return Number.isFinite(m) && m > 0 ? m : 75;
+  };
+
+  /** SIEBEL_GUARDIAN -> "Siebel Guardian". The card printed the raw enum before. */
+  const humanise = (v) => String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+  /**
+   * The karma bands, mirrored from `computePrestigeTier` in src/models/volunteer.model.ts.
+   *
+   * A second copy of a server rule is how this repository grows its favourite bug, so this
+   * one is gated rather than trusted: `tests/prestige.test.ts` parses the thresholds back out
+   * of the model and fails if the two ever disagree. The copy has to exist because the card
+   * draws a *distance* — "you are 1,500 karma short of Leviathan Prime" needs both edges of
+   * the band, and `GET /me/card` sends the tier the balance landed in without its bounds.
+   * (It sends plenty else this panel uses — `karma`, `shortId`, `faction`; it is the band
+   * edges specifically that are absent, and they are the only thing a distance needs.)
+   */
+  const TIER_BANDS = [
+    { tier: 'NEOPHYTE_PLANKTON', minKarma: 0 },
+    { tier: 'CURRENT_RIDER', minKarma: 200 },
+    { tier: 'ABYSSAL_VANGUARD', minKarma: 500 },
+    { tier: 'SIEBEL_GUARDIAN', minKarma: 1000 },
+    { tier: 'MIDNIGHT_KRAKEN', minKarma: 2000 },
+    { tier: 'LEVIATHAN_PRIME', minKarma: 3500 },
+  ];
+
+  /** The band a balance sits in, and the one above it — null once there is nothing above. */
+  function bandsFor(karma) {
+    const k = Math.max(0, Number(karma) || 0);
+    let current = TIER_BANDS[0];
+    for (const band of TIER_BANDS) if (k >= band.minKarma) current = band;
+    return { current, next: TIER_BANDS.find((band) => k < band.minKarma) || null };
+  }
+
+  /**
+   * The team the rest of the client believes you are on.
+   *
+   * Deliberately `window.currentVolunteerFaction` first and the card's `faction` second, in
+   * that order. They disagree today: the server stores `null` for every seeded account, and
+   * app.js picks the first playable team so the campus HUD, the gym list and the encounter
+   * all have a colour to work with. Reading the card first would put "Unclaimed" on this
+   * panel while the Campus tab two clicks away said "Team Kernel" about the same person.
+   * One wrong-looking answer is better than two answers.
+   */
+  function myFaction() {
+    const id = window.currentVolunteerFaction || state.card?.faction || 'NEUTRAL';
+    return (N.content?.factions || []).find((f) => f.id === id)
+      || { id, label: humanise(id), short: humanise(id), color: '#7c8daa' };
+  }
+
   /* ------------------------------------------------------------------ *
    * Where things are
    * ------------------------------------------------------------------ */
@@ -67,7 +133,14 @@
     const upper = raw.toUpperCase();
     let best = null;
     for (const venue of Object.values(venues)) {
-      for (const hint of venue.hints || []) {
+      for (const raw2 of venue.hints || []) {
+        // Upper-cased here, not trusted from the pack — the same reason `geo.ts` gives on the
+        // server: this is a substring test against an upper-cased input, so a lower-case hint
+        // would never fire. The server does it and this did not, which meant a mixed-case
+        // hint resolved server-side and silently missed here, and a venue that cannot be
+        // resolved falls back to the campus default without saying so. The shipped pack has
+        // no such hint today; a fork's would have been the first to find out.
+        const hint = String(raw2).toUpperCase();
         if (upper.includes(hint) && (!best || hint.length > best.score)) best = { venue, score: hint.length };
       }
     }
@@ -278,39 +351,109 @@
     if (N.session.user?.kind !== 'VOLUNTEER') return '';
     if (!canMint()) {
       return `<div class="px"><div class="panel-head"><div><div class="eyebrow">Check in</div><h3>No token yet</h3></div></div>
-        <p class="ob-hint">A token is minted against a confirmed spot. Claim a shift and it appears here.</p></div>`;
+        <p class="ob-hint">Your code is issued against a confirmed spot. Claim a shift and it appears here.</p></div>`;
     }
     const live = !!state.token;
     return `
       <div class="px">
         <div class="panel-head">
           <div><div class="eyebrow">Check in</div><h3>Show this at the desk</h3></div>
-          <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New token' : 'Mint token'}</button>
+          <button class="pb pb-sm" type="button" data-action="me-token"${state.tokenBusy ? ' disabled' : ''}>${live ? 'New code' : 'Get my code'}</button>
         </div>
         <div class="qr-container">
           <div class="qr-box"><div id="me-token-code" class="qr-target"></div></div>
           <div>
             <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
             <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
-            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within 75 m of the venue, so mint it once you are there.</p>
+            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres(state.next?.location || state.next?.locationName)} m of the venue, so get it once you are there.</p>
             ${state.tokenError ? `<div class="ob-status is-err">${esc(state.tokenError)}</div>` : ''}
           </div>
         </div>
       </div>`;
   }
 
+  /**
+   * Who you are, in the game's own terms.
+   *
+   * This panel used to be three numbers and a streak line, and it printed `SIEBEL_GUARDIAN`
+   * — the raw enum, underscore and all — as its heading, while the Ranks table two tabs over
+   * humanised the same value. What it never showed at all was the half of the identity the
+   * player actually picks: the sprite, the team, the level, and which badges the count was
+   * counting. All four were already on the client; nothing here asks the server for anything
+   * it was not already sending.
+   */
   function statsPanel() {
     const u = N.session.user || {};
+    const card = state.card || {};
+    // Clamped once, here, and used everywhere below.
+    //
+    // `bandsFor` clamps internally but returned bands were being combined with the *raw*
+    // value, so a negative balance printed "205 karma to Current Rider" at -5 and produced
+    // `width: -3%`, which is not a length and is simply dropped. The schema says `min: 0`,
+    // but `computePrestigeTier(-1)` is explicitly tested server-side, so the client is not
+    // entitled to assume it will never see one.
+    const karma = Math.max(0, Number(card.karma ?? u.karmaPoints) || 0);
     const streak = streakDays();
     const carrying = state.inventory.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    const faction = myFaction();
+    const { current, next } = bandsFor(karma);
+
+    // The level curve and the karma bands are two different ladders over the same balance:
+    // levels come from game.js (a square-root curve, no ceiling), tiers from the server's
+    // six named bands. Showing one and not the other is what made "4,200 karma" feel like a
+    // number with nothing attached to it.
+    const level = window.game?.levelFor ? window.game.levelFor(karma) : null;
+    const levelPct = window.game?.levelProgress ? Math.round(window.game.levelProgress(karma) * 100) : 0;
+    const bandSpan = next ? next.minKarma - current.minKarma : 0;
+    const bandPct = next ? Math.round(((karma - current.minKarma) / bandSpan) * 100) : 100;
+
+    // The trainer you made on the Trainer tab, or the stock sprite until you make one.
+    // `Sprites` is a plain script like this one and may not have parsed yet on a cold load;
+    // an empty face is a smaller failure than a thrown render.
+    const S = window.Sprites;
+    const head = window.game?.state?.head;
+    const face = !S ? ''
+      : head ? `<img class="pxi" alt="" src="${S.imageDataURL(head, 4)}">`
+        : S.img('trainer', 5);
+
+    const badges = Array.isArray(u.badges) ? u.badges : [];
+
     return `
-      <div class="px">
-        <div class="panel-head"><div><div class="eyebrow">Standing</div><h3>${esc(state.card?.tier || u.prestigeTier || 'Rookie')}</h3></div></div>
-        <div class="ob-stats">
-          <span><b>${Number(u.karmaPoints) || 0}</b><small>KARMA</small></span>
-          <span><b>${(Number(u.hoursServed) || 0).toFixed(1)}</b><small>HOURS</small></span>
-          <span><b>${(u.badges || []).length}</b><small>BADGES</small></span>
+      <div class="px" id="me-standing">
+        <div class="panel-head">
+          <div><div class="eyebrow">Standing</div><h3>${esc(humanise(card.tier || u.prestigeTier || 'Rookie'))}</h3></div>
+          ${level ? `<span class="sticker">LV ${level}</span>` : ''}
         </div>
+
+        <div class="me-card">
+          <div class="me-face" aria-hidden="true">${face}</div>
+          <div class="me-facts">
+            <div class="me-chips">
+              <span class="tag is-orange">${esc(humanise(u.kind === 'HACKER' ? 'HACKER' : u.role || 'VOLUNTEER'))}</span>
+              <span class="tag" style="border-color:${esc(faction.color)};color:${esc(faction.color)}">${esc(faction.label || faction.id)}</span>
+              ${card.shortId ? `<span class="tag">#${esc(card.shortId)}</span>` : ''}
+            </div>
+            ${level ? `<div class="me-meter">
+              <div class="hud-label">Level ${level} &middot; ${levelPct}% of the way to ${level + 1}</div>
+              <div class="pxbar"><i style="width:${levelPct}%"></i></div>
+            </div>` : ''}
+            <div class="me-meter">
+              <div class="hud-label">${next
+                ? `${next.minKarma - karma} karma to ${esc(humanise(next.tier))}`
+                : 'Top tier &mdash; there is nothing above this'}</div>
+              <div class="pxbar"><i class="is-tier" style="width:${bandPct}%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-stats">
+          <span><b>${karma}</b><small>KARMA</small></span>
+          <span><b>${(Number(u.hoursServed) || 0).toFixed(1)}</b><small>HOURS</small></span>
+          <span><b>${badges.length}</b><small>BADGES</small></span>
+        </div>
+        ${badges.length
+          ? `<div class="me-badges">${badges.map((b) => `<span class="badge-tag">${esc(humanise(b))}</span>`).join('')}</div>`
+          : '<p class="ob-hint">No badges yet. They come from surge shifts, distress calls answered and strongholds held.</p>'}
         <p class="ob-hint">${streak > 0
           ? `${streak} day${streak === 1 ? '' : 's'} in a row. Serve a shift today to keep it.`
           : 'No streak yet. Serve a shift on two days running to start one.'}</p>
@@ -318,21 +461,44 @@
       </div>`;
   }
 
-  /** Plan §C7: what opting in actually discloses, said differently for each role. */
+  /**
+   * What opting in actually discloses, said differently for each role.
+   *
+   * This said "It is symmetric" — you are invisible and you see nobody — and that is not true
+   * of the one thing a person reading it cares about. `GET /api/v1/presence` is
+   * `requireSession` + `requireRole('SHIFT_LEAD')` and checks nothing about the reader's own
+   * opt-in, and the shift roster behaves the same way: a lead who has switched themselves off
+   * still reads exact positions, audited, whatever this switch says.
+   *
+   * The same panel already told leads that four sentences later, so it carried the claim and
+   * its own contradiction. README, `docs/PRESENCE.md` and `docs/DEMO.md` were corrected for
+   * this earlier; **this is the only one of the four addressed to the person whose privacy it
+   * describes**, and it is the one they read at the moment they decide. Nobody opens
+   * PRESENCE.md before flipping a location switch.
+   *
+   * The route name used to be printed in this copy, verbatim, as "GET /presence". Every
+   * disclosure it carried is still here — the lead's read, the audit trail, the fuzzing, the
+   * delay — in words that do not require knowing what an HTTP verb is. Shortening it is not
+   * cosmetic either: `styles.css` records that this face at this size reads poorly, and the
+   * fix that worked was fewer words set larger rather than a colour change.
+   */
   function privacyCopy() {
     const u = N.session.user || {};
-    const base = 'Off, you are invisible and you see nobody. It is symmetric. On, other trainers see a position snapped to a 20 m grid, nudged a few metres, and released a second late.';
+    const base = 'Off: you vanish from the map, and nobody appears to you. Shift leads can still see exactly where you are — on their roster and on the live map — and every time one looks, it is recorded under their name. On: other trainers see you rounded to the nearest 20 metres, nudged slightly, and about a second behind.';
     if (u.kind === 'HACKER') {
-      return `${base} A lead can read your exact position, and every read is logged for thirty days. Raising an SOS shares where you are whatever this switch says.`;
+      return `${base} Those records are kept for thirty days. Calling for help shares where you are either way.`;
     }
-    const volunteer = `${base} Off shift you stay hidden from everyone but a lead. Distress calls only reach volunteers who are opted in and on shift; opted out, dispatch falls back to your shift venue.`;
+    const volunteer = `${base} Off shift, only a lead can see you. Help requests are sent to volunteers who are on shift and sharing; if you are not, they are sent to your shift's venue instead.`;
     return LEAD_ROLES.includes(u.role)
-      ? `${volunteer} You can also read exact positions from the roster, and each of those reads is written to the audit log under your name.`
+      ? `${volunteer} You can also see exact positions on your roster, and each of those looks is recorded under your name.`
       : volunteer;
   }
 
   function settingsPanel() {
     const on = N.presence?.state?.optIn ?? N.session.user?.presenceOptIn;
+    // Why the switch is on and the map still does not have you. The server refuses samples
+    // for six different reasons and used to say none of them out loud; this is the sentence.
+    const refusal = N.presence?.refusalLine?.() ?? null;
     return `
       <div class="px">
         <div class="panel-head"><div><div class="eyebrow">Settings</div><h3>Privacy</h3></div></div>
@@ -340,6 +506,7 @@
           <input type="checkbox" id="pref-visible" data-action="presence-toggle" aria-labelledby="me-presence-label" aria-describedby="me-presence-copy"${on ? ' checked' : ''}>
           <span class="hud-label" id="me-presence-label">Show me on the campus map</span>
         </div>
+        ${on && refusal ? `<p class="ob-hint me-presence-why" role="status">${esc(refusal)}</p>` : ''}
         <p class="ob-hint" id="me-presence-copy">${esc(privacyCopy())}</p>
       </div>`;
   }
@@ -437,6 +604,39 @@
   }
 
   // players.js owns the toggle; repaint so the checkbox agrees with the transport.
+  /**
+   * Repaint the standing panel once the things it reads have actually arrived.
+   *
+   * `index.html` loads this file before `sprites.js`, `game.js` and `app.js`. They are plain
+   * classic scripts, so by the time anything here runs on a `session:ready` that resolved
+   * early, `window.Sprites` can be undefined and `currentVolunteerFaction` has not been
+   * reconciled against the content pack. Everything was read once, at first paint, and never
+   * again: the trainer's face came out an empty box and the team chip said "Unclaimed" while
+   * the Campus tab, reading the same variable a moment later, said "Team Kernel" about the
+   * same person.
+   *
+   * Three signals, because there are three different arrivals and no single one covers them:
+   * `load` for the scripts existing at all, `content` for the faction table, and `game:ready`
+   * for `state.head` and `levelFor` — which `game.init` only sets *after* awaiting
+   * `Sprites.ready` and a dynamic import, so subscribing to `Sprites.ready` here would have
+   * fired too early and left the face empty anyway.
+   *
+   * Only this panel is redrawn, not the tab. `paint()` rebuilds the attendance QR from
+   * scratch, and a token minted thirty seconds ago should not be torn down and redrawn
+   * because a sprite sheet finished decoding.
+   */
+  function repaintStanding() {
+    const el = document.getElementById('me-standing');
+    // Absent when the tab has never been opened, or when nobody is signed in — in both
+    // cases there is nothing to correct and `paint()` will read the settled values.
+    if (el) el.outerHTML = statsPanel();
+  }
+
+  // Whichever arrives last wins; both are cheap and idempotent.
+  window.addEventListener('load', repaintStanding);
+  N.onEvent('content', repaintStanding);
+  N.onEvent('game:ready', repaintStanding);
+
   N.onEvent('presence:transport', () => paint());
   N.onEvent('presence:nack', () => paint());
 })();

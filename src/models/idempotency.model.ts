@@ -16,6 +16,15 @@
  */
 import mongoose, { Schema, Document } from 'mongoose';
 
+/**
+ * The three states of a claimed key. PENDING is written before any work, which is what makes
+ * the claim a race the database decides rather than a check; the other two are settlements
+ * carrying the response to replay.
+ *
+ * A record stuck in PENDING is the interesting case and is handled by the ownership token
+ * below rather than by a fourth state: the attempt that holds it may have died, so a later
+ * attempt steals it after two minutes instead of waiting out the 24-hour TTL.
+ */
 export enum IdempotencyStatus {
   PENDING = 'PENDING',
   COMMITTED = 'COMMITTED',

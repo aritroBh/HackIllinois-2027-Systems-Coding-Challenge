@@ -12,12 +12,21 @@
  * gate tests for had been broken for as long as the split had existed. Nothing failed,
  * because nothing compared the two.
  *
- * Three assertions, in the order a reader would ask them:
- *   1. every script index.html loads is in SHELL or SHELL_OPTIONAL;
- *   2. every SHELL entry exists on disk (a missing one fails the install, and `sw.js` says
- *      so — the previous worker stays in charge and the new shell never lands);
- *   3. every SHELL entry is reachable under /dashboard, i.e. really is a file we serve;
- *   4. `VERSION` in sw.js was bumped if the *contents* of any precached file changed.
+ * Five groups of assertions, in the order the file runs them:
+ *   1. every asset index.html loads from /dashboard/ is in SHELL or SHELL_OPTIONAL — `src=`
+ *      and `href=` both, so a stylesheet or a font counts, not only a script;
+ *   2. every SHELL and SHELL_OPTIONAL entry is under /dashboard/ (`app.ts` mounts `public/`
+ *      there, so the prefix is what makes it a file we serve) and exists on disk. A missing
+ *      SHELL entry fails the install — `cache.addAll` rejects and nothing catches it — so the
+ *      previous worker stays in charge and the new shell never lands. A missing
+ *      SHELL_OPTIONAL entry does not fail the install, because sw.js `cache.add`s those one
+ *      at a time inside a try/catch, but it still fails here: a list naming a file that is not
+ *      there is a mistake either way;
+ *   3. every icon `manifest.webmanifest` declares exists, is a PNG, and really is the pixel
+ *      size it claims;
+ *   4. `VERSION` in sw.js was bumped if the *contents* of any precached file changed;
+ *   5. index.html's pre-script fallback nav still matches the `registerTab()` registry — the
+ *      tabs it names, which tabs it is required to name, their order, and its ARIA.
  *
  * The fourth is the one that cost real time. The shell is served **cache-first**, so an
  * installed worker keeps handing the page the JS it cached at install and only a `VERSION`
@@ -51,6 +60,12 @@ const sw = read('public/sw.js');
  * page and not to `SHELL` would have slipped past a checker written to catch exactly that
  * mistake. The extension filter is gone with it; whatever the page loads from `/dashboard/`
  * has to be precached or explicitly optional, whatever it is.
+ *
+ * Limits worth knowing before you trust a green result: the attribute must be double-quoted
+ * and the URL root-relative. `src='…'` or `href=/dashboard/x.js` matches nothing and is not
+ * reported — the scan has no way to tell "no such attribute" from "an attribute I cannot
+ * read". Everything under `/dashboard/` in this repo is written the quoted, root-relative way,
+ * which is why that has been survivable; keep it that way.
  */
 const loaded = [
   ...new Set([...html.matchAll(/(?:src|href)="(\/dashboard\/[^"]+)"/g)].map((m) => m[1])),
@@ -64,6 +79,15 @@ const loaded = [
  * existence assertions below never covered the one file the whole offline shell is for: the
  * page itself. An identifier that does not resolve to a string constant is an error rather
  * than a skip, since skipping is exactly the failure being fixed.
+ *
+ * Throws rather than returning empty when the declaration is absent: an empty list would make
+ * every assertion below vacuously true, and this gate exists because a check that cannot fail
+ * looks exactly like a check that passed.
+ *
+ * The array must be flat and one-per-entry: the body is taken as everything up to the first
+ * `];` after the declaration and split on commas, so a nested array or an object entry would
+ * truncate or mis-split it. Both SHELL and SHELL_OPTIONAL are flat lists of path strings; the
+ * `throw` at the bottom of the loop is what stops anything else passing quietly.
  */
 function arrayOf(name) {
   const start = sw.indexOf(`const ${name} = [`);
@@ -111,6 +135,34 @@ for (const entry of [...shell, ...optional]) {
 }
 
 /*
+ * The manifest's icons, which nothing checked.
+ *
+ * `manifest.webmanifest` named `/dashboard/icon-192.png` and `/dashboard/icon-512.png` for a
+ * long time while `public/` contained no `.png` at all, so installing the app to a home
+ * screen failed on its icons and no gate noticed. The loop above only walks what `sw.js`
+ * precaches and the one above that only walks `src=`/`href=` in `index.html`; a manifest icon
+ * is referenced from neither, which is exactly why it could rot unobserved.
+ *
+ * Declared size is checked against the PNG's real IHDR dimensions, not just existence — a
+ * 512 named as a 192 installs a blurry icon and is the kind of thing nobody re-measures.
+ */
+const manifestRaw = read('public/manifest.webmanifest');
+let manifest = null;
+try { manifest = JSON.parse(manifestRaw); } catch (err) { problems.push(`manifest.webmanifest is not valid JSON: ${err.message}`); }
+for (const icon of manifest?.icons ?? []) {
+  const src = String(icon.src || '');
+  if (!src.startsWith('/dashboard/')) { problems.push(`manifest icon ${src || '(missing src)'} is not under /dashboard/`); continue; }
+  const file = path.join(root, 'public', src.slice('/dashboard/'.length));
+  if (!fs.existsSync(file)) { problems.push(`manifest declares icon ${src}, which does not exist at ${path.relative(root, file)}`); continue; }
+  const buf = fs.readFileSync(file);
+  // PNG IHDR: 8-byte signature, 4-byte length, "IHDR", then width and height as big-endian u32.
+  if (buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) { problems.push(`manifest icon ${src} is not a PNG`); continue; }
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  const declared = String(icon.sizes || '');
+  if (declared && declared !== `${w}x${h}`) problems.push(`manifest icon ${src} declares ${declared} but the file is ${w}x${h}`);
+}
+
+/*
  * Contents against VERSION.
  *
  * The hash covers every precached file plus the shell list itself, so a byte change anywhere
@@ -118,6 +170,23 @@ for (const entry of [...shell, ...optional]) {
  * under; if the hash has moved and VERSION has not, the deploy would leave returning users on
  * the previous JS and this fails instead. Updating the lock is deliberate work: bump VERSION
  * in sw.js, then run `node scripts/checkShell.mjs --write-lock`.
+ *
+ * The hash is sha256 truncated to 16 hex characters — short enough to read in a diff, and this
+ * is drift detection between two files in one repo, not a defence against someone constructing
+ * a collision.
+ *
+ * Entries are sorted before hashing so reordering the SHELL list alone does not move the hash;
+ * the entry *paths* are fed in as well as the bytes, so adding, removing or renaming a file
+ * does move it. An entry with no file on disk contributes only its path — the digest loop skips
+ * the read — which is not a hole, because the existence loop above has already recorded that
+ * as a problem.
+ *
+ * What this pairing does NOT catch: bumping VERSION while no precached byte changed. Both
+ * branches below require `lockHash !== shellHash`, and sw.js is not itself precached, so a
+ * VERSION-only bump moves nothing the digest sees, reports nothing, and leaves `sw-shell.lock`
+ * recording the older VERSION beside a still-correct hash. That direction is harmless — a
+ * needless bump only costs returning users one re-download — which is why it is tolerated
+ * rather than fixed, but do not read a green result as "the lock's version field is current".
  */
 const versionMatch = sw.match(/const VERSION = '([^']+)'/);
 if (!versionMatch) throw new Error('checkShell: sw.js has no VERSION constant');
@@ -132,6 +201,16 @@ for (const entry of [...shell, ...optional].sort()) {
 const shellHash = digest.digest('hex').slice(0, 16);
 const lockPath = path.join(root, 'public/sw-shell.lock');
 
+/*
+ * `--write-lock` records the current pairing and exits 0 immediately.
+ *
+ * Two things a reader should know about that early exit: it happens before the fallback-nav
+ * block below ever runs, and it discards any `problems` already collected above. So a
+ * `--write-lock` run is not a check — it can succeed on a tree where the real run fails, and
+ * it will happily record a hash for a shell whose files do not exist (missing entries are
+ * simply skipped by the digest loop). Run `node scripts/checkShell.mjs` with no arguments
+ * afterwards; `scripts/verify.sh` runs exactly that form.
+ */
 if (process.argv.includes('--write-lock')) {
   fs.writeFileSync(lockPath, `${version} ${shellHash}\n`);
   console.log(`checkShell: lock written — ${version} ${shellHash}`);
@@ -190,8 +269,76 @@ if (!fs.existsSync(lockPath)) {
      * Comments are stripped first, so a commented-out call cannot register a phantom tab.
      */
     const registered = new Map();
-    const TAB_SOURCES = ['public/app.js', 'public/views/me.js', 'public/views/lead.js',
-                         'public/views/sos.js', 'public/views/quests.js'];
+    /**
+     * A `registerTab(...)` whose argument is not an inline object literal.
+     *
+     * Both scans key on `registerTab(\s*{`, so `const conf = {...}; registerTab(conf);`
+     * matched neither and the tab was invisible to every per-tab check while `coreTabs`
+     * stayed satisfied by the others. Same shape as the unreadable-id hole: the scanner
+     * cannot read it, so it must say so rather than pass.
+     */
+    const reportIndirectRegistrations = (rel, src) => {
+      // `\s*` inside the lookahead, not outside it. Outside, the engine backtracks `\s*` to
+      // empty on `registerTab( {`, the lookahead then examines the space rather than the
+      // brace, succeeds, and a perfectly valid registration is reported as unreadable.
+      for (const m of src.matchAll(/registerTab\s*\((?!\s*\{)/g)) {
+        const shown = src.slice(m.index, m.index + 60).split('\n')[0];
+        problems.push(
+          `${rel} calls registerTab() with something other than an inline object literal `
+          + `(\`${shown.trim()}…\`). checkShell cannot read a tab declared that way.`,
+        );
+      }
+    };
+
+    /**
+     * The `.js` files directly inside `rel`, as repo-relative paths. Not recursive.
+     *
+     * A missing directory is an empty list, not a throw: `plugins/` need not exist, and a
+     * checkout with no plugins is not a fault. That tolerance is only safe because the one
+     * directory this gate genuinely depends on — `public/views` — is also read by the loop
+     * below, which throws on a file it cannot open.
+     */
+    const listJs = (rel) => {
+      try {
+        return fs.readdirSync(path.join(root, rel))
+          .filter((name) => name.endsWith('.js'))
+          .map((name) => `${rel}/${name}`);
+      } catch {
+        return [];   // the directory need not exist; a repo with no plugins is not a fault
+      }
+    };
+    /** `plugins/<name>/public` for every directory under `plugins/`; empty when there is none. */
+    const pluginDirs = (() => {
+      try {
+        return fs.readdirSync(path.join(root, 'plugins'), { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => `plugins/${e.name}/public`);
+      } catch {
+        return [];
+      }
+    })();
+    /**
+     * Every file that can register a tab, discovered rather than listed.
+     *
+     * This was a hard-coded list of five paths — `public/app.js` plus `me`, `lead`, `sos` and
+     * `quests` under `public/views` — and everything outside it was invisible to the gate.
+     * That is worse than it sounds: CONTRIBUTING.md tells a contributor that frontend files
+     * under `public/` register their tabs with `Nexus.registerTab`, and docs/PLUGINS.md
+     * documents the same call for a plugin script, and neither says anything about being one
+     * of five files a scanner knows by name. A sixth view's tab went unscanned, so the
+     * role-gating check this whole block exists to perform silently did not run on it; and if
+     * they also added it to index.html's fallback nav, the loop below reported `no
+     * registerTab() call declares "tab-x"` — a false statement about their code that was
+     * really a true statement about this scanner's reading list. A contributor's first meeting
+     * with this repository's gates would have been a lie.
+     *
+     * `public/app.js` is still named explicitly rather than globbed, because globbing all of
+     * `public/` would pull in every other browser script for a `registerTab` scan they have no
+     * reason to answer. Plugin client assets have the same shape one directory over, so they
+     * are globbed too. The same drift, in `scripts/verify.sh`'s frontend-syntax step, had left
+     * it nine files behind before it was globbed for this reason.
+     */
+    const TAB_SOURCES = ['public/app.js', ...listJs('public/views'), ...pluginDirs.flatMap(listJs)];
     /** The `{...}` object literal starting at `from`, by brace depth, ignoring quoted braces. */
     const objectAt = (src, from) => {
       let depth = 0, quote = null;
@@ -206,8 +353,13 @@ if (!fs.existsSync(lockPath)) {
     };
     for (const rel of TAB_SOURCES) {
       const raw = fs.readFileSync(path.join(root, rel), 'utf8');
-      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+      // Line comments anywhere, not only at the start of a line. Start-anchored, a trailing
+      // `registerTab( // note` survived the strip and the indirect-registration scan then
+      // reported a valid call as unreadable. The `[^:]` guard keeps a `https://` in a string
+      // from being mistaken for the start of a comment.
+      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      reportIndirectRegistrations(rel, src);
+      for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) { problems.push(`checkShell: unbalanced registerTab({ in ${rel}`); continue; }
         // `id:` is a string literal in app.js and a module constant in the view files.
@@ -216,20 +368,72 @@ if (!fs.existsSync(lockPath)) {
           const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
           if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
         }
-        if (!id) continue;
+        if (!id) {
+          // Not `continue`. The id patterns accept a single-quoted literal or a module
+          // constant; a double-quoted one, or a computed id, matched neither and was skipped
+          // in silence — invisible to every per-tab check while `coreTabs` stayed at the
+          // expected number, so the `!==` gate stayed green over a tab nothing had examined.
+          // A scanner that cannot read something must say so, not pass.
+          problems.push(
+            `checkShell found a registerTab({...}) in ${rel} whose id it could not read. `
+            + "Ids must be a single-quoted literal or a module constant assigned one.",
+          );
+          continue;
+        }
         const roles = body.match(/roles:\s*([A-Za-z_]+|\[[^\]]*\])/)?.[1] ?? null;
-        registered.set(id, roles);
+        // Last write wins in a Map, and the plugin files are scanned last. A plugin reusing a
+        // core tab's id would therefore flip that entry to non-core and silently drop the
+        // fallback-nav requirement the core tab is subject to — turning this gate off for one
+        // tab by adding a file, which is the failure this whole block exists to prevent.
+        const clash = registered.get(id);
+        if (clash) {
+          // Not `clash.rel !== rel`. That enforced "unique across files" while the message
+          // said "unique", so two `registerTab({ id: 'tab-x' })` calls in one file — the
+          // likeliest way to get a duplicate, by copying the one above — last-won in silence
+          // with the roles taken from the second and the count unchanged.
+          problems.push(clash.rel === rel
+            ? `tab id "${id}" is registered twice in ${rel}; ids must be unique`
+            : `tab id "${id}" is registered by both ${clash.rel} and ${rel}; ids must be unique`);
+        }
+        registered.set(id, { roles, rel });
       }
     }
-    // Every tab this repository actually has. A drop below it means the scan broke, not that
-    // tabs were deleted — and this is the number the sos.js miss above slipped past, so it is
-    // now the real total rather than a floor low enough to hide one.
-    const EXPECTED_TABS = 8;
-    if (registered.size < EXPECTED_TABS) {
+    /**
+     * A tab shipped by this repository, as opposed to one a plugin adds.
+     *
+     * The distinction did not exist while `TAB_SOURCES` was five hard-coded core paths. Now
+     * that plugins are scanned it matters twice: an installed plugin must not be able to
+     * satisfy the floor below for a core tab somebody deleted, and it must not be required
+     * to appear in `index.html` (see the fallback rule further down).
+     */
+    const isCore = (rel) => rel.startsWith('public/');
+    const coreTabs = [...registered.values()].filter((t) => isCore(t.rel)).length;
+
+    /**
+     * Every core tab this repository has, as an equality rather than a floor.
+     *
+     * This was `< 8` while the static count was 10, and the comment beside it claimed to be
+     * "the real total rather than a floor low enough to hide one". It was neither: two core
+     * tabs could be deleted with the gate still green, which is exactly the shape of the
+     * `sos.js` miss it was written to close. A one-sided floor cannot catch a deletion when
+     * it is set below the true count, and nothing kept the number honest.
+     *
+     * `!==` costs a contributor one line when they add a tab, and the message says which line.
+     * That is the trade a lockstep gate is for: the alternative is a number that drifts under
+     * the count it is supposed to be guarding, which is what happened here.
+     *
+     * Ten: six in `app.js` (shifts, campus, pokeshift, qr, chaos, leaderboard — `chaos` is
+     * registered conditionally at runtime but is a static call site, and this is a static
+     * scan), plus one each in `views/me.js`, `views/lead.js`, `views/quests.js`,
+     * `views/sos.js`.
+     */
+    const EXPECTED_TABS = 10;
+    if (coreTabs !== EXPECTED_TABS) {
       problems.push(
-        `checkShell found ${registered.size} registerTab() calls across ${TAB_SOURCES.length} files ` +
-        `but expects at least ${EXPECTED_TABS}. Either a tab was removed (update EXPECTED_TABS) ` +
-        'or the scanner no longer matches how they are written.'
+        `checkShell found ${coreTabs} core registerTab() calls across ${TAB_SOURCES.length} scanned files ` +
+        `but EXPECTED_TABS is ${EXPECTED_TABS}. If you added or removed a tab on purpose, update ` +
+        `EXPECTED_TABS in scripts/checkShell.mjs to ${coreTabs}. Otherwise the scanner no longer ` +
+        'matches how registerTab() is written, or a tab was lost.'
       );
     }
 
@@ -253,7 +457,14 @@ if (!fs.existsSync(lockPath)) {
       const listed = [...roles.matchAll(/'([^']+)'/g)].map((m) => m[1]);
       return ALL_ROLES.every((r) => listed.includes(r));
     };
-    for (const [id, roles] of registered) {
+    for (const [id, { roles, rel }] of registered) {
+      // Core tabs only. `index.html` is a static file that ships before anyone decides which
+      // plugins are installed, so it cannot carry a button for a tab that may not exist —
+      // requiring one would make the gate fail on a correct plugin, which is the same
+      // "true statement about the scanner reported as a fault in your code" that the
+      // hard-coded source list used to produce. Plugin tabs are still scanned and still
+      // answer the check above: put one in the fallback nav and it must really be declared.
+      if (!isCore(rel)) continue;
       if (openToEveryone(roles) && !fallback.includes(id)) {
         problems.push(`tab "${id}" is open to every role but has no button in index.html's fallback nav`);
       }
@@ -272,9 +483,13 @@ if (!fs.existsSync(lockPath)) {
     // Sorting needs the order and label, which the scan above did not keep. Re-read them.
     const meta = new Map();
     for (const rel of TAB_SOURCES) {
+      // Same strip as the first scan. This kept the start-anchored form after that one was
+      // widened, so a trailing `//` inside a `registerTab` body corrupted the `order:` and
+      // `label:` parse here while the id parse two hundred lines up handled it correctly —
+      // one scanner, two answers to the same input.
       const src = fs.readFileSync(path.join(root, rel), 'utf8')
-        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-      for (const m of src.matchAll(/registerTab\(\s*\{/g)) {
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      for (const m of src.matchAll(/registerTab\s*\(\s*\{/g)) {
         const body = objectAt(src, m.index + m[0].length - 1);
         if (!body) continue;
         let id = body.match(/id:\s*'([^']+)'/)?.[1];
@@ -282,7 +497,11 @@ if (!fs.existsSync(lockPath)) {
           const ref = body.match(/id:\s*([A-Za-z_$][\w$]*)/)?.[1];
           if (ref) id = src.match(new RegExp(`const\\s+${ref}\\s*=\\s*'([^']+)'`))?.[1];
         }
-        if (!id) continue;
+        // Same policy as the first scan, which is the point: this loop kept the old silent
+        // `continue` after that one learned to complain, so one scanner had two answers to the
+        // same limitation. It changes no verdict today — loop one already reports the file —
+        // but a reader comparing them would have to work out which behaviour was intended.
+        if (!id) continue;   // already reported by the first scan; not silent, just not twice
         meta.set(id, {
           order: Number(body.match(/order:\s*(\d+)/)?.[1] ?? 100),
           label: body.match(/label:\s*'([^']+)'/)?.[1] ?? id,

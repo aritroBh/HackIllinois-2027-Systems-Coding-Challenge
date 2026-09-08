@@ -8,6 +8,11 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/**
+ * Who a broadcast is for. This is a disclosure decision, not a display preference: the filter
+ * runs on the server at delivery time (`announcementReaches`), so a STAFF message is never
+ * sent to a hacker's stream and then hidden by the client.
+ */
 export enum AnnouncementAudience {
   ALL = 'ALL',
   VOLUNTEERS = 'VOLUNTEERS',
@@ -15,12 +20,18 @@ export enum AnnouncementAudience {
   STAFF = 'STAFF',
 }
 
+/** Presentation only — it picks a colour and an icon. Nothing routes or filters on tone. */
 export enum AnnouncementTone {
   INFO = 'INFO',
   WARNING = 'WARNING',
   URGENT = 'URGENT',
 }
 
+/**
+ * `authorName` is denormalised so a banner can name its author without a join, and
+ * `venueKey` is optional context ("power is out in Siebel") rather than a delivery filter —
+ * nothing scopes an announcement to people at a venue.
+ */
 export interface IAnnouncement extends Document {
   message: string;
   audience: AnnouncementAudience;

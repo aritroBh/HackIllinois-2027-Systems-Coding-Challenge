@@ -61,7 +61,9 @@ import { Shift } from '../models/shift.model';
 import { Volunteer } from '../models/volunteer.model';
 import { DynamicQrTokenEngine, IVerificationResult } from '../common/utils/crypto';
 import { SurgePricingEngine } from '../common/utils/surgePricing';
+import { eventLocalHourOfDay } from '../common/utils/eventClock';
 import { GeoEngine, resolveVenue } from '../common/utils/geo';
+import { geofenceMetersFor } from '../common/utils/geofence';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 import { eventHub } from '../common/sse/eventHub';
@@ -86,9 +88,27 @@ import { domainEvents } from '../common/events/domainEvents';
  */
 const CHECK_IN_GRACE_MS = 30 * 60 * 1000;
 
+/**
+ * Attendance service verifying volunteer check-ins via rotating HMAC-SHA256 QR tokens and calculating pro-rata karma.
+ */
 export class CheckInService {
   /**
-   * Generates a dynamic 30-second HMAC QR token for a volunteer's shift.
+   * Mints a token for one volunteer and one shift, having first checked that they still hold
+   * a seat on it. The token proves who minted it, for which shift, and when — and nothing
+   * else — which is why the seat is checked again in `verifyAndCheckIn` in case it is given
+   * up in between.
+   *
+   * `expiresInSeconds` is the distance to the next slice boundary rather than a flat thirty:
+   * a token minted at second 29 of its slice honestly reports 1. It is usable at all only
+   * because the verifier accepts a token one slice either side of the current one. What that
+   * tolerance is worth, and what it costs, is argued in `common/utils/crypto`.
+   *
+   * CHECKED_IN counts as holding a seat here, alongside CONFIRMED, so a desk can mint a fresh
+   * token for somebody who is already checked in — the first one having been spent in this
+   * process's nonce cache. A scan of that fresh token lands on the idempotent branch of
+   * `verifyAndCheckIn`. It is not the only way to reach that branch: the nonce cache is
+   * per-process, so the *original* token also verifies again on another replica or after a
+   * restart, which is the case the file header describes.
    */
   public static async generateToken(volunteerId: string, shiftId: string): Promise<{
     token: string;
@@ -116,7 +136,17 @@ export class CheckInService {
   }
 
   /**
-   * Verifies an incoming dynamic QR code and marks attendance with optional geofence verification.
+   * The scan: everything between a QR code arriving and an attendance row existing.
+   *
+   * The five gates, the order they stand in and the attack each one defeats are in the file
+   * header; the ordering decisions are argued at the lines that make them, because each was
+   * paid for by a different bug.
+   *
+   * One correction to make before reading further: an earlier version of this comment
+   * described the geofence as optional. It is not. `userCoordinates` being an optional
+   * *parameter* is the shape of the signature and not the shape of the rule — a scan that
+   * arrives without coordinates is a 400 in every environment, and there is no flag that
+   * turns it off.
    */
   public static async verifyAndCheckIn(
     token: string,
@@ -192,15 +222,24 @@ export class CheckInService {
           code: ErrorCode.MISSING_REQUIRED_FIELD,
         });
       }
-      const geoCheck = GeoEngine.isWithinGeofence(userCoordinates, venue.coordinates, 75);
+      // The radius is the venue's, not a literal. `venues.<KEY>.radiusMeters` overrides
+      // `event.campus.geofenceMeters`, which overrides 75 — see `common/utils/geofence.ts`. Both
+      // pack fields were parsed and documented as overrides and read by nothing until now, so a
+      // fork with a large venue set the number the docs told it to and its volunteers were still
+      // refused at 75 m.
+      const radiusMeters = geofenceMetersFor(venue.key);
+      const geoCheck = GeoEngine.isWithinGeofence(userCoordinates, venue.coordinates, radiusMeters);
       geofenceStatus = {
         distanceMeters: geoCheck.distanceMeters,
         maxAllowedMeters: geoCheck.maxRadiusMeters,
         passed: geoCheck.allowed,
       };
       if (!geoCheck.allowed) {
+        // The message quotes the radius actually applied. It used to say "Max allowed: 75m"
+        // regardless, so a fork that had widened a venue was told a number that was not the one
+        // it was being measured against.
         throw ApiError.forbidden(
-          `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: 75m). Move closer to the check-in terminal.`
+          `Geofence Check-In Denied: You are ${geoCheck.distanceMeters}m away from ${shift.location} (Max allowed: ${geoCheck.maxRadiusMeters}m). Move closer to the check-in terminal.`
         );
       }
     }
@@ -298,6 +337,14 @@ export class CheckInService {
     // token intact and nothing written. A crash between the claim and the write leaves a
     // CHECKED_IN registration with no attendance row, and the early short-circuit above
     // repairs that on the next scan rather than being stuck behind a unique index.
+    //
+    // The claim is a compare-and-set on the status this transition is leaving, not a
+    // read-modify-save. `reg` was read at the top of this method, several awaits ago. A
+    // cancellation that commits in that window has already released the seat and, if anybody
+    // was waiting, handed it to them — and `reg.save()` would then write CHECKED_IN straight
+    // back over it from the stale in-memory copy, silently undoing a committed cancellation
+    // and putting two people in one seat. The cancel path in `registration.service.ts` is
+    // careful to CAS for exactly this reason; this one was not.
     const claimed = await Registration.findOneAndUpdate(
       { _id: reg._id, status: { $in: [RegistrationStatus.CONFIRMED, RegistrationStatus.CHECKED_IN] } },
       { $set: { status: RegistrationStatus.CHECKED_IN, checkInTime: new Date() } },
@@ -378,14 +425,8 @@ export class CheckInService {
       throw error;
     }
 
-    // Compare-and-set on the status this transition is leaving, not a read-modify-save.
-    //
-    // `reg` was read at the top of this method, several awaits ago. A cancellation that
-    // commits in that window has already released the seat and, if anybody was waiting,
-    // handed it to them — and `reg.save()` would then write CHECKED_IN straight back over
-    // it from the stale in-memory copy, silently undoing a committed cancellation and
-    // putting two people in one seat. The cancel path twenty lines away is careful to CAS
-    // for exactly this reason; this one was not.
+    // Read only for the broadcast's display name; a missing volunteer falls back rather than
+    // failing the scan, because the attendance row is already committed by this point.
     const vol = await Volunteer.findById(volunteerId);
 
     domainEvents.emit('checkin.completed', { accountId: String(volunteerId), shiftId: String(shiftId), at: new Date() });
@@ -564,11 +605,18 @@ export class CheckInService {
       );
     }
 
-    // The graveyard badge is judged in UTC rather than the host's local zone, so the same
-    // check-in earns it (or does not) whatever region the server happens to run in.
+    // The graveyard badge is judged on the event's wall clock.
+    //
+    // It used to read `getUTCHours()`, under a comment reasoning that UTC keeps the answer the
+    // same whatever region the server runs in. That half is right and is why this does not read
+    // the host's local zone either — but it then treated UTC as the event's clock. At the shipped
+    // pack's `America/Chicago`, the window `2..5` UTC is 8 p.m. to 11 p.m. local, so the
+    // graveyard badge went to evening shifts and was unreachable by the 3:30 a.m. cleanup it is
+    // named for. Identical defect, identical cause, and one file over from the surge multiplier
+    // where it was found first — which is why the clock is now shared rather than copied.
     const earnedBadges: string[] = [];
-    const utcHour = checkIn.checkInTime.getUTCHours();
-    if (utcHour >= 2 && utcHour <= 5) earnedBadges.push('MIDNIGHT_KRAKEN');
+    const localHour = eventLocalHourOfDay(checkIn.checkInTime);
+    if (localHour >= 2 && localHour <= 5) earnedBadges.push('MIDNIGHT_KRAKEN');
     if (surge.surgeMultiplier >= 3.0) earnedBadges.push('SIEBEL_GUARDIAN');
     // Hours and badges are this service's own bookkeeping; karma is not. Routing the payout
     // through KarmaService is what keeps the daily cap and the ledger honest, and it

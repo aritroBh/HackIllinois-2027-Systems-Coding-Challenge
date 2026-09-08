@@ -25,6 +25,112 @@
  * review rounds in `docs/REVIEWS.md` are for.
  */
 import fs from 'fs';
+/**
+ * A fourth check: a backticked identifier in a document that exists nowhere in the repository.
+ *
+ * The three checks above catch a link, a script or a path that has gone stale. They do not catch
+ * the most common way documentation rots here, which is a *symbol* outliving the code: a comment
+ * or a page that names a constant, a table or an exported function that has since been renamed or
+ * deleted. `ARCHITECTURE.md` went on naming `HACKILLINOIS_VENUES` after that table was deleted and
+ * replaced by a pack read, and every other gate in this repository stayed green — the paths all
+ * resolved, the scripts all existed, the prose was simply about a thing that was no longer there.
+ *
+ * The pattern is deliberately narrow: SCREAMING_SNAKE_CASE with at least one underscore. That is
+ * specific enough to be almost always a real symbol — an env var, an enum member, a constant, a
+ * pack key — and it excludes the acronyms that would otherwise flood this (`GET`, `SSE`, `CSP`,
+ * `UTC`, `JSON`), which carry no underscore. Measured against the current tree it reports zero
+ * findings and zero false positives across every document it scans, which is the bar a gate has
+ * to clear before it is worth having: one that cries wolf gets `|| true` appended to it.
+ *
+ * No document count here on purpose. This sentence said "all sixteen documents"; the gate prints
+ * seventeen, because a document was added and nobody came back to this line. A number in prose
+ * that the program itself computes and prints on every run is a number that will rot, and the run
+ * is the authority.
+ *
+ * The haystack is every file a symbol could legitimately live in, including `content/` — pack
+ * keys like `SIEBEL_ATRIUM` and faction ids like `TEAM_RED` are real identifiers that appear only
+ * in JSON, and treating them as missing would be exactly the false alarm this avoids.
+ *
+ * **The convention this enforces: backticks mean the thing exists.** A document describing
+ * something that was deleted — and several here usefully do, because knowing what a mechanism
+ * used to be is often the point — names it in plain prose rather than in code formatting. That
+ * is a small discipline and it is what makes this check possible at all: without it there is no
+ * way to distinguish "this doc is stale" from "this doc is history".
+ *
+ * ## Why this is documents only, when the same rot is worse in source comments
+ *
+ * The obvious extension is to run the same needle over every comment in `src/`, `tests/`,
+ * `scripts/` and `public/`. It is where the failure actually lives — the deleted-symbol
+ * reference that motivated this check is itself in a `geo.ts` comment, which this gate cannot
+ * see. It was measured rather than assumed, and the measurement says no: ten unresolved
+ * identifiers, of which **one** was genuinely stale — a ratio bad enough to sink the rule.
+ *
+ * The two groups below account for eight of the remaining nine, not all of them; the tenth was
+ * not written down at the time and cannot now be reconstructed. That is stated rather than
+ * quietly rounded, because this note previously read as a complete enumeration and its numbers
+ * did not add up — 1 + 6 + 2 is 9, against a stated total of 10, and a reader checking the
+ * arithmetic would have found a case that had gone missing. The decision rested on the ratio,
+ * which is unaffected; the appearance of a full accounting was the false part.
+ *
+ * Six were named *precisely because nothing emits them* — comments in `views/quests.js`,
+ * `views/lead.js`, `app.js` and `checkEvents.mjs` whose entire point is "this looks like an event
+ * type and is not one". Under the convention above those backticks are wrong; in practice they
+ * are what tells a reader the token is an identifier being discussed rather than an English word,
+ * and removing them makes the comment worse. Two more cite things that are real but outside this
+ * repository: a browser constant, and a fictional faction used as an example in another gate's
+ * own docblock.
+ *
+ * So the rule would fire nine times out of ten on comments that are correct, which is how a gate
+ * earns a `|| true` and stops being run at all. The asymmetry is the whole reason this works on
+ * documents: a page of prose rarely needs to cite an external constant or hold up a
+ * counter-example, and a comment sitting next to code often does. Recorded here with the numbers
+ * so the next person to have this idea can skip the experiment — or bring a rule that separates
+ * the categories, which nothing mechanical yet does.
+ */
+function missingIdentifiers(docFiles, root) {
+  const haystack = [];
+  const skip = /node_modules|[/\\]\.git|[/\\]dist|\.venv|osm[/\\]cache|campus[/\\]tiles/;
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const name of entries) {
+      const full = path.join(dir, name);
+      if (skip.test(full)) continue;
+      if (fs.statSync(full).isDirectory()) { walk(full); continue; }
+      if (!/\.(ts|mjs|js|json|sh|yml)$/.test(name)) continue;
+      const body = fs.readFileSync(full, 'utf8');
+      // Comments are stripped from source files before they count as evidence that a symbol
+      // exists. Without this the gate cannot fire on the case it was built for: `geo.ts` still
+      // *mentions* `HACKILLINOIS_VENUES` in the paragraph explaining that it was deleted, and a
+      // plain substring search over the file therefore reports the symbol as alive. The first
+      // version of this check did exactly that and stayed green against a planted control —
+      // a gate that cannot fail for the input it exists to catch. JSON has no comments to strip
+      // and is passed through, which is how pack keys like `SIEBEL_ATRIUM` stay findable.
+      haystack.push(
+        /\.json$/.test(name)
+          ? body
+          : body.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1')
+      );
+    }
+  };
+  for (const dir of ['src', 'scripts', 'public', 'content', 'plugins', '.github']) walk(path.join(root, dir));
+  for (const file of ['package.json', '.env.example']) {
+    try { haystack.push(fs.readFileSync(path.join(root, file), 'utf8')); } catch { /* optional */ }
+  }
+  const hay = haystack.join('\n');
+
+  const problems = [];
+  for (const rel of docFiles) {
+    const source = fs.readFileSync(path.join(root, rel), 'utf8');
+    for (const match of source.matchAll(/`([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)`/g)) {
+      if (hay.includes(match[1])) continue;
+      const line = source.slice(0, match.index).split('\n').length;
+      problems.push(`${rel}: names \`${match[1]}\` at line ${line}, which exists nowhere in the repository`);
+    }
+  }
+  return problems;
+}
+
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -74,9 +180,25 @@ const BASES = [
  * `content/my-event/…` is the pack FORK_GUIDE walks the reader through creating, so it exists on
  * their disk and never on ours.
  */
+/*
+ * Paths a document may name that will not be on disk, with the reason each one is legitimate.
+ *
+ * The third entry is here because of a failure mode worth naming: this gate was **green on my
+ * machine and would have been red in CI**. `design/osm/cache/` is a fetch artefact, gitignored
+ * at `.gitignore:15`, and it exists locally for anyone who has run the campus fetch. A fresh
+ * clone has no such directory, so `ARCHITECTURE.md` naming it resolved for me and would not
+ * have resolved for a checkout. It was found by an external reviewer working from a
+ * `git archive` copy — which is to say, from a tree with no ignored files in it.
+ *
+ * That is the general lesson and it is worth more than the entry: **a gate that reads the
+ * filesystem is testing your working tree, not the repository.** When adding a path here, ask
+ * whether the thing is tracked; if it is generated or ignored, it belongs in this list rather
+ * than in a passing run that only passes for you.
+ */
 const INTENTIONALLY_ABSENT = [
-  /^public\/gl\/uiuc-campus\.json$/,
-  /^content\/my-event(\/|$)/,
+  /^public\/gl\/uiuc-campus\.json$/,   // baked campus model, generated by `npm run campus`
+  /^content\/my-event(\/|$)/,           // the fork guide's placeholder pack name
+  /^design\/osm\/cache(\/|$)/,         // gitignored OSM fetch cache; absent on a fresh clone
 ];
 
 /** Top-level directories a backticked path may start with to be treated as a repo path. */
@@ -107,24 +229,50 @@ for (const rel of docs) {
     }
   }
 
-  // 3. Backticked repository paths.
+  // 3. Backticked repository paths, and the line numbers attached to them.
+  //
+  // `src/presence/service.ts:608` is the clickable form an editor turns into a jump, and it is
+  // how this repository cites a specific line in prose. The first version of this rule stripped
+  // one trailing punctuation character and then looked the whole string up as a path, so every
+  // such citation was reported as a file that does not exist — a false positive on the most
+  // useful kind of reference in the docs.
+  //
+  // The fix is not to skip them. Splitting the line number off lets both halves be checked, and
+  // the second half is the one worth having: a citation that points past the end of a file is
+  // exactly the drift this gate exists to catch, and it is invisible to a reader who trusts it.
+  // What is deliberately NOT checked is whether the line still contains what the sentence says
+  // it does — no cheap check can know that, and pretending otherwise would be a gate that
+  // passes for the wrong reason.
   for (const m of text.matchAll(/`([^`\n]+)`/g)) {
     const raw = m[1].trim();
     if (!raw.includes('/') || /[ *?<>|$(){}]/.test(raw) || raw.includes('://')) continue;
     const candidate = raw.replace(/^\.\//, '').split('#')[0].replace(/[.,;:]$/, '');
-    const top = candidate.split('/')[0];
-    const looksLikeRepoPath = REPO_DIRS.has(top) || SOURCE_EXT.test(candidate);
+    const lineRef = /^(.+\.[A-Za-z0-9]+):(\d+)$/.exec(candidate);
+    const pathPart = lineRef ? lineRef[1] : candidate;
+    const lineNo = lineRef ? Number(lineRef[2]) : 0;
+    const top = pathPart.split('/')[0];
+    const looksLikeRepoPath = REPO_DIRS.has(top) || SOURCE_EXT.test(pathPart);
     if (!looksLikeRepoPath) continue;
-    if (INTENTIONALLY_ABSENT.some((re) => re.test(candidate))) continue;
+    if (INTENTIONALLY_ABSENT.some((re) => re.test(pathPart))) continue;
     // A directory reference may be written with a trailing slash.
-    const trimmed = candidate.replace(/\/$/, '');
-    if (BASES.some((base) => fs.existsSync(path.join(base, trimmed)))) continue;
+    const trimmed = pathPart.replace(/\/$/, '');
+    const base = BASES.find((b) => fs.existsSync(path.join(b, trimmed)));
+    if (base) {
+      const full = path.join(base, trimmed);
+      if (!lineNo || fs.statSync(full).isDirectory()) continue;
+      const lines = fs.readFileSync(full, 'utf8').split('\n').length;
+      if (lineNo <= lines) continue;
+      problems.push(`${rel}: names \`${candidate}\`, but ${trimmed} has only ${lines} lines`);
+      continue;
+    }
     // `src/models/*.model.ts` style wildcards are skipped above; a `<pack>` placeholder is not
     // a path anybody can check, so treat an angle-bracketed segment as intentional.
-    if (/[<>]/.test(candidate)) continue;
-    problems.push(`${rel}: names \`${candidate}\`, which does not exist`);
+    if (/[<>]/.test(pathPart)) continue;
+    problems.push(`${rel}: names \`${pathPart}\`, which does not exist`);
   }
 }
+
+problems.push(...missingIdentifiers(docs, root));
 
 if (problems.length) {
   console.error('checkDocs: FAIL');
@@ -132,4 +280,4 @@ if (problems.length) {
   process.exit(1);
 }
 
-console.log(`checkDocs: OK — ${docs.length} documents, links, npm scripts and repo paths all resolve`);
+console.log(`checkDocs: OK — ${docs.length} documents; links, npm scripts, repo paths and backticked identifiers all resolve`);

@@ -3,8 +3,9 @@
  *
  * An SOS ticket carries a karma bounty that its creator promises to the responder. Left
  * uncapped, a ticket creator mints karma: raise a ticket with a huge bounty, have a friend
- * resolve it, repeat. The per-urgency ceiling in the request schema stops a single absurd
- * ticket; this ledger stops the same ceiling being paid a hundred times in an afternoon.
+ * resolve it, repeat. The per-urgency ceiling that `SOSService.createTicket` reads off the
+ * pack — behind the request schema's own flat 500 — stops a single absurd ticket; this
+ * ledger stops the same ceiling being paid a hundred times in an afternoon.
  *
  * The whole check is one conditional update. The budget predicate
  * `spent <= budget - bounty` lives in the query, so the database decides, atomically,
@@ -87,6 +88,9 @@ export function eventDayKey(at: Date = new Date(), timeZone: string = pack.event
   }).format(at);
 }
 
+/**
+ * Karma bounty service handling high-urgency shift bounties, concurrency limits, and reward allocations.
+ */
 export class BountyService {
   /**
    * Commits `bounty` karma against `accountId`'s allowance for `day`, inside the caller's

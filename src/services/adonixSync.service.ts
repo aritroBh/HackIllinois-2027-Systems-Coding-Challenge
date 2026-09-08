@@ -9,7 +9,10 @@
  * Two properties of that keying are worth stating plainly, because both are sharp:
  *
  *  - Keying on **title** rather than an Adonix event id means a renamed event syncs as a
- *    new shift and the old one is left stranded. An upstream stable id is the fix.
+ *    new shift and the old one is left stranded. The id is not missing — `IAdonixRawEvent`
+ *    declares one and every fallback event sets it — it is simply never read. Keying the
+ *    upsert on it is the fix, and what that costs is a new field on `Shift`, which carries
+ *    no upstream id today, plus a backfill for every shift already keyed on title.
  *  - An upsert **rewrites the times** of an existing shift. If organisers have already
  *    hand-adjusted a shift, a sync silently reverts it, and volunteers are registered
  *    against times that just changed under them.
@@ -17,11 +20,27 @@
  * `POST /adonix/sync` now sits behind `requireRole('ORGANIZER')`, so the two sharp edges
  * above are an organiser's to trigger rather than anybody's. They are still sharp edges: an
  * organiser who syncs after a hand-adjustment silently reverts it. Neither is fixed here,
- * because both need an upstream stable id.
+ * and they are unrelated repairs: the first needs the shift keyed on the id described above,
+ * the second is a decision about whether a hand-adjusted time survives a re-sync — moving
+ * `startTime` and `endTime` to `$setOnInsert` would settle it and needs no id at all.
  */
 import { Shift, ShiftCategory } from '../models/shift.model';
 import { eventHub } from '../common/sse/eventHub';
 
+/**
+ * The upstream event shape, as Adonix publishes it.
+ *
+ * Hand-written from the published API and not validated at runtime: the response body is
+ * cast to this and nothing checks that the cast is true. A JSON body arriving at a route
+ * would be validated by Zod in `middleware/validate`; this arrives from a `fetch` instead,
+ * and so is validated by nobody. The blast radius is bounded by the organiser-only route and
+ * by the optional chaining on `locations` below, which was added after an upstream event
+ * carrying no `locations` array threw halfway through a sync and left it partly applied with
+ * no way to resume.
+ *
+ * Times are seconds, not milliseconds — Adonix's convention, multiplied by 1000 at the one
+ * place they become `Date`s.
+ */
 export interface IAdonixRawEvent {
   id: string;
   name: string;
@@ -40,11 +59,44 @@ export interface IAdonixRawEvent {
   isAsync: boolean;
 }
 
+/**
+ * Synchronisation service translating external Adonix hackathon event schedules into volunteer shifts.
+ */
 export class AdonixSyncService {
+  /**
+   * The schedule endpoint, hard-coded rather than read from `env.ADONIX_URL`.
+   *
+   * `ADONIX_URL` is the identity adapter's base (`src/auth/adonix.ts`), and it is kept out
+   * of content packs so that a fork cannot repoint this server at a host of its choosing by
+   * editing JSON. This constant goes one further by not being configurable at all — but the
+   * consequence is worth knowing rather than assuming: a fork running its own Adonix cannot
+   * point the sync at it. It reads HackIllinois's production schedule or it falls back to
+   * the static events below.
+   */
   private static readonly ADONIX_EVENT_ENDPOINT = 'https://adonix.hackillinois.org/event/';
 
   /**
-   * Fetches official event schedule from HackIllinois Adonix API and synthesizes volunteer shifts.
+   * Pulls the published schedule and upserts one staffing shift per event.
+   *
+   * Two things decide what this does, and the fetch is not one of them.
+   *
+   * The fetch is best-effort and silent about failing. A timeout, a DNS failure, a non-2xx
+   * status and an `events` array that came back empty all end in the same place: `rawEvents`
+   * is empty and the three hand-written events below are synced instead. That is what keeps
+   * `npm run demo` and the offline suite working, and it is also why a response saying
+   * "3 shifts synced" is not evidence that Adonix was reachable. Under `NODE_ENV=test` the
+   * network call is not attempted at all, so the fallback is the only path the suite covers.
+   *
+   * The upsert is keyed on `title`, which is `Staffing: <event name>`. Both consequences of
+   * that key are in the file header and both are sharp.
+   *
+   * `capacity`, the two occupancy counters, `manualSurgeMultiplier` and `version` are
+   * `$setOnInsert`; everything else is `$set`. That split is the load-bearing part. Those
+   * counters are the denormalised occupancy the reservation guard compares against, so
+   * rewriting them on a re-sync would reset `filledSlots` to zero under people who already
+   * hold seats, or drop `capacity` below the number of seats already sold. Times, location
+   * and karma *are* rewritten, which is the edge the file header describes rather than one
+   * this method resolves.
    */
   public static async syncOfficialEvents(): Promise<{
     syncedCount: number;
@@ -167,6 +219,20 @@ export class AdonixSyncService {
     };
   }
 
+  /**
+   * Maps an upstream event onto one of this system's shift categories.
+   *
+   * The order of the tests is the whole content of this function, because more than one of
+   * them matches at once for a real event. Food wins over everything, so a sponsored meal is
+   * staffed as FOOD. `sponsor` is tested *before* the speaker/workshop branch, so a
+   * sponsored tech talk becomes SPONSOR_RELATIONS rather than MENTOR_SUPPORT — a decision
+   * that could have gone the other way, since nothing upstream says which of the two the
+   * volunteer standing there is actually doing.
+   *
+   * Two members of `ShiftCategory` are unreachable from here: INFO_DESK and CLEANUP. Nothing
+   * in the upstream shape distinguishes them, so shifts of those kinds are created by hand
+   * and a sync never produces one.
+   */
   private static projectCategory(eventType: string, tags: string[], sponsor?: string): ShiftCategory {
     const lowerTags = tags.map((t) => t.toLowerCase());
     if (eventType === 'MEAL' || lowerTags.includes('food')) {
@@ -184,6 +250,17 @@ export class AdonixSyncService {
     return ShiftCategory.LOGISTICS;
   }
 
+  /**
+   * The number of volunteers a synthesised shift opens with.
+   *
+   * FOOD is a flat six whatever the duration. The other two scale with length — LOGISTICS at
+   * two an hour, everything else at one — and are clamped at both ends, so a fifteen-minute
+   * event still asks for a staffable two and a twelve-hour one does not ask for twelve.
+   *
+   * This is an opening bid rather than a policy: the caller writes it with `$setOnInsert`,
+   * so it applies once when the shift is first created and an organiser's later adjustment
+   * survives every re-sync.
+   */
   private static calculateCapacity(startSec: number, endSec: number, category: ShiftCategory): number {
     const durationHours = Math.max(1, (endSec - startSec) / 3600);
     if (category === ShiftCategory.FOOD) return 6;

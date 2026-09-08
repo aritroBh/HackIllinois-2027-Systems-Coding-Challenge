@@ -124,6 +124,13 @@ node scripts/checkProps.mjs
 step "documentation resolves (links, npm scripts, repo paths)"
 node scripts/checkDocs.mjs
 
+step "src/ names nothing the content pack owns"
+# CONTRIBUTING.md's oldest rule, checked rather than remembered. It had drifted badly: a
+# fifteen-building gazetteer in `common/utils/geo.ts` duplicating `venues.json` byte for byte,
+# and the seed building its territories and beacons from literals while the pack's own files
+# were validated and read by nobody.
+node scripts/checkPackDriven.mjs
+
 step "geometry winding audit"
 node --input-type=module -e "
 import * as G0 from '$ROOT/public/gl/glx.js';

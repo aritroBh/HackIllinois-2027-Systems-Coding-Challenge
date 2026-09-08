@@ -812,14 +812,29 @@ describe('presence WebSocket transport', () => {
     socket.close();
   });
 
+  /**
+   * No racing fallback here, deliberately.
+   *
+   * This waited on `ws.on('close')` against a `setTimeout(() => resolve(0), 7000)`, and the
+   * timer turned "the server was slower than seven seconds" into `expect(0).toBe(4401)` — a
+   * wrong answer rather than a timeout. The failure message named neither the clock nor the
+   * budget, so the obvious reading was "the socket closed with no code", which is the
+   * opposite of what happened: the socket had not closed *yet*.
+   *
+   * The budget was never right either. `HELLO_TIMEOUT_MS` is 5 s (src/presence/service.ts)
+   * and it is armed only once the client registers, so 7 s had to cover `makeAccount`,
+   * `signIn` and the upgrade as well — about two seconds of slack for three round trips.
+   * Alone it passed with 85 ms to spare; behind thirty-one other suites on a busy machine it
+   * lost, and cost a false accusation against another session's work.
+   *
+   * Jest's own 15 s limit is the honest fallback: it says "Exceeded timeout of 15000 ms",
+   * which is the actual problem, and it is three times the wait being measured.
+   */
   it('a client that never says hello is closed with 4401', async () => {
     const vol = await makeAccount();
     const { cookie, csrf } = await signIn(vol.id);
     const { ws } = await open({ cookie }, `nexus.v1.${csrf}`);
-    const closed = await new Promise<number>((resolve) => {
-      ws!.on('close', (code) => resolve(code));
-      setTimeout(() => resolve(0), 7000);
-    });
+    const closed = await new Promise<number>((resolve) => { ws!.on('close', resolve); });
     expect(closed).toBe(4401);
   }, 15000);
 

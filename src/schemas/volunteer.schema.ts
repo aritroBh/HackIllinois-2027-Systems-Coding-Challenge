@@ -1,7 +1,8 @@
 /**
  * Volunteer contracts.
  *
- * The create schema accepts only `{ name, email, phone, role, certifications }`, and the
+ * The create schema accepts only `{ name, email, phone, kind, certifications }` — `role` is
+ * deliberately not among them, so the ladder cannot be climbed at signup — and the
  * controller narrows further by constructing the document explicitly rather than
  * spreading the request body — so `karmaPoints`, `prestigeTier` and `badges` cannot be
  * set by a client. Those are earned server-side or not at all.
@@ -32,5 +33,24 @@ export const createVolunteerSchema = z.object({
 export const getVolunteerParamsSchema = z.object({
   params: z.object({
     id: objectId('Invalid Volunteer ObjectId'),
+  }),
+});
+
+/**
+ * `PATCH /me/faction` — choosing a side, once.
+ *
+ * The id is deliberately *not* validated against the pack here. Zod would have to be rebuilt
+ * per pack to do it, and the real check belongs next to the rule anyway: `assertPlayable` in
+ * `faction.service.ts` reads `pack.factions` and refuses NEUTRAL with a message that lists what
+ * this event's sides actually are. This schema only guarantees the field is a plausible id, so
+ * a malformed body is a 400 before it reaches a database lookup.
+ */
+export const chooseFactionSchema = z.object({
+  body: z.object({
+    faction: z
+      .string()
+      .min(1)
+      .max(40)
+      .regex(/^[A-Z][A-Z0-9_]*$/, 'A faction id is SCREAMING_SNAKE_CASE, as declared in factions.json'),
   }),
 });

@@ -8,7 +8,7 @@ HttpOnly cookie; the rest of the system only ever sees `req.account`.
 | `AUTH_MODE` | Who can call the API | Body `volunteerId` |
 |---|---|---|
 | `legacy` (default outside production) | anyone; anonymous reads and writes work | believed — this is the zero-setup demo and the original test contract |
-| `required` (forced in production) | a session cookie, except the sign-in endpoints (incl. claim-code issuance behind the organiser secret), `GET /api/v1/content`, `/health`, `/ready` | ignored; a body `volunteerId`/`proposerVolunteerId` naming someone other than your session is a 403 `IDENTITY_MISMATCH` (leads and organisers are exempt so they can act on behalf of a volunteer) |
+| `required` (forced in production) | a session cookie, except the sign-in endpoints (incl. claim-code issuance behind the organiser secret), `GET /api/v1/content`, `GET /api/v1/announcements`, `GET /api/v1/plugins` — `ANONYMOUS_ALLOW` in `src/middleware/identity.ts` is the authoritative set, and it only ever describes paths *under* `/api/v1`, because that is where this middleware is mounted. `/health` and `/ready` sit at the server root, never pass through it, and are not in that set; this row listed them as though they were | ignored; a body `volunteerId`/`proposerVolunteerId` naming someone other than your session is a 403 `IDENTITY_MISMATCH` (leads and organisers are exempt from the **403**, which is not a delegation grant — `resolveActorId` still returns the caller's own session id, so an exempt lead acts as themselves and not as the named account. Real delegation is `resolveOnBehalf`, which has its own dedicated field) |
 
 `REQUIRE_AUTH=true` is accepted as a deprecated alias for `AUTH_MODE=required`.
 

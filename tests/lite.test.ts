@@ -21,7 +21,13 @@ import path from 'path';
 type Watch = { ok: (p: unknown) => void; err: (e: unknown) => void } | null;
 
 /** Everything `lite.js` reaches for, and nothing else. */
-function harness() {
+/**
+ * @param secure Whether the page is a secure context. Real dashboard pages always are — the
+ *   shell is served from localhost or over https — so this defaults to true and the one test
+ *   that passes false is the one covering the insecure-origin branch. Modelling it as absent
+ *   would make every test in this file exercise that branch by accident.
+ */
+function harness(secure = true) {
   const watches: Watch[] = [];
   let stopWalkCalls = 0;
   const nearest = { innerHTML: '' };
@@ -65,6 +71,7 @@ function harness() {
     },
     // Stands in for game.js. `stopWalk` is the handle lite.js uses to close the other watch.
     game: { stopWalk() { stopWalkCalls++; return true; } },
+    isSecureContext: secure,
     addEventListener() {}, devicePixelRatio: 1, innerHeight: 900, console,
     setInterval: () => 1 as unknown as NodeJS.Timeout, clearInterval() {},
   };
@@ -85,6 +92,25 @@ function harness() {
     fix: (lat: number, lng: number) => watches.filter(Boolean)[0]?.ok({ coords: { latitude: lat, longitude: lng, accuracy: 5 } }),
   };
 }
+
+describe('an insecure origin is named, not waited on', () => {
+  // `navigator.geolocation` EXISTS on an insecure origin and every call fails, so an
+  // existence check cannot detect this case. Before the guard, lite mode opened a watch that
+  // could only ever fail and the readout sat on "Waiting for a location fix" indefinitely.
+  it('opens no watch and says why when the page is not a secure context', () => {
+    const h = harness(false);
+    h.lite.enable('test');
+    expect(h.live()).toBe(0);
+    expect(h.nearest.innerHTML).toContain('secure page');
+  });
+
+  it('opens a watch normally when the page IS a secure context', () => {
+    const h = harness(true);
+    h.lite.enable('test');
+    expect(h.live()).toBe(1);
+    expect(h.nearest.innerHTML).not.toContain('secure page');
+  });
+});
 
 describe('lite mode owns exactly one location watch', () => {
   it('closes the renderer\'s walk before opening its own', () => {

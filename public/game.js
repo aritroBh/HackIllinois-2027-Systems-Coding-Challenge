@@ -21,7 +21,34 @@
   const STICKER_KEY = 'nexus.stickers.v1';
   // Walk-mode persistence lives in `state.flags.__walk` (saved with the
   // stickers); the old separate `nexus.walk.v1` key was never read.
-  const PROX_RADIUS = 75;
+  /**
+   * How close you have to be to spin, in metres — the pack's number, not ours.
+   *
+   * The server stopped hardcoding this: `geofenceMetersFor()` resolves a venue's own
+   * `radiusMeters`, then `campus.geofenceMeters`, then 75. A client holding its own literal
+   * 75 is a second copy of a rule that can now move, and it fails in both directions. A pack
+   * widening the fence to 120 leaves every Spin button disabled between 75 m and 120 m for a
+   * server that would have accepted — an entitled user losing the feature silently. A pack
+   * narrowing it to 50 enables the button from 75 m in, so it posts and is refused, which is
+   * the labelled-control-that-always-fails shape this dashboard has spent the round removing.
+   *
+   * `let`, because the pack arrives after this file is parsed. 75 is the same fallback the
+   * server uses when a pack says nothing, so the two agree before the descriptor lands as
+   * well as after.
+   *
+   * **This is the campus default, not the only radius.** Each HackStop carries its own
+   * resolved `geofenceRadiusMeters`, and each venue in the content descriptor carries a
+   * resolved `geofenceMeters`; where a caller knows which stop or venue it is talking about
+   * it reads that number instead of this one. This value is for the cases with no specific
+   * subject — the proximity index and the nearest-HackStop readout.
+   *
+   * Read the resolved field and do no arithmetic. The precedence (venue, then campus, then
+   * 75) is written down once, server-side, in `geofenceMetersFor`. Recomputing it here from
+   * the raw fields would put the ordering in two languages, which is the shape that produced
+   * the duplicated gazetteer and the duplicated loot table this repository has just finished
+   * deleting — both of which agreed by coincidence until somebody checked.
+   */
+  let PROX_RADIUS = 75;
 
   const state = {
     name: 'Trainer',
@@ -52,7 +79,22 @@
     try { localStorage.setItem(STICKER_KEY, JSON.stringify(state.flags)); } catch { /* private mode */ }
   }
 
-  /** Level from karma: 1 at 0, 5 at ~800, 12 at ~6000. */
+  /**
+   * Level from karma, and the progress bar under it.
+   *
+   * Level n begins at 50·(n−1)² karma: 1 at 0, 2 at 50, 5 at 800, 12 at 6,050. Those edges are
+   * `lo` and `hi` in `levelProgress` below, and this is the inverse of that same curve — the
+   * numbers above are read off it rather than remembered. The previous version of this line
+   * said "12 at ~6000", which is level 11.
+   *
+   * There is no ceiling, and that is the difference between this ladder and the six named
+   * prestige tiers `views/me.js` draws beside it. Two ladders, one balance: this one is the
+   * client's own arithmetic and appears nowhere on the server; the tiers are the server's
+   * (`computePrestigeTier`) and top out. Neither is derived from the other.
+   *
+   * Both clamp a negative balance to 0 rather than trusting the caller: `me.js` passes a
+   * server-supplied `karma` straight in.
+   */
   const levelFor = (karma) => Math.max(1, 1 + Math.floor(Math.sqrt(Math.max(0, karma) / 50)));
   const levelProgress = (karma) => {
     const lv = levelFor(karma);
@@ -65,6 +107,19 @@
    * ------------------------------------------------------------------ */
 
   let toastTimer = null;
+  /**
+   * The duck's speech bubble. `window.game.toast`, so `lite.js`, `players.js` and `app.js`
+   * all speak through this one.
+   *
+   * Three at a time, oldest dropped: `host.prepend` puts the newest at the top and the
+   * `while` below trims the tail. `ms` is how long before this one fades; each toast owns its
+   * own two timers and removes itself, so nothing here can be cancelled by a later call.
+   *
+   * `toastTimer` is a leftover. It is assigned `null` at declaration and never given a handle,
+   * so the `clearTimeout(toastTimer)` on the last line is a no-op on every call — a survivor of
+   * a one-toast-at-a-time version. It is recorded rather than relied on: nothing is stopped by
+   * it, and a reader must not add a toast that expects to be cancelled by the next one.
+   */
   function toast(text, { ms = 4200 } = {}) {
     let host = $('duck-toasts');
     if (!host) {
@@ -139,6 +194,16 @@
     return true;
   }
 
+  /**
+   * Sort order for the sticker book: commonest first, so the wall fills left to right and the
+   * rare end is the part you scroll to.
+   *
+   * Not a validated enum anywhere. `src/content/schema.ts` types a sticker's `rarity` as
+   * `/^[A-Z_]+$/`, so a pack may ship any word at all; `indexOf` answers −1 for one this list
+   * does not name, which sorts it to the front rather than throwing. The two shipped packs
+   * between them use five of these six — nothing is MYTHIC today — and `styles.css` carries a
+   * `.rarity-*` colour for all six.
+   */
   const RARITY_ORDER = ['COMMON', 'UNCOMMON', 'RARE', 'EPIC', 'LEGENDARY', 'MYTHIC'];
 
   function renderTrainer() {
@@ -310,20 +375,151 @@
     creatorRender();
   }
 
+  /**
+   * Turn a sprite sheet into the PNG bytes `POST /api/v1/avatars` accepts.
+   *
+   * `AvatarService.upload` reads width and height out of the IHDR before decoding anything
+   * and refuses whatever is not 128x48, 128x32, 32x32 or 32x48, so the pixels are written at
+   * their own size and never scaled.
+   *
+   * Both shapes turn up here. `avatar.js`'s `sprite()` returns a **canvas** — the four-frame
+   * 128x48 walk sheet, with `frameWidth`/`frames` hung off it — while `state.head` and the
+   * creator's per-palette heads are `ImageData`. Handling only one of them is how the first
+   * version of this failed: `putImageData` threw `parameter 1 is not of type 'ImageData'`,
+   * inside a `try` whose whole job was to report upload failures, so it reported a failure
+   * to encode as though the server had refused it.
+   */
+  function sheetToPng(sheet) {
+    return new Promise((resolve) => {
+      if (typeof sheet?.toBlob === 'function') { sheet.toBlob(resolve, 'image/png'); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = sheet.width;
+      canvas.height = sheet.height;
+      canvas.getContext('2d').putImageData(sheet, 0, 0);
+      canvas.toBlob(resolve, 'image/png');
+    });
+  }
+
+  /**
+   * Send the sheet to the server, and say what the server made of it.
+   *
+   * Split out of `creatorKeep` because consent can change after the face is made: the
+   * `shareOptIn` flag is decided at upload time, and `AvatarService.upload` updates it in
+   * place when the same owner re-posts the same pixels. Without a second caller, a player who
+   * made a face while hidden and *then* turned on "Show me on the campus map" — which is
+   * exactly what the toast tells them to do — stayed invisible for ever, because nothing
+   * re-sent the consent. That is a worse failure than the original: the instruction is
+   * followed and nothing happens.
+   */
+  async function publishAvatar(sheet, share) {
+    const png = await sheetToPng(sheet);
+    if (!png) throw new Error('the browser could not encode the sheet');
+    const res = await window.Nexus.api(`/api/v1/avatars${share ? '?share=1' : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/png' },
+      body: png,
+    });
+    return res?.data?.status || null;
+  }
+
+  /**
+   * Publish the avatar, then keep it locally whatever the server said.
+   *
+   * Before shell v20 this stopped at `saveAvatar` — it went on to update the sprite, the
+   * sticker shelf and the HUD, but localStorage was as far as the *image* ever travelled, and
+   * no file in the shipped client called `POST /api/v1/avatars`. (The POST itself landed in
+   * v20; this round only split it out. An earlier draft of this paragraph dropped the word
+   * "else" from "nothing else called it" and so claimed the endpoint was unreachable in a
+   * version where this very function was already calling it.) The server half was unreachable
+   * until then: `AvatarService.upload` with its
+   * IHDR bounds check and its re-encode-to-kill-polyglots step, the pending queue, the
+   * lead console's Approve / Reject / Flag buttons, the per-owner deduplication, the takedown
+   * path. The lead's "Avatar queue" panel could never show anything, because nothing could
+   * ever be queued. `players.js` renders other trainers by avatar hash, and no account ever
+   * had one, so every trainer on the map wore the stock sprite for ever.
+   *
+   * Order matters. The local save happens regardless of the upload, because the avatar is
+   * the player's own face on their own map and a server that is down, or a moderator who
+   * later rejects the image, is no reason to hand somebody back a blank trainer. What the
+   * upload buys is everyone *else* seeing it, once a lead approves it.
+   *
+   * The failure is reported rather than swallowed. A silent catch here would recreate the
+   * exact defect this replaces — a feature that looks like it worked and did nothing.
+   */
   async function creatorKeep() {
     const A = await avatar();
     const head = creator.heads[creator.palette];
     if (!head) return;
     state.head = head;
     state.palette = creator.palette;
+    state.cap = creator.cap;
     state.sheet = creator.sheet || A.sprite(head, { faction: state.faction, cap: creator.cap });
     A.saveAvatar({ head, faction: state.faction, cap: creator.cap, palette: A.PALETTES[creator.palette] });
     applyPlayerSprite();
     award('lanyard', 'Welcome to the roster.');
     $('cre-step')?.replaceChildren(document.createTextNode('STEP 3 / 3 · SAVED'));
-    toast("Looking sharp. That's you on the map now.");
     renderTrainer();
     updateHud(true);
+
+    // Whether this face is offered to anyone else, and the consent that decides it.
+    //
+    // `?share=1` is not a detail: `AvatarService.pendingQueue` selects on
+    // `{ status: PENDING, shareOptIn: true }`, so an upload without it is stored, is pointed
+    // at by the account, and is invisible to the moderation queue for ever — uploaded and
+    // unreviewable. That filter is right, and deliberately so: it keeps a face its owner
+    // never offered from being put in front of a moderator at all.
+    //
+    // So the flag is tied to the consent the player has already given or withheld — the same
+    // "Show me on the campus map" switch that governs whether other trainers see their
+    // position. Somebody who has chosen to be invisible does not have their face queued for
+    // review as a side effect of making one, and the message below says which of the two
+    // happened rather than leaving them to guess.
+    // `presence.state.optIn` first, and deliberately: `players.js`'s `setOptIn` writes it
+    // from the server's own `PATCH /me/presence` response, so after a toggle it is the
+    // *fresher* of the two. `session.user.presenceOptIn` is only refreshed when the session
+    // reloads, which is why it is the fallback rather than the source.
+    const share = window.Nexus?.presence?.state?.optIn ?? window.Nexus?.session?.user?.presenceOptIn ?? false;
+
+    let note;
+    try {
+      const status = await publishAvatar(state.sheet, share);
+      // PENDING is the normal answer, not a problem: a face other people will see is held
+      // for a lead to look at first. REJECTED is not — these exact pixels have already been
+      // turned down, `AvatarService.upload` deduplicates per owner and hands the old row
+      // straight back, and no queue will ever list it again. Saying "a lead reviews it"
+      // there would be a promise nothing intends to keep.
+      note = status === 'REJECTED'
+        ? 'That face was reviewed and turned down. Make a different one and try again.'
+        : !share
+          ? "Looking sharp. That's you on your own map. Turn on \u201cShow me on the campus map\u201d in Me and other trainers will see it too."
+          : status === 'APPROVED'
+            ? "Looking sharp. That's you on the map now."
+            : "Looking sharp. That's you on your map now \u2014 a lead reviews it before other trainers see it.";
+    } catch (err) {
+      note = `Saved on this device, but the organisers did not get it: ${err.message}`;
+    }
+    toast(note);
+  }
+
+  /**
+   * Rebake the trainer's sheet, which is the only way the jacket colour can change.
+   *
+   * `factionColour` is read exactly once, inside `avatar.sprite()`, and the result is painted
+   * into the sheet's pixels. `applyPlayerSprite` below re-sends that finished canvas, so a
+   * repaint — however many times it runs — cannot recolour a jacket. An earlier version of
+   * this fix called `onFactionChange()` on every content settle and believed that rebuilt the
+   * sprite; it does not, and the fork whose pack arrived late kept the default jacket anyway.
+   */
+  async function rebuildSheet() {
+    if (!state.head) return;
+    try {
+      const A = await avatar();
+      state.sheet = A.sprite(state.head, { faction: state.faction, cap: state.cap !== false });
+      applyPlayerSprite();
+      renderTrainer();
+    } catch (err) {
+      console.error('Could not rebuild the trainer sheet:', err);
+    }
   }
 
   function applyPlayerSprite() {
@@ -343,11 +539,13 @@
     if (!window.campus) return;
     if (has('setPlayer')) {
       window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction });
+      if (!positionSource) positionSource = 'demo';
       applyPlayerSprite();
     }
     if (has('setProximityRadius')) window.campus.setProximityRadius(PROX_RADIUS);
     gateSpins(); // the player now exists, so measure instead of the demo fallback
-    // Proximity events fire on the 75 m edge; the tick keeps the distance labels
+    // Proximity events fire on the pack's campus edge — 75 m only when the pack says so, and
+    // `applyGeofence` moves it; the tick keeps the distance labels
     // honest while the player walks and covers a smoothing/render race.
     if (!state.gateTimer) state.gateTimer = setInterval(() => { if (window.campus?.getPlayer?.()) gateSpins(); }, 1500);
     if (state.flags.__walk && !state.walking && navigator.permissions?.query) {
@@ -377,8 +575,10 @@
    * Enable or disable each Spin button by great-circle distance from a lat/lng.
    *
    * The 3D path measures in world units through the renderer's spatial index; this measures
-   * straight from a device fix, which is what lite mode has. Both end at the same 75 m
-   * geofence, and the server measures it again — this only decides what the button says.
+   * straight from a device fix, which is what lite mode has. Each button carries the radius
+   * the server resolved for that stop, so both paths gate on the stop's own geofence rather
+   * than a single campus number — and the server measures it again regardless; this only
+   * decides what the button says.
    */
   function gateSpinsFrom(at) {
     const R = 6371000, rad = Math.PI / 180;
@@ -392,11 +592,15 @@
       const x = (lon - at.longitude) * rad * Math.cos(((at.latitude + lat) / 2) * rad);
       const y = (lat - at.latitude) * rad;
       const d = Math.round(Math.sqrt(x * x + y * y) * R);
-      const ok = d <= PROX_RADIUS;
+      const radius = Number(btn.dataset.radius) || PROX_RADIUS;
+      const cool = cooldownLeft(btn.dataset.beacon);
+      const ok = d <= radius && cool === 0;
       if (btn.disabled !== !ok) btn.disabled = !ok;
-      const label = ok ? 'Spin' : `${d} m`;
+      // The label names the actual reason. Showing a distance for a stop the player is
+      // standing on, because it is cooling down, is a lie in three characters.
+      const label = ok ? 'Spin' : cool > 0 ? coolLabel(cool) : `${d} m`;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${PROX_RADIUS} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : cool > 0 ? `Cooling down — ${cool}s left` : `Walk to within ${radius} m to spin`;
     });
   }
 
@@ -404,8 +608,15 @@
     // Lite mode: no renderer to measure with, but a real GPS fix to measure *from*. Without
     // this branch the flat map's readout said "in range — spin it!" beside a Spin button that
     // stayed disabled for ever, because the disabled branch below keys off the renderer.
+    // Same precedence as `playerCoords`: in lite mode a real fix wins over a hidden sprite.
+    //
+    // `!window.campus?.getPlayer?.()` assumed lite implies no renderer player. It does not —
+    // lite hides the canvas and leaves the renderer standing — so a trainer placed before the
+    // switch kept gating these buttons from the Quad while the phone said otherwise. The two
+    // must agree, because this decides what the button says and `playerCoords` decides what
+    // the server is told; disagreeing is how a button reads "Spin" and the spin is refused.
     const liteFix = window.Nexus?.lite?.fix;
-    if (liteFix && !window.campus?.getPlayer?.()) { gateSpinsFrom(liteFix); return; }
+    if (liteFix && (window.Nexus?.flags?.lite || !window.campus?.getPlayer?.())) { gateSpinsFrom(liteFix); return; }
     if (!has('getNearby') || !window.campus.getPlayer?.()) {
       // No renderer, or a trainer that has not been placed: there is nothing to measure, and
       // "nothing to measure" is not a reason to allow the action. This branch used to force
@@ -436,12 +647,33 @@
       const id = btn.dataset.beacon;
       let d = byId.get(id)?.distanceMeters;
       if (!Number.isFinite(d)) d = measure(btn);
-      const ok = nearIds.has(id) || (Number.isFinite(d) && d <= PROX_RADIUS);
-      const label = ok ? 'Spin' : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
+      const radius = Number(btn.dataset.radius) || PROX_RADIUS;
+      // A measured distance wins over the proximity index, and the index is only consulted
+      // when there is no distance to compare.
+      //
+      // This read nearIds.has(id) || (Number.isFinite(d) && d <= PROX_RADIUS) — unbackticked,
+      // because that line no longer exists and a backtick here is a claim you can find it.
+      // The index is built at the *campus*
+      // radius — so for a stop whose own fence is tighter than the campus default, membership
+      // of that set short-circuited past the comparison and left the button enabled from
+      // outside its geofence. The server refuses that spin, which makes it the enabled button
+      // that always fails. Caught by testing a narrowed radius as well as a widened one; only
+      // the widening direction worked.
+      // Unmeasurable falls back to the proximity index, but only when that index is not more
+      // generous than this stop's own fence. `nearIds` is built at the campus radius, so for
+      // a stop with a tighter one it would answer "near enough" for a distance its own fence
+      // rejects — enabling a button the server refuses. A geofence with no measurement fails
+      // closed; that is the rule the rest of this file already follows.
+      const cool = cooldownLeft(id);
+      const inRange = Number.isFinite(d) ? d <= radius : (radius >= PROX_RADIUS && nearIds.has(id));
+      const ok = inRange && cool === 0;
+      const label = ok ? 'Spin'
+        : cool > 0 ? coolLabel(cool)
+          : (Number.isFinite(d) ? `${Math.round(d)} m` : 'Walk closer');
       // Only touch the DOM on change: this runs on a tick while the player walks.
       if (btn.disabled !== !ok) btn.disabled = !ok;
       if (btn.textContent !== label) btn.textContent = label;
-      btn.title = ok ? 'Spin this HackStop' : `Walk to within ${PROX_RADIUS} m to spin`;
+      btn.title = ok ? 'Spin this HackStop' : cool > 0 ? `Cooling down — ${cool}s left` : `Walk to within ${radius} m to spin`;
     });
   }
 
@@ -449,7 +681,16 @@
     const on = typeof force === 'boolean' ? force : !state.walking;
     const btn = $('walk-btn');
     if (on) {
-      if (!navigator.geolocation) { toast('No geolocation on this device — use WASD on the map instead.'); return; }
+      // `!navigator.geolocation` is true only where the API is absent. It is NOT true on an
+      // insecure origin: there the object exists and every call fails, so this guard passed
+      // and the browser's own "User denied Geolocation" surfaced instead — blaming the person
+      // for what is actually the address bar. `avatar.js` already splits these two for the
+      // camera; location had no equivalent.
+      if (!navigator.geolocation) { toast('This device has no location — use WASD on the map instead.'); return; }
+      if (!window.isSecureContext) {
+        toast('Location needs a secure page (https, or localhost). Open this on localhost or over https, or walk the map with WASD.');
+        return;
+      }
       if (!has('setPlayerLatLng')) { toast('The map is still loading the player layer.'); return; }
       // Turning walking on while it is already on used to overwrite the handle and strand the
       // previous watch: two callbacks driving the sprite, and `clearWatch` only ever able to
@@ -462,12 +703,44 @@
           // Share the fix with the presence service (it decides whether to publish: the
           // opt-in, the 10 m / 5 s cadence and the accuracy gate all live there).
           window.Nexus?.presence?.publish?.(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? 999, pos.coords.heading ?? undefined);
-          if (r && !r.onCampus && !state.flags.__offCampusToldAt) {
-            state.flags.__offCampusToldAt = Date.now(); saveFlags();
-            toast("You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");
+          if (r) {
+            positionSource = r.onCampus ? 'gps' : 'gps-far';
+            positionOffBy = r.onCampus ? 0 : metresOutsideCampus(pos.coords.latitude, pos.coords.longitude);
+            updateHud(true);
+          }
+          // Said once per session, not once per lifetime.
+          //
+          // This was gated on a flag persisted to localStorage, so the one explanation of why
+          // the sprite is not moving was shown exactly once, ever, and never again on any
+          // later visit — including the visit where somebody first wonders about it. The
+          // distance is in the message now, because "off campus" and "ten thousand kilometres
+          // away" are different situations and only one of them is worth walking off.
+          if (!r?.onCampus && !offCampusToldThisSession) {
+            offCampusToldThisSession = true;
+            const km = Math.round(positionOffBy / 1000);
+            toast(km >= 5
+              ? `You are about ${km.toLocaleString()} km from campus, so the map cannot show your real position. Walk the map with WASD instead.`
+              : "You're off campus, so your sprite waits at the map edge. It'll walk with you once you're on the Quad.");
           }
         },
-        (err) => { toast(`Location unavailable: ${err.message}. WASD still works.`); toggleWalk(false); },
+        (err) => {
+          // Only a refusal turns walking off. A timeout used to, and `timeout: 15000` with
+          // `enableHighAccuracy` times out routinely on a cold fix indoors — so one tap, one
+          // wait and one toast left the button off and the feature looking broken, when the
+          // very next reading would have arrived. The watch stays open for 2 and 3; the OS
+          // keeps trying and a later fix moves the sprite with no further action.
+          const denied = err.code === 1; // PERMISSION_DENIED
+          if (!denied && geoErrorToldAt && Date.now() - geoErrorToldAt < 30000) return;
+          geoErrorToldAt = Date.now();
+          if (denied) {
+            toast('Location permission is off for this page. Turn it on in the address bar, or walk the map with WASD.');
+            toggleWalk(false);
+            return;
+          }
+          toast(err.code === 3 // TIMEOUT
+            ? 'Still looking for a location fix — this is slow indoors. Keeping at it; WASD works meanwhile.'
+            : 'No location fix right now. Keeping at it; WASD works meanwhile.');
+        },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
       );
       state.walking = true;
@@ -524,13 +797,45 @@
     if (lv) {
       syncFromCaches();
       const pct = Math.round(levelProgress(state.karma) * 100);
-      lv.innerHTML = `${state.head ? `<img class="pxi" alt="" src="${S.imageDataURL(state.head, 1)}">` : S.img('trainer', 2)}<div><div class="hud-label">${escq(state.name.toUpperCase())} · LV ${state.level}</div><div class="pxbar"><i style="width:${pct}%"></i></div><div class="hud-label fac" style="--c:${factionOf?.(state.faction)?.color || '#35B8C4'}">■ ${escq(String(state.faction).replace('TEAM_', 'TEAM '))}</div></div>`;
+      // A demo placement the player has since driven with the keyboard is no longer the drop
+      // point, and saying "DEMO POSITION" of a sprite they are steering reads as broken. This
+      // is also what keeps the `keys` branch below reachable — a state nothing can enter is
+      // the shape this repository keeps having to delete.
+      if (positionSource === 'demo') {
+        const p = window.campus?.getPlayer?.();
+        if (p && (Math.abs(p.x - -2) > 0.5 || Math.abs(p.z - -8) > 0.5)) positionSource = 'keys';
+      }
+      // The position line. Silence here was the whole problem: a demo placement and a real
+      // GPS fix looked identical, so the map appeared to claim it knew where you were.
+      const km = positionOffBy >= 1000 ? `${Math.round(positionOffBy / 1000).toLocaleString()} km` : `${Math.round(positionOffBy)} m`;
+      const where = positionSource === 'gps' ? { text: 'GPS · ON CAMPUS', cls: 'ok' }
+        : positionSource === 'gps-far' ? { text: `GPS · ${km} AWAY`, cls: 'warn' }
+          : positionSource === 'keys' ? { text: 'WALKING WITH KEYS', cls: '' }
+            : { text: 'DEMO POSITION · NOT YOUR GPS', cls: 'warn' };
+      lv.innerHTML = `${state.head ? `<img class="pxi" alt="" src="${S.imageDataURL(state.head, 1)}">` : S.img('trainer', 2)}<div><div class="hud-label">${escq(state.name.toUpperCase())} · LV ${state.level}</div><div class="pxbar"><i style="width:${pct}%"></i></div><div class="hud-label fac" style="--c:${factionOf?.(state.faction)?.color || '#35B8C4'}">■ ${escq(String(state.faction).replace('TEAM_', 'TEAM '))}</div><div class="hud-label pos ${where.cls}">${escq(where.text)}</div></div>`;
     }
 
     const ctrl = $('hud-control');
     if (ctrl) {
       const gyms = window.gymsCache || [];
-      const tally = { TEAM_KERNEL: 0, TEAM_TENSOR: 0, TEAM_SILICON: 0, NEUTRAL: 0 };
+      // Seeded from the pack, not from this repository's three ids.
+      //
+      // A hardcoded `{TEAM_KERNEL:0, TEAM_TENSOR:0, TEAM_SILICON:0, NEUTRAL:0}` meant the
+      // CAMPUS CONTROL strip under any other pack drew three phantom factions at zero and
+      // never drew the pack's real ones at all — `example-campus` rendered `0 0 0 1` for a
+      // two-team event. Non-fatal only because the `!= null` guard funnelled every real gym
+      // into NEUTRAL, which is its own lie: every stronghold reported unclaimed.
+      const tally = {};
+      for (const id of Object.keys(factionTable())) tally[id] = 0;
+      // The fallback bucket has to exist before anything falls into it. `undefined++` is `NaN`,
+      // and one `NaN` here drew `width: NaN%` for every bar — an empty strip.
+      //
+      // A valid pack always has NEUTRAL: `crossValidate` in src/content/schema.ts rejects a
+      // factions.json without one. So this fires only on a descriptor that validation would
+      // have refused — a partial or hand-edited payload — and it is defence, not a live path.
+      // Said plainly because the previous note here claimed a pack need not declare NEUTRAL,
+      // which contradicted app.js's own (correct) comment twenty lines from the same fact.
+      if (tally.NEUTRAL == null) tally.NEUTRAL = 0;
       for (const g of gyms) tally[tally[g.controllingFaction] != null ? g.controllingFaction : 'NEUTRAL']++;
       const total = Math.max(1, gyms.length);
       ctrl.innerHTML = `<div class="hud-label">CAMPUS CONTROL</div><div class="ctrl-meter">${Object.entries(tally).map(([k, n]) => `<i style="width:${(n / total) * 100}%;background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>`).join('')}</div><div class="ctrl-legend">${Object.entries(tally).map(([k, n]) => `<span><i style="background:${factionOf?.(k)?.color || '#7C8DAA'}"></i>${n}</span>`).join('')}</div>`;
@@ -546,9 +851,27 @@
       if (stop) {
         const name = stop.target?.name || (window.hackStopsCache || []).find((s) => s.beaconId === stop.id)?.name || 'HackStop';
         const d = Math.round(stop.distanceMeters);
-        const inRange = d <= PROX_RADIUS;
+        // The stop's own fence, not the campus one.
+        //
+        // This compared against `PROX_RADIUS` while the Spin button beside it compares
+        // against that stop's `data-radius`, so on a pack where the two differ the readout
+        // said "in range — spin it!" next to a disabled button, or counted down to a
+        // distance that would not enable anything. `hackStopsCache` is already being read a
+        // couple of lines above for the name; the radius is in the same row.
+        const stopRadius = Number(
+          (window.hackStopsCache || []).find((x) => String(x.beaconId) === String(stop.id))?.geofenceRadiusMeters,
+        ) || PROX_RADIUS;
+        // The same two reasons the button uses, in the same order.
+        //
+        // This computed `inRange` from distance alone, so after every successful spin the
+        // panel said "in range — spin it!" beside a button counting down 4:12. The diff that
+        // introduced `stopRadius` fixed exactly this disagreement for distance and left it
+        // standing for cooldown — one control and one caption describing the same stop and
+        // contradicting each other, which is the shape this whole pass has been removing.
+        const stopCool = cooldownLeft(stop.id);
+        const inRange = d <= stopRadius && stopCool === 0;
         const segs = 8, on = Math.max(0, Math.min(segs, Math.round(segs * (1 - Math.min(1, d / 600)))));
-        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : `walk ${d - PROX_RADIUS} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
+        near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP ${S.img('stop', 2)}</div><div class="near-name">${escq(name)}</div><div class="near-dist"><b>${d} m</b><span>${inRange ? 'in range — spin it!' : stopCool > 0 ? `cooling down · ${coolLabel(stopCool)}` : `walk ${d - stopRadius} m closer to spin`}</span></div><div class="segbar">${Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('')}</div>`;
         near.hidden = false;
       } else {
         near.innerHTML = `<div class="hud-label">NEAREST HACKSTOP</div><div class="near-dist"><span>${window.campus?.getPlayer?.() ? 'Nothing in 1.2 km. Head for the Quad.' : 'Place your trainer to start walking.'}</span></div>`;
@@ -567,6 +890,147 @@
   /* ------------------------------------------------------------------ *
    * Gym encounter (the SNES battle window)
    * ------------------------------------------------------------------ */
+
+  /**
+   * Battle theatrics.
+   *
+   * A stronghold changing hands is the biggest thing that happens in this app, and it used
+   * to be a line of text swapped in a box. Everything below is decoration over an outcome
+   * the server has already decided — it never gates, delays or alters a write — and all of
+   * it is skipped outright under `prefers-reduced-motion`, where the same beats still play
+   * out in the message line with no motion and no waiting.
+   */
+  /**
+   * Where the trainer on the map actually came from.
+   *
+   * `onCampusReady` drops a sprite at a fixed spot on the Quad so the map has somebody on it,
+   * and that placement was indistinguishable on screen from a real GPS fix — same name tag,
+   * same sprite, same "nearest HackStop" readout counting down to a distance from a position
+   * the player has never been to. Somebody standing in another country, with location
+   * permission granted, saw themselves on the Quad and reasonably concluded the app was
+   * lying. It was: it just never said which of the two it was showing.
+   *
+   * `null` until something places the trainer; then 'demo', 'gps', 'gps-far' or 'keys'.
+   */
+  let positionSource = null;
+  /** Metres from the campus bounding box when the fix is outside it; 0 otherwise. */
+  let positionOffBy = 0;
+  /** Per-session, deliberately: see the note where it is set. Reset on handover too. */
+  let offCampusToldThisSession = false;
+
+  /**
+   * A new account on this device inherits none of the previous one's position story.
+   *
+   * `positionSource` and `positionOffBy` describe *whose* GPS produced the sprite, so leaving
+   * them across a handover labels B's screen with A's provenance — `GPS · ON CAMPUS` for
+   * somebody who has granted nothing. And `offCampusToldThisSession` carried the suppression
+   * with it, so B never got the explanation A had already dismissed: the once-per-lifetime
+   * defect this round removed, recreated once per handover.
+   */
+  /** Throttles the repeating geolocation error toast; a watch re-fires on every failure. */
+  let geoErrorToldAt = 0;
+
+  function resetPositionProvenance() {
+    positionSource = window.campus?.getPlayer?.() ? 'demo' : null;
+    positionOffBy = 0;
+    offCampusToldThisSession = false;
+  }
+
+  /**
+   * Great-circle metres from a fix to the nearest edge of the campus bounding box.
+   *
+   * The renderer clamps an outside fix to the map edge and reports `onCampus: false`, which
+   * is all it needs. A person wants the number: "off campus" reads like a street away, and
+   * ten thousand kilometres is a different fact about their evening.
+   */
+  /**
+   * Seconds until this stop can be spun again, or 0.
+   *
+   * Distance is not the only thing that disables a Spin button — a stop the player spun four
+   * minutes ago is in range and still refused. `app.js` owns the record because it owns the
+   * request that learns it; this only reads it.
+   */
+  function cooldownLeft(beaconId) {
+    return (typeof window.spinCooldownLeft === 'function' ? window.spinCooldownLeft(beaconId) : 0) || 0;
+  }
+
+  /** A countdown a person can read: "4:12" rather than 252. */
+  function coolLabel(secs) {
+    return secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+  }
+
+  function metresOutsideCampus(lat, lng) {
+    const box = window.campusMeta?.bbox;
+    if (!Array.isArray(box) || box.length !== 4) return 0;
+    const [s, w, n, e] = box;
+    const clampedLat = Math.max(s, Math.min(n, lat));
+    const clampedLng = Math.max(w, Math.min(e, lng));
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (clampedLat - lat) * rad;
+    const dLng = (clampedLng - lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(lat * rad) * Math.cos(clampedLat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+
+  /** Gym ids with a battle write in flight. Outlives the stage, which is the point. */
+  const inFlight = new Set();
+
+  /**
+   * The pack's faction ids.
+   *
+   * The content descriptor first, because it is the thing the pack actually ships. The
+   * fallback is `FACTION` itself: app.js declares it as a top-level `const` and both files are
+   * classic scripts, so they share one script scope and the name resolves here — an earlier
+   * comment here claimed no such handle existed and copied this repository's three ids
+   * instead, which is the hardcoding this function was written to remove. app.js is the later
+   * `<script>`, so the binding is initialised by the time anything renders but not at parse
+   * time; the guarded read is for that window, not for the normal case.
+   */
+  function factionTable() {
+    const list = window.Nexus?.content?.factions;
+    if (Array.isArray(list) && list.length) {
+      return Object.fromEntries(list.map((f) => [f.id, true]));
+    }
+    try {
+      return Object.fromEntries(Object.keys(FACTION).map((k) => [k, true]));
+    } catch {
+      return { NEUTRAL: true };
+    }
+  }
+
+  const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const beat = (ms) => new Promise((resolve) => setTimeout(resolve, REDUCE_MOTION ? 0 : ms));
+
+  /** A number that flies up off the thing it happened to, then removes itself. */
+  function floatOff(el, text, colour) {
+    if (!el || REDUCE_MOTION) return;
+    const box = el.getBoundingClientRect();
+    const node = document.createElement('div');
+    node.className = 'enc-float';
+    node.textContent = text;
+    node.style.left = `${box.left + box.width / 2}px`;
+    node.style.top = `${box.top + box.height * 0.4}px`;
+    node.style.color = colour;
+    document.body.appendChild(node);
+    setTimeout(() => node.remove(), 1000);
+  }
+
+  /**
+   * Restart a CSS animation that may already be on the element.
+   *
+   * Re-adding a class in the same frame it was removed is a no-op — the style never changed
+   * as far as the engine is concerned — so a second hit on an already-shaking stage would
+   * not shake. Reading `offsetWidth` between the two forces the reflow that makes it change.
+   */
+  function replay(el, cls, ms) {
+    if (!el || REDUCE_MOTION) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), ms);
+  }
 
   function openEncounter(gymId) {
     const g = (window.gymsCache || []).find((x) => x._id === gymId);
@@ -588,7 +1052,7 @@
     host.innerHTML = `
       <div class="enc-stage">
         <div class="jrpg enemy">
-          <div class="plate">ENEMY GYM</div>
+          <div class="plate">${ally ? (g.controllingFaction === 'NEUTRAL' ? 'UNCLAIMED GYM' : 'ALLIED GYM') : 'ENEMY GYM'}</div>
           <div class="enc-name">${escq(g.locationName)}<small>Lv${Number(g.level) || 1}</small></div>
           <div class="hud-label" style="color:${enemyF.color}">HELD BY ${escq(enemyF.label)} · ${escq(info?.style || 'STRONGHOLD')}</div>
           <div class="hpbar"><span class="hud-label">CP</span><div class="pxbar big"><i style="width:${Math.min(100, (g.controlPoints / g.maxControlPoints) * 100)}%;background:${enemyF.color}"></i></div><span class="mono">${Number(g.controlPoints)}/${Number(g.maxControlPoints)}</span></div>
@@ -605,6 +1069,7 @@
           <div class="plate">COMMAND</div>
           <button class="cmd ${ally ? '' : 'first'}" data-action="enc-cmd" data-cmd="contest" ${ally ? 'disabled' : ''}>FIGHT <small>(−150 CP)</small></button>
           <button class="cmd ${ally ? 'first' : ''}" data-action="enc-cmd" data-cmd="reinforce" ${ally ? '' : 'disabled'}>REINFORCE <small>(+150 CP)</small></button>
+          <button class="cmd" data-action="enc-cmd" data-cmd="gauntlet" ${ally ? 'disabled' : ''}>CHALLENGE</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="bag">BAG</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="map">MAP · LOCATE</button>
           <button class="cmd" data-action="enc-cmd" data-cmd="run">RUN</button>
@@ -633,26 +1098,231 @@
     if (m) m.textContent = text;
   }
 
+  /**
+   * Play a gym's coding challenge: open it, answer it, spend the win.
+   *
+   * Three server round trips, and the identity guard after each await is load-bearing rather
+   * than defensive — a challenge is a long-lived modal, so a second encounter opening while
+   * this one waits is a real sequence, and without the guard the older flow keeps writing into
+   * the newer stage. The per-gym `inFlight` lock is reused rather than a second one invented:
+   * it is keyed by gym id and released in a `finally`, and it already solves "pressed twice".
+   */
+  async function runGauntlet(enc, g) {
+    if (!g) return;
+    if (inFlight.has(enc.gymId)) { encounterMessage('That move is already in flight. Give it a moment.'); return; }
+    const coords = window.requirePlayerCoords?.('Taking a gym');
+    if (!coords) return;
+    inFlight.add(enc.gymId);
+    const cmds = document.querySelectorAll('.jrpg.cmd .cmd');
+    cmds.forEach((b) => { b.disabled = true; });
+    try {
+      encounterMessage('Fetching the challenge…');
+      const started = await window.Nexus.api(`/api/v1/pokeshift/gyms/${enc.gymId}/gauntlet`, {
+        method: 'POST', body: { coordinates: coords },
+      });
+      if (state.encounter !== enc) return;
+      const ch = started.data;
+      const answers = await askChallenge(ch);
+      if (state.encounter !== enc) return;
+      if (!answers) { encounterMessage('Challenge closed. The clock keeps running until it expires.'); return; }
+
+      encounterMessage('Checking your answer…');
+      const judged = await window.Nexus.api(`/api/v1/pokeshift/gauntlets/${ch.attemptId}/submit`, {
+        method: 'POST', body: { answers, coordinates: window.requirePlayerCoords?.('Taking a gym') || coords },
+      });
+      if (state.encounter !== enc) return;
+      if (!judged.data.won) {
+        replay(document.querySelector('.enc-stage'), 'is-hit', 400);
+        encounterMessage(`Not this time — ${judged.data.correctCount} of ${judged.data.total} right. Try the challenge again.`);
+        return;
+      }
+
+      encounterMessage('Correct. Taking the gym…');
+      const spent = await window.Nexus.api(`/api/v1/pokeshift/gauntlets/${ch.attemptId}/spend`, {
+        method: 'POST', body: { faction: state.faction, coordinates: window.requirePlayerCoords?.('Taking a gym') || coords },
+      });
+      if (state.encounter !== enc) return;
+      replay(document.querySelector('.enc-stage'), 'is-crit', 600);
+      window.soundEngine?.playGymVictoryFanfare?.();
+      encounterMessage(spent.data.message || `${g.locationName} is yours.`);
+      window.refreshGyms();
+    } catch (err) {
+      // The server's refusal is the message. Inventing a friendlier one here is how a geofence
+      // rejection becomes "something went wrong" and a player walks away not knowing to move.
+      encounterMessage(String(err?.message || 'That did not go through.'));
+    } finally {
+      inFlight.delete(enc.gymId);
+      cmds.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  /**
+   * Render the challenge and resolve with the player's answers, or null if they backed out.
+   *
+   * The countdown runs off the server's `expiresAt`, never a client timer started here: the
+   * browser clock is not evidence, and the server refuses a late answer regardless — so a
+   * client-side clock that disagreed would only ever mislead.
+   */
+  function askChallenge(ch) {
+    return new Promise((resolve) => {
+      const msg = document.querySelector('.jrpg.msg');
+      if (!msg) { resolve(null); return; }
+      const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const fields = ch.kind === 'MULTIPLE_CHOICE'
+        ? `<div class="gaunt-choices">${(ch.choices || []).map((c, i) => `
+             <label class="gaunt-choice"><input type="radio" name="gaunt-a" value="${esc(c)}"${i === 0 ? ' checked' : ''}> <span>${esc(c)}</span></label>`).join('')}</div>`
+        : (ch.cases || []).map((c) => `
+             <label class="gaunt-field"><span class="hud-label">${esc(c.input)}</span>
+               <input type="text" class="gaunt-input" data-index="${c.index}" autocomplete="off" spellcheck="false"></label>`).join('');
+      msg.innerHTML = `
+        <div class="gaunt">
+          <div class="hud-label">CHALLENGE · ${esc(ch.difficulty)} · <span id="gaunt-clock">--</span></div>
+          <h4 class="gaunt-title">${esc(ch.title)}</h4>
+          <pre class="gaunt-prompt">${esc(ch.prompt)}</pre>
+          ${fields}
+          <div class="btn-row">
+            <button class="pb pb-sm" type="button" id="gaunt-submit">Submit</button>
+            <button class="pb pb-sm" type="button" id="gaunt-cancel">Back</button>
+          </div>
+        </div>`;
+      const deadline = new Date(ch.expiresAt).getTime();
+      const clock = document.getElementById('gaunt-clock');
+      const tick = setInterval(() => {
+        const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+        if (clock) clock.textContent = `${left}s`;
+        if (left <= 0) { clearInterval(tick); done(null); }
+      }, 500);
+      const done = (v) => { clearInterval(tick); resolve(v); };
+      document.getElementById('gaunt-submit')?.addEventListener('click', () => {
+        const answers = ch.kind === 'MULTIPLE_CHOICE'
+          ? [String(msg.querySelector('input[name="gaunt-a"]:checked')?.value || '')]
+          : Array.from(msg.querySelectorAll('.gaunt-input')).map((el) => el.value);
+        done(answers);
+      });
+      document.getElementById('gaunt-cancel')?.addEventListener('click', () => done(null));
+      msg.querySelector('.gaunt-input, input[name="gaunt-a"]')?.focus();
+    });
+  }
+
   async function encounterCommand(cmd) {
     const enc = state.encounter;
     if (!enc) return;
     const g = (window.gymsCache || []).find((x) => x._id === enc.gymId);
     switch (cmd) {
+      case 'gauntlet': {
+        await runGauntlet(enc, g);
+        return;
+      }
       case 'contest':
       case 'reinforce': {
-        encounterMessage(`${state.name.toUpperCase()} used ${cmd === 'contest' ? 'CONTEST' : 'REINFORCE'}!`);
-        const btn = document.querySelector(`.cmd[data-cmd="${cmd}"]`);
-        if (typeof battleOrFortifyGym === 'function') await battleOrFortifyGym(enc.gymId, btn);
-        const g2 = (window.gymsCache || []).find((x) => x._id === enc.gymId);
-        if (g2 && g && g2.controllingFaction !== g.controllingFaction) {
-          encounterMessage(`It's super effective! ${g2.locationName.toUpperCase()} now flies the ${factionOf(g2.controllingFaction).label} banner.`);
-          const mon = typeof monumentForGym === 'function' ? monumentForGym(g2) : null;
-          const badge = mon && window.Sprites?.gymBadges()[mon.id];
-          if (badge && g2.controllingFaction === state.faction) award(badge, 'A gym badge for the shelf.');
-        } else if (g2) {
-          encounterMessage(`${g2.locationName.toUpperCase()} is at ${g2.controlPoints}/${g2.maxControlPoints} CP.`);
+        const stage = document.querySelector('.enc-stage');
+        const target = stage?.querySelector('.jrpg.enemy');
+        const art = stage?.querySelector('.enc-art.enemy');
+        const before = Number(g?.controlPoints) || 0;
+        const attacking = cmd === 'contest';
+
+        // Lock the whole command list, not just the button that was pressed.
+        //
+        // Every command here posts, and the request below is not instant. Nothing stopped a
+        // second CONTEST from being sent while the first was still in flight, and each one is
+        // a real write against the gym: an impatient double-click spent 300 CP and two karma
+        // cooldowns on what the player read as one move. `openEncounter` re-renders on the
+        // way out, which is what re-enables them.
+        // One write per gym at a time, tracked outside the stage.
+        //
+        // Disabling the command list stops a second click on *this* stage. It does not stop
+        // the player closing the encounter mid-flight and reopening the same gym, which
+        // renders a fresh stage with fresh enabled buttons over a request that has not landed
+        // — two concurrent writes, 300 CP, for what read as one move. The stage is the wrong
+        // place to hold that state because the stage is what gets thrown away.
+        if (inFlight.has(enc.gymId)) {
+          encounterMessage('That move is already in flight. Give it a moment.');
+          break;
         }
-        setTimeout(() => state.encounter && openEncounter(enc.gymId), 1400);
+        inFlight.add(enc.gymId);
+
+        const cmds = [...(stage?.querySelectorAll('.cmd') || [])];
+        cmds.forEach((b) => { b.disabled = true; });
+
+        encounterMessage(`${state.name.toUpperCase()} used ${attacking ? 'CONTEST' : 'REINFORCE'}!`);
+
+        const btn = document.querySelector(`.cmd[data-cmd="${cmd}"]`);
+        // The request goes out first and the beat runs beside it, rather than after it.
+        //
+        // Written the other way round — `await beat(400)` and then the POST — the decoration
+        // sat in front of the write, so the server heard about the move 400 ms after the
+        // player made it. The beat still runs and the stage still takes the same time; what
+        // moved is when the request *starts*, which is the difference between the animation
+        // delaying the write and merely accompanying it.
+        //
+        // It does not change the double-submit window: the command list is disabled before
+        // the beat in both versions. That is the lock's job and it was already doing it.
+        const pending = typeof battleOrFortifyGym === 'function'
+          ? battleOrFortifyGym(enc.gymId, btn)
+          : Promise.resolve(null);
+        await beat(400);
+        let result;
+        try {
+          result = await pending;
+        } finally {
+          // `finally`, so a rejection cannot leave the gym permanently unbattleable.
+          // `battleOrFortifyGym` catches internally today and this is belt and braces, but a
+          // lock that can be stranded by an exception is a lock that eventually strands.
+          inFlight.delete(enc.gymId);
+        }
+
+        // Still the same encounter?
+        //
+        // Identity, not truthiness. `!state.encounter` only catches a dismissal; it misses
+        // the case where the player closed this stage and opened a *different* gym while the
+        // request was in flight, because `state.encounter` is then a new object and the check
+        // passes. This gym's result would have been shaken onto that gym's stage, its CP
+        // number floated over the wrong monument, and the `setTimeout` at the end would have
+        // torn the new encounter down to re-open the old one.
+        if (state.encounter !== enc) break;
+
+        if (!result) {
+          encounterMessage('That move did not land. The reason is in the console panel.');
+          cmds.forEach((b) => { b.disabled = false; });
+          break;
+        }
+
+        const captured = result.action === 'CAPTURED';
+        const delta = (Number(result.newControlPoints) || 0) - before;
+        const holder = factionOf(result.controllingFaction);
+
+        replay(stage, captured ? 'is-crit' : 'is-hit', captured ? 540 : 300);
+        replay(target, 'is-struck', 540);
+        window.fx?.burstAt(art || target, captured ? '#FCB316' : holder.color, captured ? 64 : 26);
+        if (delta) floatOff(target, `${delta > 0 ? '+' : ''}${delta} CP`, delta < 0 ? '#FF3E8C' : '#7BD88F');
+        if (Number(result.karmaAwarded) > 0) {
+          setTimeout(() => floatOff(stage?.querySelector('.jrpg.you'), `+${result.karmaAwarded} KARMA`, '#FCB316'), 240);
+        }
+        await beat(520);
+        if (state.encounter !== enc) break;
+
+        if (captured) {
+          const g3 = (window.gymsCache || []).find((x) => x._id === enc.gymId);
+          encounterMessage(`A critical hit! ${String(g3?.locationName || g?.locationName || 'The stronghold').toUpperCase()} now flies the ${holder.label} banner.`);
+          const mon = typeof monumentForGym === 'function' && g3 ? monumentForGym(g3) : null;
+          const badge = mon && window.Sprites?.gymBadges()[mon.id];
+          if (badge && result.controllingFaction === state.faction) award(badge, 'A gym badge for the shelf.');
+        } else {
+          // The server writes this line ("Inflicted 150 damage on X! 690 CP remaining."),
+          // and it is the only description of the write that cannot disagree with it.
+          encounterMessage(String(result.message || ''));
+        }
+        // `openEncounter` is what re-enables the command list, so a re-open that bails —
+        // the gym is gone from the freshly reloaded cache — would leave the stage up with
+        // every command dead and no way out but closing the dialog.
+        setTimeout(() => {
+          if (state.encounter !== enc) return;
+          openEncounter(enc.gymId);
+          if (state.encounter === enc) {
+            document.querySelectorAll('.enc-stage .cmd').forEach((b) => { b.disabled = false; });
+            encounterMessage('That stronghold is no longer on the board. Close and refresh the territory list.');
+          }
+        }, captured ? 1800 : 1400);
         break;
       }
       case 'bag':
@@ -691,14 +1361,35 @@
    * Init + delegated actions
    * ------------------------------------------------------------------ */
 
+  /** Take the pack's geofence, and re-gate anything already drawn against the old one. */
+  function applyGeofence(content) {
+    const m = Number(content?.event?.campus?.geofenceMeters);
+    if (!Number.isFinite(m) || m <= 0 || m === PROX_RADIUS) return;
+    PROX_RADIUS = m;
+    if (has('setProximityRadius')) window.campus.setProximityRadius(PROX_RADIUS);
+    gateSpins();
+    updateHud(true);
+  }
+
   async function init() {
     await window.Sprites?.ready;
+    applyGeofence(window.Nexus?.content);
+    window.Nexus?.onEvent?.('content', (content) => {
+      applyGeofence(content);
+      // The jacket is painted into the sprite sheet at bake time, and `avatar.sprite` reads
+      // the pack's palette through `factionColour`. A pack that settles *after* the sheet was
+      // baked therefore leaves the trainer in whatever colour the pre-pack default gave it —
+      // this repository's cyan if the stored side is TEAM_KERNEL, otherwise NEUTRAL grey.
+      // Only a rebake changes those pixels; a repaint re-sends the same canvas.
+      void rebuildSheet();
+    });
     try {
       const A = await avatar();
       const saved = await A.loadAvatar();
       if (saved?.head) {
         state.head = saved.head;
         state.palette = saved.palette?.name || 'SNES16';
+        state.cap = saved.cap !== false;
         state.sheet = A.sprite(saved.head, { faction: saved.faction || state.faction, cap: saved.cap !== false });
       }
     } catch (err) { console.warn('avatar unavailable:', err.message); }
@@ -713,6 +1404,15 @@
       drop.addEventListener('dragleave', () => drop.classList.remove('over'));
       drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer?.files?.[0]; if (f) creatorFromFile(f); });
     }
+    // Anything that draws from `state.head` or `levelFor` has to know when they are real.
+    //
+    // This function is async and awaits two things — `Sprites.ready` and a dynamic import of
+    // avatar.js — before `state.head` exists. `views/me.js` draws the trainer's face and
+    // level from exactly those, and it had no way to hear about this: subscribing to
+    // `Sprites.ready` was not enough, because that resolves *before* the continuation above
+    // runs, so a cold load could leave an entitled user looking at an empty face box and no
+    // level meter until some unrelated later repaint.
+    window.Nexus?.emit?.('game:ready', { hasAvatar: !!state.head });
   }
 
   const ACTIONS = {
@@ -731,7 +1431,11 @@
     walk: () => toggleWalk(),
     follow: () => toggleFollow(),
     retro: () => toggleRetro(),
-    place: () => { if (has('setPlayer')) { window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction }); applyPlayerSprite(); gateSpins(); toast('Dropped you on the Main Quad. WASD to walk.'); updateHud(true); } },
+    // "Drop me on the Quad" puts the sprite back on the demo point, so the provenance goes
+    // back to `demo` with it. Without this the label kept whatever the last GPS fix had set —
+    // `GPS · ON CAMPUS` over a sprite the player had just teleported, or `GPS · 10,077 KM
+    // AWAY` on a trainer standing on the Quad.
+    place: () => { if (has('setPlayer')) { window.campus.setPlayer({ x: -2, z: -8, name: state.name, faction: state.faction }); positionSource = 'demo'; positionOffBy = 0; applyPlayerSprite(); gateSpins(); toast('Dropped you on the Main Quad. WASD to walk.'); updateHud(true); } },
   };
 
   // Same handlers, registered into the Nexus action registry (nexus.js owns
@@ -752,6 +1456,7 @@
    * writes the old flags straight back into the key that was just emptied.
    */
   window.Nexus?.onEvent?.('session:handover', () => {
+    resetPositionProvenance();
     state.flags = {};
     state.head = null;
     state.sheet = null;
@@ -780,7 +1485,9 @@
     state, init, renderTrainer, computeEarned, award, toast, tick,
     // The spin geofence, so `lite.js` reports the same radius rather than keeping its own
     // copy of the number. The server enforces it either way; this is what the UI promises.
-    PROX_RADIUS,
+    // A getter, not a snapshot: `lite.js` reads this through `window.game`, and the value
+    // changes when the content pack settles.
+    get PROX_RADIUS() { return PROX_RADIUS; },
     gateSpins,
     /**
      * Stop the GPS watch, if one is running. Returns whether there was one.
@@ -796,6 +1503,25 @@
       return true;
     },
     onCampusReady, onProximity, gateSpins, openEncounter, closeEncounter,
+
+    /**
+     * Re-send the stored face with the consent that now applies.
+     *
+     * Called by `players.js` whenever the campus-map switch changes. Turning it on publishes
+     * a face that was uploaded privately; turning it off withdraws one, which is the same
+     * symmetry the position switch already has. No stored sheet means nothing to say.
+     */
+    async republishAvatar(share) {
+      if (!state.sheet) return false;
+      try {
+        await publishAvatar(state.sheet, !!share);
+        return true;
+      } catch (err) {
+        console.warn('[game] could not update avatar sharing:', err.message);
+        return false;
+      }
+    },
+
     handle(action, el) { const fn = ACTIONS[action]; if (fn) { fn(el); return true; } return false; },
     levelFor, levelProgress,
     onFactionChange() { syncFromCaches(); if (has('setPlayer') && window.campus.getPlayer?.()) { const p = window.campus.getPlayer(); window.campus.setPlayer({ x: p.x, z: p.z, name: state.name, faction: state.faction }); applyPlayerSprite(); } renderTrainer(); updateHud(true); },

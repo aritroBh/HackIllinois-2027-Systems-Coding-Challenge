@@ -20,12 +20,31 @@ export enum AvatarStatus {
   REJECTED = 'REJECTED',
 }
 
+/**
+ * One report against an avatar. Kept as an array on the document rather than its own
+ * collection because the count is what matters and it is bounded by the number of people at
+ * the event; there is no query that wants flags across avatars.
+ *
+ * `reporterId` is retained so the same person reporting twice can be recognised as one report
+ * rather than two — a moderation decision that has to be made from the data, so the data keeps
+ * it.
+ */
 export interface IAvatarFlag {
   reporterId: Types.ObjectId;
   reason: string;
   at: Date;
 }
 
+/**
+ * `shareOptIn` and `status` are two different gates and both must pass before other players
+ * see a sheet: the owner has to offer it and a lead has to approve it. Either one alone is not
+ * consent, and there is no auto-approval — `AvatarStatus.APPROVED` is written in exactly one
+ * place, the review call, so an unreviewed sheet stays private however long the queue is.
+ *
+ * `reviewedBy` / `reviewedAt` are the moderation audit trail. They are null on a row that was
+ * rejected by a flag takedown rather than by a person, which is how the two kinds of REJECTED
+ * are told apart.
+ */
 export interface IAvatar extends Document {
   hash: string;
   bytes: Buffer;

@@ -1,18 +1,31 @@
 # Forking this for your own hackathon
 
 Almost nothing in `src/` names a building, a faction or an event. The campus, the landmarks,
-the loot table, the palette and the fonts all live in a **content pack** under `content/`,
-and the server reads the pack rather than a literal. Forking is therefore mostly writing
-your own pack and baking your own campus. This page is the order to do it in.
+the palette and the fonts all live in a **content pack** under `content/`, and the server
+reads the pack rather than a literal. Forking is therefore mostly writing your own pack and
+baking your own campus. This page is the order to do it in.
 
-> **The one exception, and it will bite you.** Shift-location resolution does **not** read
-> the pack. `resolveVenue()` in `src/common/utils/geo.ts` matches against a hard-coded
-> `HACKILLINOIS_VENUES` table and a hard-coded keyword list, and `src/services/checkin.service.ts`
-> refuses any check-in whose shift location does not match. So a fork that follows this page
-> exactly gets a system where **every check-in is rejected** and SOS escalation reports a
-> null venue. Until `resolveVenue` reads `pack.venues` and its `hints`, you must edit that
-> gazetteer too. Everything else on this page — content, branding, the campus bake, the game
-> layer — works from the pack alone.
+> **This page used to carry three exceptions, and they are closed.** Venue resolution, the
+> seed, and the drop table each held their own copy of what the pack describes, and a fork that
+> followed only the steps below inherited HackIllinois in all three: every check-in rejected
+> because `resolveVenue()` measured against a hard-coded gazetteer, a map that started as
+> Siebel and Altgeld because the seed built gyms from inline arrays, and a drop table that
+> ignored `loot.json` entirely.
+>
+> `resolveVenue()` derives from `pack.venues` and its `hints`, and falls back to
+> `pack.event.hqVenue`. `src/seed/seedData.ts` reads `pack.territories` and `pack.beacons`.
+> `src/economy/lootTable.ts` builds the spin table from `pack.loot`. **Do not go looking for
+> the inline arrays this page used to send you to — they are gone**, and editing the services
+> to tune your event is now the wrong lever.
+>
+> `npm run pack:check` is what keeps it that way: it loads your pack, takes every string that
+> is your event's content, and fails if any of it appears in `src/`. What is left is enumerated
+> with a reason each in `scripts/pack-driven-baseline.json` — the largest remaining item is
+> that the seed's six **demo shifts** are still literals, because there is no shift schema in a
+> pack yet.
+>
+> Everything else on this page — content, branding, the campus bake — works from the pack
+> alone.
 
 `content/hackillinois-2027/` is the real HackIllinois pack, and
 `content/example-campus/` is a two-venue minimum that CI **validates** (`content:validate`);
@@ -67,6 +80,53 @@ list of cross-references the boot rejects.
 A bad pack does not start the server. That is deliberate: a typo in a venue key is a
 geofence anchored to the wrong building, and the class of bug is worth a loud failure at
 boot instead of a quiet one at 3 a.m.
+
+### Then open it in a browser and read the console. This is not optional.
+
+```sh
+CONTENT_PACK=my-event PORT=3300 QR_HMAC_SECRET=$(openssl rand -hex 24) npm run demo
+```
+
+Open `http://127.0.0.1:3300/dashboard/`, click **every tab in the nav**, and keep the
+browser console visible while you do it. You are looking for two things:
+
+1. **Any red line in the console**, with exactly one expected exception, below. The client
+   is JavaScript and a thrown exception stops the rest of the panel silently — you get a
+   blank area, not an error message. A blank panel and a panel with nothing to show look
+   identical to a reader and are not the same thing at all.
+
+   The one you *should* see before you have done §3 is
+   `Campus renderer failed: Error: campus model 404`. Your pack has no baked campus yet, so
+   there is nothing to draw. On screen the Campus tab says **No campus model** in amber and
+   puts a notice in the viewport naming your pack and the exact command to fix it
+   (`CONTENT_PACK=<your-pack> npm run campus`); every other panel keeps working. That is the
+   honest degraded state, not a bug, and it goes away when you bake. Every other red line is a
+   finding.
+
+   The console line and the on-screen text are worth reading as a pair, because the on-screen
+   half used to read "Renderer failed" over an empty grid — which names the renderer, the one
+   part that was working fine. Somebody looked at that and concluded the 3D campus had been
+   deleted. If your fork's UI ever tells you a component failed, check whether it means "this
+   component broke" or "nobody gave it anything to do"; they look identical and are not.
+
+   That exception is spelled out because a check that cries wolf on step one is a check
+   people learn to skip, which would defeat the point of this whole section.
+2. **Any name from *our* event in *your* UI.** Search the page for a venue, a team or a
+   building you did not put in your pack. Anything you find is a value hard-coded in the
+   client rather than read from your pack, and it will still be there on the day.
+
+**Why this step is written down in this much detail:** `content:validate` passes, the boot
+gate passes, `npm test` passes, and 58 plan gates pass on a pack that does this. Every one
+of those checks runs against the server, and the defects of this class live in the browser.
+The most consequential fork bug found to date was a hard-coded roster of *our* three faction
+ids in a client render path — it threw on any pack with different factions and blanked the
+entire Turf Wars board, while the API behind it returned perfectly correct data. No
+server-side check could have seen it, and no reviewer reading the code did. Opening the page
+under a second pack found it in about a minute. `docs/REVIEWS.md` carries the instance.
+
+There is deliberately no automated gate for this: catching it needs a headless browser, and
+this repository has no browser dependency. That is a real gap and it is stated here rather
+than papered over — until it closes, you are the check.
 
 ## 3. Bake your campus
 
@@ -131,10 +191,11 @@ taking over a staff account.
 The pack is data, but somebody has to author it.
 
 **The gazetteer.** `venues.json` is every place a shift can be at, with coordinates and the
-`hints` that let free-text venue names resolve. Nothing else in the pack is valid until
-these keys exist. Note the caveat at the top of this page: the pack's gazetteer is what the
-*client* and the cross-validator read, while check-in geofencing still resolves against the
-hard-coded table in `src/common/utils/geo.ts`. Both need your venues.
+`hints` that let free-text venue names resolve. Nothing else in the pack is valid until these
+keys exist, and it is the single highest-leverage file: the client, the cross-validator, the
+check-in geofence and SOS dispatch all read the same copy. `hints` are matched longest-first
+against an upper-cased shift location, so the list is order-independent — a short hint cannot
+shadow a longer one belonging to another building.
 
 **Landmarks.** `monuments.json` is the list of buildings that become territory gyms. Each
 one needs an OSM `name` to match or a verified centroid. Expect to iterate: the build
@@ -142,7 +203,97 @@ prints what each monument resolved to and how big it is, and a wrong match is vi
 the model immediately.
 
 **The game layer.** Factions, seed territories, beacons and the loot table are yours to
-balance. The example pack has the minimum that validates, not a good game.
+balance, and all four are read — editing the pack is the whole job. The example pack has the
+minimum that validates, not a good game.
+
+Two things about `loot.json` worth knowing before you tune it. Weights are **relative**: they
+are normalised against their own total, so they need not add to 100. And the item `type` must
+name something `POWER_UP_CATALOG` prices, because the pack chooses the odds while the code
+chooses the payouts — a type the catalogue does not hold refuses the boot rather than crashing
+inside somebody's spin.
+
+### Coding challenges, if you want the gauntlet
+
+Optional, and inert until you author it. When `event.gauntlet.requiredForCapture` is on, taking a
+**rival** gym requires winning a coding challenge while standing inside that gym's geofence. The
+flag defaults to false in `src/content/schema.ts`, so a fork pulling this change keeps the
+behaviour it already had, and the shipped `content/hackillinois-2027` pack is the one that turns
+it on.
+
+**If you ship no `challenges.json`, nothing breaks.** `content/example-campus` ships none: the
+loader sets `pack.challenges` to null and the mechanic simply is not there. The flag cannot lock a
+board it has nothing to unlock either — `GauntletService.requiredForCapture()` reads the challenge
+list *and* the flag, so a `true` over an empty pack is refused rather than making every rival gym
+permanently uncapturable.
+
+Two files, and only one of them ships.
+
+1. **Write the answers in the clear** in `design/challenges/<pack>.json`. Copy
+   `design/challenges/hackillinois-2027.json` for the shape. `design/` is not served and is not
+   copied into the Docker image, so plaintext is safe there and nowhere else. Set `answerSalt`
+   first — any string of at least 16 characters; the generator's own error message suggests
+   `openssl rand -hex 16`.
+2. **Generate the pack file:**
+
+```sh
+npm run gauntlet:hashes -- my-event
+```
+
+That reads the design file and writes `content/my-event/challenges.json` with every answer
+replaced by a sha256 HMAC digest, keyed on the salt. Never hand-edit the generated file. The
+reason the split exists is that `src/app.ts` serves the whole pack directory at
+`/dashboard/content`: anything you write into `content/` is a public download, so a plaintext
+answer there would be the answer key. `challengeCaseSchema` is `.strict()` for the same reason — a
+forgotten `answer` field fails validation instead of shipping quietly.
+
+Regenerate whenever you change `answerSalt`, a challenge `id`, the order of a challenge's `cases`,
+or a `normalise` rule. All four are inputs to the digest, and changing one invalidates every hash
+under it without any other symptom.
+
+The generator refuses to write rather than hand you a broken pack. It validates its own output
+against `challengesSchema`; it refuses a `PREDICT_OUTPUT` answer that appears anywhere in the text
+a player can read — title, prompt, choices, case inputs — because an answer on screen is not a
+question; and it refuses a `MULTIPLE_CHOICE` answer that is not one of that challenge's own
+`choices`, which is a question nobody could ever get right and which would only be discovered by
+somebody standing at that gym.
+
+**The fields.** `kind` is `PREDICT_OUTPUT` (a snippet, and what does it print) or
+`MULTIPLE_CHOICE` (two to six `choices`, exactly one case). `difficulty` is `EASY`, `MEDIUM` or
+`HARD`. `timeLimitSeconds` is the server's deadline for an attempt, 30 to 1800, default 300.
+`capturePower` is what a win is worth in control points when it is spent, 10 to 500, default 250 —
+the same bounds `battleGymSchema` puts on an ordinary strike, so a won gauntlet cannot express an
+attack the normal route would reject. `src/content/challenges.schema.ts` is the field-by-field
+authority and argues each of these at length.
+
+**Turn it on** in your `event.json`:
+
+```json
+"gauntlet": { "requiredForCapture": true }
+```
+
+With it on, the only thing that changes is the last hit on a rival gym: raw control points still
+grind it down, but they stop at a floor of 1 CP, and the flip needs a win spent through
+`POST /pokeshift/gauntlets/:attemptId/spend`. Reinforcing an ally and taking neutral ground are
+untouched, because gating those would break the first thirty seconds of play for the sake of the
+last one. All three gauntlet routes are on `src/routes/v1/pokestop.routes.ts` and require a
+session.
+
+**Be accurate with your players about what this is.** Nothing is executed. The whole judge is
+normalise, HMAC, `timingSafeEqual` against the digest your pack ships — it verifies answers, not
+programs, and there is no sandbox, worker or container anywhere in it. The salt stops an answer
+being *read* off the served file; it does not stop it being *guessed*, because the answer space is
+small and anyone who downloads the pack can hash candidates against the salt offline. Every player
+of a challenge also sees the same input, so a correct answer is a constant and can be passed
+around. What actually bounds cheating is physical and temporal: the geofence is checked at start
+and again at submit, the attempt carries a server-side deadline, one submission ends it, and one
+attempt is open per account at a time. Author questions that survive being known.
+
+One field not to read too much into: `rewardKarma` is carried through and reported in the submit
+response, but nothing awards it today. The karma a capture pays is the ordinary gym-capture award,
+through the existing `GYM` source and the `karmaCaps.GYM` ceiling your pack already sets. There is
+deliberately no new karma source: `content:validate` refuses a pack that leaves any
+`KARMA_SOURCES` key unpriced, so adding one would refuse the boot of every fork that had not
+edited its `event.json`.
 
 **Art.** `memorabilia.json` carries 16 x 16 pixel grids and a palette per sticker. The
 fonts named in `branding.fonts` must be families already served from `public/fonts/`,
@@ -152,9 +303,22 @@ its licence to `public/fonts/LICENSES.md`. `theme.js` maps five palette keys
 (`orange`, `blue`, `patina`, `harvest`, `prairie`) onto CSS custom properties at runtime;
 anything else in `palette` is carried but not applied.
 
-**Your own SSO, if you have one.** Adapters live beside the others in
-`src/services/auth.service.ts` and are small. Copy the Adonix one and keep its trust
-boundary.
+**Sponsor booth placards.** `npm run placards` prints the code for each booth in your pack.
+Codes are an HMAC over the booth id under `QR_HMAC_SECRET`, derived by the same function the
+scanner verifies with, so a printed code cannot disagree with the server.
+
+**Set `QR_HMAC_SECRET` before you print, and it must be the secret the event runs under.**
+`env.ts` treats the value `.env.example` ships as *unset* and generates an ephemeral per-boot
+secret — so copying `.env.example` to `.env` unchanged, which is the obvious first move, silently
+gives you codes that change on every restart. `npm run placards` refuses to print in that state
+rather than handing you a sheet of posters that stop working at the next deploy, which is the one
+failure here you cannot fix once the posters are on the tables.
+
+**Your own SSO, if you have one.** Adapters live in `src/auth/` — `adonix.ts` and `mailer.ts` are
+the two shipped ones, and they are small. Copy the Adonix one and keep its trust boundary.
+`src/services/auth.service.ts` is the *consumer* that mints a session from whichever adapter
+answered; you add a login method and an entry in `providers()` there, plus a route, but the
+adapter itself does not live in it.
 
 **Event-specific rules.** Anything that is behaviour rather than data belongs in a plugin
 rather than a fork of the services. See [PLUGINS.md](PLUGINS.md).

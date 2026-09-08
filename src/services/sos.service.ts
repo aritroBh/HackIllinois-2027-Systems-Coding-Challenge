@@ -37,6 +37,21 @@ import { sameId } from '../common/utils/id';
 import { domainEvents } from '../common/events/domainEvents';
 
 
+/**
+ * What raising a distress call needs.
+ *
+ * `coordinates` is optional in this type and mandatory in fact — `createTicket` refuses a
+ * ticket without finite ones rather than defaulting to a building, because a fabricated
+ * position sends a responder to the wrong place, which is worse than asking again.
+ *
+ * `requiredSkill` is the filter dispatch applies to the candidate pool, and naming one is a
+ * real trade: it narrows the pool to the point where a call can go unanswered rather than
+ * answered by somebody who cannot do the job. Dispatch takes that side deliberately.
+ *
+ * `karmaBounty` is a request, not a grant. The pack's per-urgency ceiling caps it, the
+ * creator's daily budget pays for it, and the responder's own daily karma cap can clamp what
+ * is actually paid out to less than the figure on the ticket.
+ */
 export interface ICreateSOSTicketDTO {
   hackerName: string;
   tableLocation: string;
@@ -158,9 +173,28 @@ export function ticketFor(
   return redactedTicket(t);
 }
 
+/**
+ * Emergency distress dispatch service coordinating hacker incident tickets, nearest responder routing, and resolution.
+ */
 export class SOSService {
   /**
-   * Hacker creates an emergency logistics / hardware help ticket.
+   * Raise a ticket.
+   *
+   * Two things here are easy to miss. The bounty is *charged*, not merely declared: the
+   * budget reservation and the ticket insert are one transaction, so there is no state in
+   * which somebody's daily budget was spent on a ticket that does not exist, or a ticket
+   * exists that nobody was charged for.
+   *
+   * And the charge does not depend on who is asking. The name says hacker; the route admits
+   * any account, and a volunteer creator draws on the same per-day budget — because
+   * exempting them leaves two volunteers free to alternate raising and resolving each
+   * other's maximum-bounty tickets, minting karma with no ceiling and no ledger row to show
+   * for it. Whether money is capped cannot depend on the kind of account spending it.
+   *
+   * The two cases with nobody to charge — a creatorless ticket, and a pack whose daily
+   * budget is zero — keep the ticket and drop the reward to nothing. The reasoning is at the
+   * line, and it is the one place in this file where a rule about money is allowed to lose
+   * to the fact that somebody needs help.
    */
   public static async createTicket(dto: ICreateSOSTicketDTO, creator?: { id?: string; kind?: string }): Promise<ISOSTicket> {
     // Fail closed rather than defaulting to a building. A ticket with a fabricated position
@@ -243,10 +277,41 @@ export class SOSService {
   }
 
   /**
-   * Spatial Nearest-Neighbor Dispatch:
-   * Finds on-duty volunteers, filters by skill certification,
-   * calculates Haversine distance to the ticket coordinates,
-   * and dispatches the closest volunteer.
+   * Send the nearest qualified responder.
+   *
+   * Four decisions, in the order the code makes them, and each has been wrong before.
+   *
+   * **The pool is tiered, then filtered — in that order.** CHECKED_IN registrations are
+   * tried first and CONFIRMED ones only when that tier comes back empty, and "empty" is
+   * decided after the on-duty window but *before* the skill filter. So a CHECKED_IN tier
+   * that holds people, none of whom carry the required certification, does not fall through
+   * to the CONFIRMED tier — it refuses the dispatch instead. That is the safe direction, but
+   * it is not what the code reads like at a glance.
+   *
+   * **On duty means both ends of the window.** A CHECKED_IN row stays that way forever if
+   * somebody forgets to check out, and a CONFIRMED row for tomorrow afternoon has an
+   * `endTime` comfortably in the future — so a start-of-window test is needed as well, with
+   * half an hour of grace either side. See `ON_DUTY_GRACE_MS` for what a missing clause here
+   * did at three in the morning.
+   *
+   * **Ranking is by source first, distance second.** Any live presence fix outranks any
+   * venue estimate, and a venue estimate outranks having no position at all, so a volunteer
+   * publishing from four hundred metres away is dispatched ahead of one whose shift venue is
+   * next door. That is intended: the venue figure says where somebody is *scheduled* to be,
+   * not where they are. A candidate with neither is kept and ranked last rather than dropped,
+   * so a lead can still see them.
+   *
+   * **The assignment is a compare-and-swap from OPEN.** Two coordinators dispatching the
+   * same ticket produce one assignment; the loser gets a 409, having already scanned every
+   * position and already written its audit row — the log records that a read happened, not
+   * that it won, which is the point of an audit. And there is deliberately no fallback to
+   * the nearest unqualified volunteer: marking a ticket DISPATCHED stops everyone else
+   * looking at it, so an honest refusal puts the call back in front of a human faster than a
+   * wrong answer does.
+   *
+   * Almost every field of the return value is two-shaped, and the notes on each say why. A
+   * dispatcher who has not *proved* they are a lead gets a redacted ticket, a bucketed
+   * distance, no position age and no candidate list.
    */
   public static async dispatchNearestVolunteer(ticketId: string, viewer?: { id?: string; role?: string; source?: string }): Promise<{
     ticket: ISOSTicket;
@@ -420,9 +485,11 @@ export class SOSService {
 
     // An unresolvable location is null, never the fallback venue.
     //
-    // `resolveVenue` answers with SIEBEL_ATRIUM and `matched: false` when it recognises
-    // nothing, which is the right default for a geofence — somewhere is better than nowhere
-    // when you are deciding whether a check-in is plausible. It is the wrong answer on a
+    // `resolveVenue` answers with the pack's `event.hqVenue` and `matched: false` when it
+    // recognises nothing. (It named SIEBEL_ATRIUM until the gazetteer became pack-driven, and
+    // that literal was the one branch a fork could never reach.) Note the fallback is a
+    // *coordinate of last resort*, not a permission: check-in reads `matched` and refuses an
+    // unrecognised location outright rather than measuring against it. It is the wrong answer on a
     // dispatch frame, where it reads as a fact: a ticket whose location the table cannot
     // parse was broadcast as being in Siebel Atrium, and a responder acting on that walks to
     // the wrong building while somebody waits somewhere else.
@@ -854,9 +921,6 @@ export class SOSService {
     return resolved;
   }
 
-  /**
-   * Lists SOS tickets with optional status filtering.
-   */
   /**
    * The ticket list, redacted for anybody who is not a lead.
    *

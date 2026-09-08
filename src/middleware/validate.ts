@@ -18,17 +18,36 @@
  * a parsed object is not worth the blast radius for the one header this app validates.
  * Anything that needs a normalised header value should normalise it at the point of use.
  *
- * A `ZodError` becomes a 422 carrying per-field `{field, message, rule}` issues, so a
- * client can point at the offending input instead of guessing. Anything else is passed
- * through untouched for the error handler to classify.
+ * A `ZodError` becomes a **400** carrying per-field `{field, message, rule}` issues, so a
+ * client can point at the offending input instead of guessing. Anything else is passed through
+ * untouched for the error handler to classify.
+ *
+ * The number has a history worth one sentence, because it was wrong in three places at once and
+ * they were fixed one at a time: an earlier version of this comment said 422, `config/swagger.ts`
+ * documented 422 on two operations, and `schemas/game.schema.ts` reasoned about a 422 branch.
+ * `ApiError.validationError` has always constructed a 400 and `tests/shifts.test.ts` has always
+ * asserted it. A generated client keyed on the documented 422 would have missed every real
+ * validation failure.
  */
 import { Request, Response, NextFunction } from 'express';
 import { AnyZodObject, ZodError } from 'zod';
 import { ApiError } from '../common/errors/apiError';
 
 /**
- * Middleware factory that validates express requests against a Zod schema.
- * Validates req.body, req.query, req.params, and req.headers.
+ * Build the validation middleware for one route's schema.
+ *
+ * All four sections are always handed to the schema, but a section the schema does not
+ * declare is neither checked nor written back: Zod strips keys it does not know about, so
+ * `parsed.body` comes out undefined and `req.body` is left exactly as it arrived. That is
+ * usually what you want — a schema declares only the sections its route has — but it means a
+ * schema with a mistyped section name silently validates nothing rather than failing. If a
+ * field reaches a controller un-normalised, that is the first thing to check.
+ *
+ * `parseAsync` rather than `parse` so a schema is free to use an async refinement. None does
+ * today; the cost of allowing it is one `await` on a path that resolves immediately.
+ *
+ * A `ZodError` becomes a 400 with per-field issues. Anything else is forwarded untouched,
+ * because a fault inside a refinement is not a client error and must not be reported as one.
  */
 export function validate(schema: AnyZodObject) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {

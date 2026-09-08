@@ -1,1 +1,11 @@
-{ "beacons": [ { "id": "BEACON_MAIN_HALL", "name": "Main Hall Supply Crate", "where": "Main Hall entrance", "venue": "MAIN_HALL" } ] }
+{
+  "beacons": [
+    {
+      "id": "BEACON_MAIN_HALL",
+      "name": "Main Hall Supply Crate",
+      "where": "Main Hall entrance",
+      "venue": "MAIN_HALL"
+    }
+  ],
+  "_about": "HackStop beacons. `venue` must be a key in venues.json; the beacon sits at that venue's coordinates. Radius precedence: this beacon's `radiusMeters`, then the venue's, then event.json's campus.geofenceMeters. The resolved number is written onto the HackStop document at seed time, so a change here takes effect on the next seed, not the next spin. Read by src/seed/seedData.ts."
+}

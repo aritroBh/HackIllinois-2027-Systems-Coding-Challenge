@@ -7,22 +7,64 @@
  * *who is asking*:
  *
  *  (a) **Authenticated request** (`req.account` set by the identity middleware) → an
- *      account bucket only — `RATE_LIMIT_MAX`/window (default 300/min) for everything,
- *      plus 90/min for mutations. Authenticated traffic never touches an IP bucket, so 300
- *      people behind one address cannot exhaust anything by polling.
+ *      account bucket on the global stack — `RATE_LIMIT_MAX`/window (default 300/min) for
+ *      everything, plus 90/min for mutations. Reads and mutations by a proven session touch
+ *      no IP bucket, so 300 people behind one address cannot exhaust anything by polling.
+ *
+ *      This said "authenticated traffic *never* touches an IP bucket", which is the kind of
+ *      universal worth checking rather than repeating. `authExchangeLimiter` is keyed
+ *      `auth:${ipOf(req)}` and carries no `skip`, so it applies to a caller who already has a
+ *      session: a signed-in organiser calling `POST /auth/claim-codes` clears the global stack
+ *      by account and then meets a shared per-IP credential bucket (30/min, 300/min trusted).
+ *      During a doorway rush that bucket is the binding constraint, and the old sentence told
+ *      a capacity planner it did not exist.
  *  (b) **Anonymous credential exchange** (`POST /auth/claim`, `/auth/magic*`, `/auth/adonix`)
- *      → 30/min/IP. Bounds brute force on 50-bit claim codes; the identity middleware
- *      mounts `authExchangeLimiter` on exactly those routes.
+ *      → 30/min/IP. Bounds brute force on 50-bit claim codes. `auth.routes.ts` mounts
+ *      `authExchangeLimiter` per route — on those three, on `/auth/dev-login`, and on the
+ *      two claim-code issuance routes, which take the organiser secret instead.
  *  (c) **Anonymous everything else** → 600/min/IP (`anonymousLimiter`). In `legacy` mode
- *      this is what the open dashboard reads use; in `required` mode only the small
- *      allow-list (`/health`, `/ready`, `/auth/providers`, `/api/v1/content`) gets here
- *      because the identity middleware 401s the rest.
+ *      this is what the open dashboard reads use; in `required` mode only `ANONYMOUS_ALLOW`
+ *      gets past the gate. That set holds **twelve** entries in development and **ten** that
+ *      are reachable in production, because `POST /auth/dev-login` and `GET /auth/dev-accounts`
+ *      are registered only when `NODE_ENV !== 'production'` (`src/routes/v1/auth.routes.ts`).
+ *      The shape is four public reads, five sign-in POSTs, two claim-code bootstrap routes and
+ *      the dev-accounts listing. `src/middleware/identity.ts` holds the authoritative set; do
+ *      not re-list it here — two earlier versions of this line gave four entries and then
+ *      thirteen, and a copied list is a list that goes stale
+ *      behind it, though note the limiter runs *before* `enforceAuthMode`, so a request the
+ *      gate is about to 401 is counted here first.
  *  (d) **IP ceiling**, 3,000/min over anonymous traffic only (`ipCeilingLimiter`) — the
  *      sum of (b)+(c) from one address. An anti-abuse stop, not a capacity control.
  *
+ * What is deliberately outside all four: every limiter here is mounted on `/api/v1` in
+ * `app.ts`, so nothing at the server root passes through one. `/health`, `/ready`, the
+ * dashboard's static assets and Swagger UI are unlimited by this file — which is the point
+ * for the static assets (they must not spend an account's budget) and simply a known gap for
+ * the two probes. `GET /api/v1/stats/events` is mounted ahead of the stack for the same
+ * reason and is bounded instead by the stream-slot table in `common/streamLimits.ts`.
+ *
  * Addresses in `TRUSTED_EGRESS_CIDRS` (the venue's egress ranges) get a 10× allowance on
- * the per-IP limiters, never an exemption: the venue is the one place a shared address is
+ * **two of the three per-IP limiters built here** — `authExchangeLimiter` and
+ * `ipCeilingLimiter` — and never an exemption. The venue is the one place a shared address is
  * legitimately hot, but it is also where an attacker on the Wi-Fi sits.
+ *
+ * `anonymousLimiter` is keyed per IP as well (`ip:${ipOf(req)}`) and is deliberately *not*
+ * widened: a venue NAT address gets the same 600/min for anonymous reads that anyone else
+ * does. That is the whole reason this sentence has to name the limiters instead of saying
+ * "the per-IP limiters".
+ *
+ * And the 10×-never-an-exemption rule stops at this file's edge: the stream-slot table in
+ * `common/streamLimits.ts` reads the same list and *skips* its PER_IP ceiling outright for a
+ * trusted address. `src/config/env.ts` enumerates all three consumers next to the variable.
+ *
+ * This sentence has now been wrong three times, which is worth more than the sentence itself.
+ * It said the ceilings "do not apply" (no per-IP limit at all — false). The correction said
+ * "the two per-IP limiters that consult them", which undercounted the consumers by missing the
+ * stream table. The correction to *that* said "the per-IP limiters *in this file*" — which
+ * fixed the cross-file half and broke the local half, because this file builds three per-IP
+ * limiters and only two of them are widened. Every version was written carefully and read as
+ * authoritative. **Enumerate; do not quantify.** Naming `authExchangeLimiter` and
+ * `ipCeilingLimiter` is checkable in a way that "the two" and "the per-IP limiters" are not.
  *
  * `TRUST_PROXY_HOPS` decides what "per IP" means. Left at 0 behind a proxy, every client
  * collapses into one bucket and the whole event shares a single allowance; `app.ts` sets
@@ -45,6 +87,17 @@ import type {} from '../common/types/account';
 
 const MINUTE_MS = 60_000;
 
+/**
+ * Every tunable in one shape, so that the limiters the process uses and the limiters the
+ * tests use differ only in these numbers.
+ *
+ * Note how little of this an operator can actually reach: `windowMs` and `accountMax` come
+ * from `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX` and `trustedCidrs` from `TRUSTED_EGRESS_CIDRS`,
+ * but the other four ceilings are literals inside `buildLimiters` with no environment variable
+ * behind them. That is deliberate — they are anti-abuse stops rather than capacity knobs to be
+ * turned at three in the morning — and it is also why they are on this interface at all: the
+ * override path exists so the tests can drive them, not so a deployment can.
+ */
 export interface LimiterOptions {
   /** Window for the per-account bucket (`RATE_LIMIT_WINDOW_MS`). The fixed per-minute buckets ignore it. */
   windowMs: number;
@@ -58,12 +111,18 @@ export interface LimiterOptions {
   authExchangeMax: number;
   /** Per-IP sum ceiling over all anonymous traffic, per minute. */
   ipCeilingMax: number;
-  /** CIDRs exempt from the credential and ceiling limiters. Defaults to `TRUSTED_EGRESS_CIDRS`. */
+  /** CIDRs given a 10× allowance on the credential and ceiling limiters, never an exemption. Defaults to `TRUSTED_EGRESS_CIDRS`. */
   trustedCidrs?: string[];
   /** Raise every ceiling to ≥ 10,000 (default: `NODE_ENV === 'test'`). */
   testMode: boolean;
 }
 
+/**
+ * One built set. They are returned together rather than individually because they only make
+ * sense stacked: `ipCeilingLimiter` is the sum bound over what `anonymousLimiter` and
+ * `authExchangeLimiter` each count separately, and `mutationLimiter` is a second, tighter
+ * budget that a request already counted by `accountLimiter` also has to fit inside.
+ */
 export interface Limiters {
   accountLimiter: RateLimitRequestHandler;
   anonymousLimiter: RateLimitRequestHandler;
@@ -76,6 +135,7 @@ export interface Limiters {
 
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
+/** Best-effort client IP for the anonymous buckets; unknown callers share one. */
 function ipOf(req: Request): string {
   return req.ip ?? req.socket?.remoteAddress ?? 'unknown';
 }
@@ -109,10 +169,24 @@ function isProvenSession(req: Request): boolean {
  */
 const skipProvenSession = () => (req: Request): boolean => isProvenSession(req);
 
+/** The four write verbs count against the mutation bucket; reads pass through. */
 function isMutation(req: Request): boolean {
   return MUTATING_METHODS.has(req.method);
 }
 
+/**
+ * Construct a fresh, independent set of limiters.
+ *
+ * Fresh matters more than it sounds: each `rateLimit()` call allocates its own in-memory
+ * store, so two sets built here share no counters. That is what lets the limiter's own tests
+ * run tiny ceilings without the singletons below — or one test file — leaking counts into the
+ * next. It is also why the singletons are built exactly once, at the bottom of this module:
+ * calling this per request would hand every caller an empty bucket.
+ *
+ * `overrides` exists for those tests, and `testMode: false` is the one that has to be passed
+ * explicitly: it defaults to `NODE_ENV === 'test'`, under which every ceiling is floored at
+ * 10,000, so a test that expects a 429 would never see one.
+ */
 export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters {
   const opts: LimiterOptions = {
     windowMs: env.RATE_LIMIT_WINDOW_MS,
@@ -205,11 +279,22 @@ export function buildLimiters(overrides: Partial<LimiterOptions> = {}): Limiters
   return { accountLimiter, anonymousLimiter, authExchangeLimiter, mutationLimiter, ipCeilingLimiter, apiRateLimiter };
 }
 
+/**
+ * The process-wide set, built once at import from `env`. Every counter the running server
+ * keeps lives in these six objects; importing this module anywhere gets the same buckets,
+ * which is the whole point.
+ */
 const defaults = buildLimiters();
 
+/** The 300/min account bucket. Not mounted anywhere directly — `apiRateLimiter` dispatches to it. */
 export const accountLimiter = defaults.accountLimiter;
+/** The 600/min per-IP bucket. Likewise reached only through `apiRateLimiter`. */
 export const anonymousLimiter = defaults.anonymousLimiter;
+/** 30/min/IP on the routes that take a credential — mounted per route in `auth.routes.ts`. */
 export const authExchangeLimiter = defaults.authExchangeLimiter;
+/** The tighter 90/min write budget, stacked on `/api/v1` after `apiRateLimiter`. */
 export const mutationLimiter = defaults.mutationLimiter;
+/** The 3,000/min anonymous sum ceiling, first in the `/api/v1` stack so it rejects cheapest. */
 export const ipCeilingLimiter = defaults.ipCeilingLimiter;
+/** The dispatcher `app.ts` actually mounts: proved session to the account bucket, everyone else to the IP bucket. */
 export const apiRateLimiter = defaults.apiRateLimiter;

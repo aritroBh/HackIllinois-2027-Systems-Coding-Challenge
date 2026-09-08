@@ -50,6 +50,17 @@ import { swaggerDocument } from './config/swagger';
 import { env } from './config/env';
 import { pack } from './content/loader';
 
+/**
+ * The assembled application, with no listener bound to it.
+ *
+ * Binding a port is `src/index.ts`'s job (via `createServer`), and keeping the two apart is
+ * what lets the suite `import { app }` and drive it through supertest in-process — no port,
+ * no teardown race between parallel suites. Importing this module is not free of side
+ * effects, though: the content pack and the rate limiters are both built at module scope by
+ * the imports above, so a pack that does not validate takes the process down at import time
+ * (`process.exit(1)` in `content/loader`, a throw under `NODE_ENV=test`) rather than failing
+ * on the first request that needs a venue.
+ */
 export const app: Application = express();
 
 // Client-IP resolution for the rate limiter. Behind a proxy or load balancer every
@@ -62,8 +73,8 @@ app.set('trust proxy', env.TRUST_PROXY_HOPS);
 // 1. Security & Core Middlewares
 //
 // The script policy is a bare `'self'`: no `'unsafe-inline'`, no CDN. Every script in
-// the app is an external file — the five dashboard modules, Swagger UI's own bundles,
-// and the avatar preview harness — so nothing legitimate needs the inline allowance,
+// the app is an external file — every module `public/index.html` loads, Swagger UI's own
+// bundles, and the avatar preview harness — so nothing legitimate needs the inline allowance,
 // and without it an injected `<script>` in any dashboard render simply does not run.
 // That is defence in depth behind `esc()`, not a replacement for it.
 //
@@ -170,6 +181,11 @@ app.get('/', (_req: Request, res: Response) => {
 // the organizer-secret gate below still applies to mutations when REQUIRE_AUTH=true — the
 // pre-M1 production posture, kept so existing deployments do not change behaviour until
 // they opt into `required`.
+//
+// Read that last clause narrowly. `REQUIRE_AUTH=true` on its own is a deprecated alias that
+// resolves AUTH_MODE to `required` (config/env.ts), and the first branch below then skips
+// the organizer-secret gate entirely. Both variables have to be set explicitly —
+// `AUTH_MODE=legacy REQUIRE_AUTH=true` — for that gate to demand the header from anybody.
 const legacyMutationAuth: typeof requireOrganizerAuth = (req, res, next) => {
   if (env.AUTH_MODE === 'required' || req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     next();
@@ -213,13 +229,18 @@ app.use(
 /**
  * Liveness for anyone; telemetry for a proved lead.
  *
- * This used to return the whole operational picture to any anonymous caller, and it is on
- * `ANONYMOUS_ALLOW` because an orchestrator has to reach it without a cookie. On a laptop that
- * is a debugging convenience. On a public URL it is a surveillance endpoint: connected stream
- * counts and the exact number of tracked people (how busy is the event, right now), the slot
- * ceilings (how much load it takes to exhaust them), presence tick timings, the plugin list,
- * and `jobs[].lastError` — a background job's error text, which is the one field here that can
- * carry an internal detail nobody chose to publish.
+ * This used to return the whole operational picture to any anonymous caller, and it has to
+ * stay reachable without a cookie because an orchestrator's probe has none. Note where that
+ * reachability actually comes from: this route is mounted at the server root, not under
+ * `/api/v1`, so `enforceAuthMode` and every rate limiter are mounted past it and none of them
+ * runs here. It is not on `ANONYMOUS_ALLOW` — that set only governs paths inside `/api/v1` —
+ * and an earlier version of this comment said it was.
+ *
+ * On a laptop an open telemetry endpoint is a debugging convenience. On a public URL it is a
+ * surveillance endpoint: connected stream counts and the exact number of tracked people (how
+ * busy is the event, right now), the slot ceilings (how much load it takes to exhaust them),
+ * presence tick timings, the plugin list, and `jobs[].lastError` — a background job's error
+ * text, which is the one field here that can carry an internal detail nobody chose to publish.
  *
  * A health check needs to say "the process is alive", and that is what an anonymous caller
  * gets now. Everything a human actually debugs with is still here for a lead who has proved

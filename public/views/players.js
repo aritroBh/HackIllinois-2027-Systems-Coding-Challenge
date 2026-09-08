@@ -10,7 +10,8 @@
  * only while they are actually walking. Inbound: snapshots and deltas of everyone within
  * 300 m, plus cluster counts beyond that, fed straight into `campus.setPlayers`.
  *
- * Privacy is symmetric and opt-in. While `presenceOptIn` is false the client neither
+ * Presence is opt-in, and symmetric **between trainers** — not against a lead. While
+ * `presenceOptIn` is false the client neither
  * publishes nor receives, and the server enforces the same rule — the toggle in Me →
  * Settings is the only way in.
  */
@@ -24,6 +25,25 @@
   const MAX_WS_FAILURES = 2;
   const BACKOFF_MIN_MS = 1000;
   const BACKOFF_MAX_MS = 30000;
+  /**
+   * How long a refusal keeps speaking for.
+   *
+   * The server never acknowledges an accepted sample — success is silence — so a refusal
+   * cannot be cleared by its opposite. It expires instead. A standing problem re-nacks every
+   * couple of seconds and keeps the message alive; a one-off stops repeating and it fades.
+   * Longer than SEND_INTERVAL_MS, or a healthy sender would flicker between the two states.
+   */
+  const REFUSAL_TTL_MS = 12000;
+  /**
+   * `TOO_FAST` costs one sample and nothing else — `store.ts` is explicit that it is a single
+   * implausible jump a phone can produce without anybody lying. A standing problem re-nacks
+   * and refreshes this, so the only thing the shorter life changes is how long a *recovered*
+   * one-off keeps talking: with the common TTL the chip reported a skipped reading for about
+   * seven seconds after the next sample had already been accepted. Still longer than
+   * SEND_INTERVAL_MS, so a repeating jump does not flicker.
+   */
+  const TRANSIENT_REFUSAL_TTL_MS = 6000;
+  const ttlFor = (reason) => (reason === 'TOO_FAST' ? TRANSIENT_REFUSAL_TTL_MS : REFUSAL_TTL_MS);
 
   const state = {
     ws: null,
@@ -44,6 +64,11 @@
     clusters: [],
     lastSent: 0,
     lastSentLatLng: null,
+    /** Accuracy of the last sample we sent, so an INACCURATE refusal can quote it back. */
+    lastSentAcc: null,
+    /** { reason, at, acc, lat, lng } — the most recent server refusal, or null. */
+    refusal: null,
+    refusalTimer: null,
     lastFrameAt: 0,
     tick: 0,
     serverTimeSkew: 0,
@@ -167,8 +192,13 @@
         N.emit('presence:mode', { mode: msg.mode });
         break;
       case 'nack':
-        if (msg.reason === 'OPT_OUT') { state.optIn = false; paintChip(); }
-        N.emit('presence:nack', { reason: msg.reason });
+        if (msg.reason === 'OPT_OUT') { state.optIn = false; }
+        // Every reason used to stop here: emitted, and read by one listener that discarded it
+        // and repainted. The server was refusing every sample and the chip went on saying
+        // "Visible", which is why this feature read as broken rather than strict.
+        noteRefusal(msg.reason);
+        paintChip();
+        N.emit('presence:nack', { reason: msg.reason, line: api.refusalLine() });
         break;
       default:
         break;
@@ -303,7 +333,19 @@
 
   async function postPosition(lat, lng, acc, heading) {
     try {
-      await N.api('/api/v1/presence', { method: 'POST', body: { lat, lng, acc, h: heading }, lenient: true });
+      // The reply carries `{ accepted, reason }` and this used to discard the whole thing, so
+      // on the fallback transport the server said exactly why it dropped your position and
+      // the answer went into a variable nobody read. Both transports report every refusal
+      // now (the socket answers everything but `RATE`); this path has always reported all of
+      // them, which for a while made it the only place some could be observed at all.
+      const res = await N.api('/api/v1/presence', { method: 'POST', body: { lat, lng, acc, h: heading }, lenient: true });
+      const reason = res?.data?.reason;
+      if (res?.data?.accepted === false && reason) {
+        if (reason === 'OPT_OUT') state.optIn = false;
+        noteRefusal(reason);
+        paintChip();
+        N.emit('presence:nack', { reason, line: api.refusalLine() });
+      }
     } catch (err) {
       console.debug('[players] presence post failed', err.message);
     }
@@ -331,6 +373,10 @@
     if (moved < SEND_DISTANCE_M && now - state.lastSent < SEND_INTERVAL_MS) return false;
     state.lastSent = now;
     state.lastSentLatLng = here;
+    // Kept so an INACCURATE refusal can quote the figure back. The server's nack carries the
+    // reason and no numbers, and "your fix is 120 m and the map needs 50" is the difference
+    // between a message you can act on and one you cannot.
+    state.lastSentAcc = acc;
     if (state.mode === 'ws') {
       return send({ t: 'pos', lat, lng, acc, h: heading });
     }
@@ -351,6 +397,15 @@
     paintChip();
     if (state.optIn) api.start();
     else api.stop();
+    // The face follows the switch.
+    //
+    // An avatar's `shareOptIn` is fixed at upload time, so a player who made their trainer
+    // while hidden and then turned this on kept a face the moderation queue could not see
+    // and nobody else could fetch — after doing exactly what the app told them to do. Going
+    // the other way matters more: turning the switch off has to withdraw the face as well as
+    // the position, or "hidden" would be true of where you are and false of what you look
+    // like. Re-posting the same pixels is how `AvatarService.upload` updates the flag.
+    await window.game?.republishAvatar?.(state.optIn);
     return state.optIn;
   };
 
@@ -392,7 +447,21 @@
     state.peers.clear();
     state.slots.clear();
     state.clusters = [];
+    // A refusal belongs to the account that earned it and to the connection it arrived on.
+    // Without this the handover path (`stop({ tellServer: false })`) left the previous
+    // account's explanation on the chip for whoever sat down next — the same "someone else's
+    // state presented as yours" shape as the departing account's shifts on the quest board —
+    // and the pending timer then fired a `presence:nack` into a torn-down transport.
+    state.refusal = null;
+    clearTimeout(state.refusalTimer);
+    state.refusalTimer = null;
+    state.lastSentAcc = null;
+    state.lastSentLatLng = null;
     pushToMap();
+    // Clearing the refusal above is not enough on its own: the chip holds rendered text, and
+    // nothing else in this path repaints it, so the previous account's explanation stayed on
+    // screen after the state behind it was gone.
+    paintChip();
     if (tellServer) void N.api('/api/v1/presence', { method: 'DELETE', lenient: true });
     N.emit('presence:transport', { mode: 'off' });
   };
@@ -411,7 +480,7 @@
       .slice(0, 12);
     const total = state.peers.size + state.clusters.reduce((s, c) => s + c[2], 0);
     if (!rows.length) {
-      host.innerHTML = `<div class="empty-state">${state.optIn ? 'Nobody nearby yet.' : 'Presence is off. Turn it on in Me → Settings to see other trainers.'}</div>`;
+      host.innerHTML = `<div class="empty-state">${state.optIn ? 'Nobody nearby yet.' : 'You are hidden. Turn on "Show me on the campus map" in Me to see other trainers.'}</div>`;
       return;
     }
     host.innerHTML = `<div class="nearby-head"><b>${total}</b> trainer${total === 1 ? '' : 's'} on campus</div>` +
@@ -426,19 +495,134 @@
 
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /** Great-circle metres from a fix to the nearest edge of the pack's campus box. */
+  function metresOutsideCampus(lat, lng) {
+    const bbox = N.content?.event?.campus?.bbox;
+    if (!Array.isArray(bbox) || bbox.length !== 4) return NaN;
+    const [minLat, minLng, maxLat, maxLng] = bbox;
+    const nearLat = Math.min(Math.max(lat, minLat), maxLat);
+    const nearLng = Math.min(Math.max(lng, minLng), maxLng);
+    return metresBetween({ lat, lng }, { lat: nearLat, lng: nearLng });
+  }
+
+  function humanDistance(m) {
+    if (!Number.isFinite(m)) return null;
+    return m >= 2000 ? `${Math.round(m / 1000).toLocaleString()} km` : `${Math.round(m)} m`;
+  }
+
+  /**
+   * Turn a server refusal into something a person can act on.
+   *
+   * These seven are NOT synonyms and must not be collapsed into one string. `store.ts` is
+   * explicit about it: TOO_FAST is one implausible jump, "which a phone can produce without
+   * anybody lying", and costs only that sample; SPEED_STRIKE is the third in a row and the
+   * only one that means a mute; INACCURATE "never counts towards either — a poor fix is a bad
+   * radio, not a lie". So the tone differs as much as the text: the accuracy case blames the
+   * radio, the speed cases must not read as an accusation of cheating, and OPT_OUT is not a
+   * failure at all.
+   *
+   * No mute duration is quoted. `muteMs` is a literal in `src/presence/store.ts` and is not
+   * published in the content descriptor, so any number here would be a claim the client
+   * cannot source and would silently rot if the server's constant changed.
+   *
+   * Returns null for the reasons that should stay quiet.
+   */
+  function describeRefusal(r) {
+    const maxAcc = N.content?.event?.presence?.maxAccuracyMeters;
+    switch (r?.reason) {
+      case 'INACCURATE': {
+        const acc = Number.isFinite(r.acc) ? Math.round(r.acc) : null;
+        const need = Number.isFinite(maxAcc) ? `${maxAcc} m` : 'a closer fix';
+        return {
+          chip: 'Waiting for a sharper fix',
+          line: acc
+            ? `Your device puts you within about ${acc} m. The map needs ${need} or better, so it is not showing you yet. Accuracy usually improves outdoors and away from big buildings.`
+            : `Your device did not report how accurate its position is, so the map is not showing you. Accuracy usually improves outdoors and away from big buildings.`,
+        };
+      }
+      case 'OFF_CAMPUS': {
+        const d = humanDistance(metresOutsideCampus(r.lat, r.lng));
+        return {
+          chip: 'Off the campus map',
+          line: d
+            ? `You are about ${d} outside the campus this event covers, so you do not appear on the map.`
+            : 'You are outside the campus this event covers, so you do not appear on the map.',
+        };
+      }
+      case 'TOO_FAST':
+        return {
+          chip: 'Skipped a reading',
+          line: 'One position reading jumped further than walking speed, so it was skipped. Phones do this indoors; nothing else happens.',
+        };
+      case 'SPEED_STRIKE':
+        return {
+          chip: 'Paused on the map',
+          line: 'Your position jumped too far several times over, so the map has paused you briefly. It clears on its own.',
+        };
+      case 'MUTED':
+        return { chip: 'Paused on the map', line: 'Still paused on the map. It clears on its own.' };
+      // OPT_OUT is the user's own switch, and RATE is the normal cadence. Neither is a fault
+      // and neither gets an error-shaped anything.
+      case 'OPT_OUT':
+      case 'RATE':
+      default:
+        return null;
+    }
+  }
+
+  /** The live refusal, or null once it has aged out. */
+  function currentRefusal() {
+    const r = state.refusal;
+    if (!r) return null;
+    if (Date.now() - r.at > ttlFor(r.reason)) { state.refusal = null; return null; }
+    return describeRefusal(r) ? r : null;
+  }
+
+  function noteRefusal(reason) {
+    // OPT_OUT is not a refusal to report — it is the switch doing what it was asked.
+    if (reason === 'OPT_OUT' || reason === 'RATE') return;
+    state.refusal = {
+      reason,
+      at: Date.now(),
+      acc: state.lastSentAcc,
+      lat: state.lastSentLatLng?.lat,
+      lng: state.lastSentLatLng?.lng,
+    };
+    // Repaint once when it ages out, so the chip stops reporting a problem that has stopped.
+    clearTimeout(state.refusalTimer);
+    state.refusalTimer = setTimeout(() => { paintChip(); N.emit('presence:nack', { reason: null }); }, ttlFor(reason) + 100);
+  }
+
   function paintChip() {
     const el = document.getElementById('presence-chip');
     if (!el) return;
     const detail = state.detail === 'clusters' ? ' · crowd counts only'
       : state.detail === 'reduced' ? ' · nearest only'
       : '';
-    el.textContent = state.optIn
-      ? (state.mode === 'off' ? 'Presence connecting…' : `Visible · ${state.mode.toUpperCase()}${detail}`)
-      : 'Presence off';
+    // A refusal outranks the transport state. Reporting "Visible" while the server is
+    // dropping every sample is not merely unhelpful, it asserts the opposite of what is
+    // happening — which is what made this feature look broken rather than strict.
+    const refused = currentRefusal();
+    const described = refused && describeRefusal(refused);
+    // "WS" / "SSE" named the transport, which is ours to worry about and not the player's —
+    // and the two are chosen automatically, so it was a detail nobody could act on. What a
+    // person wants from this chip is whether they are on the map.
+    el.textContent = !state.optIn ? 'Hidden'
+      : state.mode === 'off' ? 'Getting you on the map…'
+        : described ? described.chip
+          : `On the map${detail}`;
     el.dataset.on = state.optIn ? '1' : '0';
+    el.dataset.refused = described ? '1' : '0';
+    el.title = described ? described.line : '';
     const toggle = document.getElementById('pref-visible');
     if (toggle) toggle.checked = state.optIn;
   }
+
+  /** The sentence for the Me tab, or null when there is nothing wrong. */
+  api.refusalLine = function refusalLine() {
+    const r = currentRefusal();
+    return r ? describeRefusal(r)?.line ?? null : null;
+  };
 
   N.registerAction('player-card', (el) => {
     const id = el?.dataset?.player;

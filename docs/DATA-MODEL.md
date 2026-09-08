@@ -1,6 +1,6 @@
 # The data model
 
-Twenty-three collections. `ARCHITECTURE.md` §2 draws the entity-relationship diagram for the
+Twenty-four collections. `ARCHITECTURE.md` §2 draws the entity-relationship diagram for the
 scheduling core; this page is the complete list, including the ledgers, the auth tables and the
 audit tables that the ERD does not draw, and it explains *why each one exists as its own
 collection* rather than as a field on something else.
@@ -24,7 +24,7 @@ The mechanisms everything else uses:
 | Primitive | What it buys | Where you see it |
 |---|---|---|
 | **A unique compound index** | "at most one of these, ever" — enforced by the database, not by a check in application code that two concurrent requests can both pass | `boothScan(accountId, boothId)`, `stickerLedger(accountId, stickerId)`, `karmaLedger(accountId, source, day)`, `questProgress(accountId, questId, windowKey)`, `raidJoin(raidId, accountId)`, `powerup(volunteerId, itemType)` |
-| **A conditional update (CAS)** | "change this only if it is still in the state I read" — the check and the write are one operation, so there is no window between them | `Shift.filledSlots` against `capacity`, every `Registration` status transition, `PowerUpInventory.quantity >= 1`, `BountyLedger.spent` against the daily budget |
+| **A conditional update (CAS)** | "change this only if it is still in the state I read" — the check and the write are one operation, so there is no window between them | `Shift.filledSlots` against `capacity`, every `Registration` status transition, `PowerUpInventory.quantity >= 1`, `BountyLedger.spent` against the daily budget, `ChallengeAttempt` from `WON` to `SPENT` |
 | **A TTL index** | "this row deletes itself" — no sweeper job, no cleanup bug, no unbounded growth | `claimCode`, `authToken`, `reservationLock`, `idempotency`, `announcement`, `presenceMute`, `presenceAudit` |
 
 The recurring reason for a separate collection is the first one. A cap, a cooldown or a
@@ -84,9 +84,12 @@ to the side. Every transition is a conditional update predicated on the state be
 a read-modify-save — a cancellation landing mid-flight then loses the race instead of being
 silently overwritten.
 
-The model file groups the statuses three ways, and the grouping matters more than the list:
-**index-active** (occupies a row), **schedule-occupying** (`CONFIRMED`, `CHECKED_IN`,
-`SWAP_PENDING` — the three that block a conflicting shift), and terminal.
+The model file groups the statuses two ways, and the grouping matters more than the list:
+**index-active** (`CONFIRMED`, `WAITLISTED`, `CHECKED_IN`, `SWAP_PENDING`, `COMPLETED` — the
+five the partial unique index counts, so one row per shift and volunteer across all of them)
+and **schedule-occupying** (`CONFIRMED`, `CHECKED_IN`, `SWAP_PENDING` — the three that block a
+conflicting shift). There is no third, terminal grouping: `CANCELLED` is simply the one status
+the index leaves out, which is what lets somebody who dropped out sign up again.
 
 `SWAP_PENDING` is defined but never written today: swaps rewrite the registration in place.
 Whoever wires it up must change `CheckInService.generateToken` and `verifyAndCheckIn` at the
@@ -111,7 +114,10 @@ that dies holding one does not deadlock the volunteer.
 Exactly-once semantics for reservations. Phones on congested event wifi produce requests that
 succeed server-side and time out client-side; the natural client behaviour is to retry, and
 without this table a retry double-books. A repeat carrying the same `Idempotency-Key` replays the
-stored `responseStatusCode` / `responseBody` instead of re-executing. `requestHash` is what stops one account replaying another's, because it is a digest over the
+stored `responseBody` instead of re-executing, and the controller answers it `200` where the
+first attempt got `201` — a difference it takes from the service's `cached` flag, not from the
+record. `responseStatusCode` is written beside the body and read by nobody, so treat it as a
+stored field with no reader rather than as part of the replay. `requestHash` is what stops one account replaying another's, because it is a digest over the
 shift id, the volunteer id **and** `allowWaitlist` — so the same key sent for a different
 request, or by a different person, is a conflict rather than a replay. `ownerToken` solves a
 different problem: it fences a *stalled attempt* out of the record a later attempt has since
@@ -227,6 +233,74 @@ stream. TTL on `expiresAt`, because a stale "pizza is here" banner is worse than
 One of fourteen campus landmarks held as territory. `faction`, `defenders`, control points, and a
 `version` field used for optimistic concurrency so two simultaneous captures cannot both win.
 
+### `challengeAttempt`
+One player's run at one gym's coding challenge. When a pack sets
+`event.gauntlet.requiredForCapture`, taking a **rival** gym means winning one of these first;
+ally and neutral play is unchanged, the flag defaults false in `src/content/schema.ts`, and a
+pack that ships no `challenges.json` — `content/example-campus/` is one — never writes a row
+here at all.
+
+The row is both the state machine and the receipt: `accountId`, `gymId`, `challengeId` (which
+challenge was served — the pick is a digest of the gym id, so re-opening asks the same question
+rather than letting a player reroll), `status`, `openKey`, `startedAt`, `expiresAt`,
+`answeredAt`, `spentAt`, `perCase`, and the `createdAt`/`updatedAt` pair from `timestamps`.
+`perCase` is one boolean per test case, which is what lets a loser be told *which* case they
+missed without being told the answer. No answer and no digest is ever stored on the row — those
+live in the pack, and only as HMACs.
+
+**The state machine.** `CHALLENGE_ATTEMPT_STATUSES` is `OPEN`, `WON`, `LOST`, `EXPIRED`,
+`SPENT`, and every legal move is written by `src/services/gauntlet.service.ts`:
+
+| From | To | Written by |
+|---|---|---|
+| *(insert)* | `OPEN` | `GauntletService.start`, after the geofence check |
+| `OPEN` | `WON` / `LOST` | `GauntletService.submit`, after the *second* geofence check |
+| `OPEN` | `EXPIRED` | `submit` when the deadline has passed, and the sweep in `start` that clears the caller's own lapsed rows before opening a new one |
+| `WON` | `SPENT` | `GauntletService.spend` |
+
+`LOST`, `EXPIRED` and `SPENT` are terminal — nothing writes a transition out of them, and
+`submit` refuses any attempt that is not `OPEN`, which is what makes one submission per attempt
+a fact rather than a convention.
+
+**Why `WON` and `SPENT` are two states and not one boolean.** A win is a single-use token, and
+burning it is a separate conditional update (`{ status: 'WON' }` → `SPENT`) from the one that
+awarded it. Twenty requests carrying the same attempt id therefore produce one capture and
+nineteen conflicts, decided by the database rather than by a read followed by a write. Collapsing
+them into `WON` plus a `spent` flag would put that decision back in application code. State the
+limit with it: `SPENT` records that the token was burned, **not** that the gym changed hands —
+`GymController.spendGauntlet` burns first and then calls `GymService.battleOrContribute`, so a
+capture that throws afterwards leaves a `SPENT` row and a lost win.
+
+**Two declared indexes, and they are not doing equal work.**
+
+- `{ accountId, openKey }`, unique, with `partialFilterExpression: { openKey: { $type: 'string' } }`.
+  This is the "one open attempt per account" rule, and it is the same primitive as `boothScan`
+  with one twist: the partial filter turns "at most one ever" into "at most one *at a time*".
+  `openKey` holds the constant `OPEN_ATTEMPT_KEY` while the attempt is open and is set to `null`
+  on every exit, and the filter keeps nulls out of the index, so finished rows accumulate without
+  colliding. Twenty concurrent starts produce one insert and nineteen duplicate-key errors, which
+  `start` translates into a `409`. `tests/gauntlet.test.ts` asserts exactly that.
+- `{ accountId, gymId, createdAt: -1 }`, not unique. Its comment names two readers — "has this
+  player already beaten this gym" and a cooldown after a loss — and **neither exists**: no query
+  in the service filters on `gymId`, so today this index serves nothing that the single-field
+  `accountId` index would not already cover. It is a slot for a rule that has not been written.
+
+The schema also sets `index: true` on `accountId` and on `gymId` individually.
+
+**`expiresAt` here is a deadline, not a TTL.** It is compared in `submit` and by the sweep in
+`start`; there is no `expireAfterSeconds` on this collection and it is absent from the TTL row of
+the primitives table for that reason. Rows are permanent. The open-attempt cap is bounded per
+account, but finished attempts are never deleted and nothing sweeps them, so this collection
+grows with play. For a weekend hackathon that is
+fine; for a long-lived fork it is the first thing to add.
+
+One caveat that belongs in a data-model page rather than in a release note: this model is **not**
+exported from `src/models/index.ts`. That barrel is what `scripts/migrate.ts` and `tests/setup.ts`
+import before walking `mongoose.models` to build indexes, so the migration does not sync the two
+indexes above — in a fresh deployment they are left to Mongoose's background `autoIndex`, which
+is the exact race the migration's own header argues against. The tests are unaffected because
+`tests/gauntlet.test.ts` imports the model directly, which registers it before the index build.
+
 ### `hackstop`
 A supply beacon with a 75 m geofence. Spinning one grants a power-up, rate-limited per beacon per
 account, with the daily solvency ceiling enforced by `karmaLedger` rather than by the cooldown.
@@ -275,6 +349,7 @@ so an id-only check is not a check at all.
 | Why is the waitlist a cascade? | `ARCHITECTURE.md` §4 |
 | How do three-way swaps resolve? | `ARCHITECTURE.md` §6, `src/common/utils/cycleFinder.ts` |
 | What stops a screenshotted QR code? | `ARCHITECTURE.md` §7, `src/services/checkin.service.ts` |
+| What stops a gym being taken from off site? | `src/services/gauntlet.service.ts` |
 | Who can see whose position? | `docs/PRESENCE.md` |
 | What does `AUTH_MODE=legacy` permit? | `docs/IDENTITY.md` |
 | What did external review find, and what was wrong? | `docs/REVIEWS.md` |

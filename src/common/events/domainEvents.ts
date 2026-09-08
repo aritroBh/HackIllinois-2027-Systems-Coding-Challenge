@@ -35,6 +35,29 @@ export interface DomainEventMap {
   'booth.scanned': { accountId: string; boothId: string };
 }
 
+/**
+ * The same names as `DomainEventMap`, at runtime.
+ *
+ * `DomainEventMap` is an interface, so its keys exist only to the compiler and nothing can check
+ * a *string* against it — which is why a content pack naming a quest event that does not exist
+ * used to boot clean and sit dead all weekend. `crossValidate` compares against this array, so
+ * the typo is refused by `npm run content:validate` instead.
+ *
+ * The `satisfies` below is what keeps the two from drifting: adding a member to the map without
+ * adding it here, or vice versa, fails the build rather than silently narrowing what a pack may
+ * declare.
+ */
+export const DOMAIN_EVENT_NAMES = [
+  'checkin.completed',
+  'checkout.completed',
+  'registration.created',
+  'registration.cancelled',
+  'sos.resolved',
+  'gym.captured',
+  'hackstop.spun',
+  'booth.scanned',
+] as const satisfies readonly (keyof DomainEventMap)[];
+
 export type DomainEventName = keyof DomainEventMap;
 
 export type DomainListener<E extends DomainEventName> = (payload: DomainEventMap[E]) => void | Promise<void>;
@@ -57,6 +80,8 @@ class DomainEventBus {
     return () => this.off(name, listener);
   }
 
+  /** Seldom called directly: `on` already returns this bound to its own listener, which is the
+   *  form that cannot accidentally unsubscribe the wrong closure. */
   public off<E extends DomainEventName>(name: E, listener: DomainListener<E>): void {
     const set = this.listeners.get(name);
     if (!set) return;
@@ -87,10 +112,20 @@ class DomainEventBus {
     });
   }
 
+  /**
+   * The only read-only view of the bus. It answers "did the wiring run", which is otherwise
+   * unobservable: `on` hands back an unsubscribe rather than a handle.
+   *
+   * Nothing in `src/` calls it; `tests/plugins.test.ts` does, twice, asserting that constructing
+   * a registry with nothing activated adds no listeners. This comment claimed no caller anywhere
+   * until that test was written and then went unamended — a sentence falsified by the change that
+   * made it worth having.
+   */
   public listenerCount(name: DomainEventName): number {
     return this.listeners.get(name)?.size ?? 0;
   }
 
+  /** A throwing listener is logged, never propagated: one bad subscriber must not break dispatch. */
   private report(name: DomainEventName, err: unknown): void {
     console.error(`[domainEvents] listener for "${name}" failed:`, err instanceof Error ? err.message : err);
   }
@@ -101,4 +136,12 @@ class DomainEventBus {
   }
 }
 
+/**
+ * One bus per process. Subscribers are registered at boot — `wireEconomy` in
+ * `src/economy/wiring.ts`, the plugin registry, and the raid service — and nothing subscribes
+ * lazily in response to an event. An event emitted before that wiring runs has no listeners
+ * and is dropped where `emit` returns early, with nothing logged. That is the best-effort
+ * contract the header states rather than an oversight: what must not be lost belongs in the
+ * database write, not in a listener.
+ */
 export const domainEvents = new DomainEventBus();

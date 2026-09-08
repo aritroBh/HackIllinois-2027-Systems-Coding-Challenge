@@ -85,7 +85,7 @@
             <div>
               <div class="eyebrow">Quest board</div>
               <h2>Active quests</h2>
-              <p>Fifty volunteers can hit one slot at once — the lock still hands out exactly capacity. Pick a quest, earn karma, hold the campus.</p>
+              <p>Pick a shift, earn karma, hold the campus. However many people grab for the same seat at once, only as many get in as there are seats.</p>
             </div>
             <div class="actions">
               <span class="sticker rare" id="venue-count">— venues</span>
@@ -107,7 +107,7 @@
             <div class="panel-head"><div><div class="eyebrow">Ops vitals</div><h3>Coverage</h3></div></div>
             <div class="vitals">
               <div class="ring" id="coverage-ring" aria-hidden="true">
-                <div class="center"><b><span id="vital-coverage">--</span>%</b><small>COVER</small></div>
+                <div class="center"><b><span id="vital-coverage">--</span>%</b><small>COVERED</small></div>
               </div>
               <div class="vitals-side">
                 <div>
@@ -145,11 +145,11 @@
         <div>
           <div class="eyebrow">Overworld</div>
           <h2 data-brand="campus-label">UIUC campus</h2>
-          <p>The real campus from OpenStreetMap. <span data-brand="monument-count">Fourteen landmarks</span> are strongholds. Walk with WASD or your GPS, stand within <span data-brand="geofence">75 m</span> of a HackStop to spin it, click a monument to inspect it.</p>
+          <p>The real campus from OpenStreetMap. <span data-brand="monument-count">Fourteen landmarks are strongholds</span>. Walk with WASD or your GPS, stand within <span data-brand="geofence">75 m</span> of a HackStop to spin it, click a monument to inspect it.</p>
         </div>
         <div class="actions">
           <span class="signal" id="onduty-chip">— on duty</span>
-          <button class="signal" id="presence-chip" data-action="presence-toggle" data-on="0" title="Show me on the map, and show me other trainers">Presence off</button>
+          <button class="signal" id="presence-chip" data-action="presence-toggle" data-on="0" title="Show me on the map, and show me other trainers">Hidden</button>
           <button class="pb pb-ghost pb-sm" id="place-btn" data-action="place">Drop me on the Quad</button>
           <button class="pb pb-live pb-sm" id="walk-btn" data-action="walk" aria-pressed="false">Walk with me</button>
           <button class="pb pb-ghost pb-sm" id="follow-btn" data-action="follow">Follow cam</button>
@@ -164,10 +164,10 @@
 
         <div class="viewport-hud tl">
           <div class="hudbox" id="hud-level"></div>
-          <span class="signal is-quiet" id="gl-status">Booting renderer…</span>
+          <span class="signal is-quiet" id="gl-status">Loading the campus…</span>
           <span class="tag" id="gl-stats"></span>
         </div>
-        <div class="viewport-hud mt"><span class="compass">N | | | | | | <b>|</b> | | | | | | E</span></div>
+        <div class="viewport-hud mt" aria-hidden="true"><span class="compass">N | | | | | | <b>|</b> | | | | | | E</span></div>
         <div class="viewport-hud tr">
           <div class="hudbox" id="hud-control"></div>
           <button class="pb pb-ghost pb-sm" id="retro-btn" data-action="retro" aria-pressed="false">Retro</button>
@@ -177,9 +177,9 @@
           <div class="hudbox"><div class="hud-label">Minimap</div><canvas id="hud-minimap" width="160" height="120"></canvas></div>
           <div class="telemetry" id="gl-telemetry" aria-live="off">
             <span><b id="tm-fps">--</b>fps</span>
-            <span><b id="tm-buildings">--</b>bldg</span>
-            <span><b id="tm-monuments">--</b>mon</span>
-            <span><b id="tm-dist">--</b>dist</span>
+            <span><b id="tm-buildings">--</b>buildings</span>
+            <span><b id="tm-monuments">--</b>landmarks</span>
+            <span><b id="tm-dist">--</b>view</span>
           </div>
         </div>
         <div class="viewport-hud br">
@@ -199,23 +199,35 @@
           <div class="log-terminal" id="sos-terminal" style="max-height: 240px;">Spatial dispatch engine online. Awaiting tickets…</div>
         </div>
         <div class="px">
-          <div class="panel-head"><div><div class="eyebrow">Beacons</div><h3>HackStops</h3></div><span class="sticker flat">75 m geofence</span></div>
+          <div class="panel-head"><div><div class="eyebrow">Beacons</div><h3>HackStops</h3></div><span class="sticker flat"><span data-brand="geofence">75 m</span> geofence</span></div>
           <div id="hackstops-list-container" class="stop-list scroll-y"></div>
         </div>
       </div>
 
       <div class="px flat campus-foot">
         <div class="legend">
-          <span><i style="--c: var(--kernel)"></i> Team Kernel</span>
-          <span><i style="--c: var(--tensor)"></i> Team Tensor</span>
-          <span><i style="--c: var(--silicon)"></i> Team Silicon</span>
-          <span><i style="--c: var(--neutral)"></i> Unclaimed</span>
+          <!-- The faction rows are rewritten from the pack by applyFactions(); these four are
+               the shipped defaults so the legend is never blank before content settles. The
+               rows below them are not factions and stay put. -->
+          <span id="legend-factions">
+            <span><i style="--c: var(--kernel)"></i> Team Kernel</span>
+            <span><i style="--c: var(--tensor)"></i> Team Tensor</span>
+            <span><i style="--c: var(--silicon)"></i> Team Silicon</span>
+            <span><i style="--c: var(--neutral)"></i> Unclaimed</span>
+          </span>
           <span><i style="--c: var(--live)"></i> On-duty volunteer</span>
-          <span><i style="--c: var(--tensor)"></i> HackStop beacon</span>
+          <span><i style="--c: var(--beacon)"></i> HackStop beacon</span>
           <span><i style="--c: var(--danger)"></i> Distress call</span>
           <span><i style="--c: var(--orange)"></i> You</span>
         </div>
-        <p class="attribution">Building footprints, streets and green space © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors, ODbL 1.0. Alma Mater, the ECE Building and the Main Library are massed from verified centroids.</p>
+        <!-- The ODbL credit is a legal requirement and is true of any pack whose campus is baked
+             from OSM, so it is static. The sentence after it named Alma Mater, the ECE Building
+             and the Main Library — three buildings a fork does not have — and nothing rewrote
+             it: `grep attribution public/*.js public/views/*.js` finds no writer. A false
+             sentence sitting directly under an attribution is the worst place in the page to
+             put one, because it is the one place a reader is entitled to assume is accurate.
+             Reworded to say what is true of every pack. -->
+        <p class="attribution">Building footprints, streets and green space © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors, ODbL 1.0. Landmark buildings are massed from verified centroids.</p>
       </div>
     </section>
 
@@ -225,7 +237,7 @@
         <div>
           <div class="eyebrow">PokéShift</div>
           <h2>Campus turf wars</h2>
-          <p>Fourteen monuments are strongholds. Click one to open the encounter. Reinforce your own, contest the others, spin HackStops for loot.</p>
+          <p><span data-brand="monument-number">Fourteen</span> <span data-brand="monument-noun">monuments are strongholds</span>. Click one to open the encounter. Reinforce your own, contest the others, spin HackStops for loot.</p>
         </div>
         <div class="actions">
           <span class="hud-label">Your faction</span>
@@ -303,8 +315,8 @@
           <!-- The check-in token lives in the Me tab: it is minted against the signed-in
                account, so it belongs beside that account and not in a staff-only tab. -->
           <div class="px">
-            <div class="panel-head"><div><div class="eyebrow">Check-in</div><h3>Your rotating token</h3></div><span class="sticker flat">HMAC-SHA256</span></div>
-            <p class="muted">Your 30-second check-in code is in <b>Me → Check in</b>, minted against your own account. This tab is the desk's side of the same exchange.</p>
+            <div class="panel-head"><div><div class="eyebrow">Check-in</div><h3>Your rotating token</h3></div><span class="sticker flat">SIGNED</span></div>
+            <p class="muted">Your check-in code lives in <b>Me → Check in</b> and is issued to you alone. This tab is the desk's side of the same handshake.</p>
             <div class="btn-row" style="margin-top:12px"><button class="pb pb-sm" type="button" data-action="tab" data-tab="tab-me">Open Me</button></div>
           </div>
         </div>
@@ -318,7 +330,7 @@
           <div id="sticker-detail"></div>
           <div style="display:flex;gap:10px;align-items:flex-end;margin-top:16px">
             <img class="pxi" data-sprite="duck" data-scale="3" alt="">
-            <div class="toast in" style="position:static"><div class="bubble">Stand within 75 m of a landmark and spin. Common drops are mugs and pennants; the Foellinger dome only drops after a night shift. Hold a stronghold to unlock its badge.</div></div>
+            <div class="toast in" style="position:static"><div class="bubble">Stand within <span data-brand="geofence">75 m</span> of a landmark and spin. Common drops are mugs and pennants; the Foellinger dome only drops after a night shift. Hold a stronghold to unlock its badge.</div></div>
           </div>
         </div>
       </div>
@@ -330,7 +342,7 @@
         <div>
           <div class="eyebrow">Testbench</div>
           <h2>Concurrency bomb</h2>
-          <p>Fifty workers race for two slots; the reservation lock must settle at exactly two winners. Drop a confirmed volunteer to watch the waitlist cascade, or resolve a three-way trade with Tarjan's algorithm.</p>
+          <p>Fifty people grab for two seats at once. Exactly two get in — every time. Drop one of them to watch the waitlist refill the seat, or untangle a three-way shift swap.</p>
         </div>
         <div class="actions"><span class="sticker full">Destructive</span></div>
       </div>

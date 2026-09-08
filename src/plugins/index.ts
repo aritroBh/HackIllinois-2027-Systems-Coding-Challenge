@@ -12,9 +12,21 @@
  * **Asset integrity.** Every declared asset is hashed at boot and the manifest reports the
  * digest alongside the URL. That is what makes a fork's deployment auditable: the operator
  * can compare what the server is serving against what they reviewed, without trusting the
- * filename. It is a manifest, not subresource-integrity enforcement. The browser is not
- * asked to verify it, and nothing here defends against an attacker who can write to the
- * plugin directory, since they could rewrite the digest too.
+ * filename.
+ *
+ * **The browser does verify it.** `public/plugins.js` reads this manifest, converts each hex
+ * digest to base64, and sets `integrity="sha256-…"` on the `<script>` it injects — so a file
+ * that has changed since boot is refused by the browser, not merely reported. `scripts/verify.sh`
+ * has a step asserting that conversion still happens, because handing the browser the hex string
+ * is not a soft failure: the digest never matches, every plugin script is refused, and the only
+ * symptom is a plugin that silently does not load. This comment said the opposite for a long
+ * time — that it was "a manifest, not subresource-integrity enforcement" and "the browser is not
+ * asked to verify it" — which understated what the mechanism does.
+ *
+ * What it does not defend against is an attacker who can write to the plugin directory *before*
+ * boot: the digest is computed from what is on disk when the process starts, so they would be
+ * hashing their own file. It pins the bytes against change-after-boot and against a stale cached
+ * copy, not against a compromised checkout.
  *
  * A declared asset that is missing or that escapes its plugin directory disables the plugin
  * at boot. A route with no tab, or a tab with no script, is worse than no plugin at all.
@@ -29,6 +41,10 @@ import { PluginAssetEntry, PluginManifestEntry, ServerPlugin } from './types';
 
 /** Where plugin directories live, relative to the repository root. */
 const PLUGIN_DIR_NAME = 'plugins';
+/**
+ * Under `/dashboard`, not under `/api` — see the file header. This prefix is also what the
+ * containment check below measures against, so changing it changes what a plugin can publish.
+ */
 const ASSET_URL_PREFIX = '/dashboard/plugins';
 
 interface ResolvedAsset extends PluginAssetEntry {

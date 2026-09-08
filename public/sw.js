@@ -63,7 +63,106 @@
   // `v8`: the campus never stands itself down now; low-power is a choice, not a guess.
   // `v9`: contrast and type pass — invisible ink-on-dark text, undefined tokens, 7px Silkscreen.
   // `v10`: destructive demo controls removed from the shipped nav.
-  const VERSION = 'v17';
+  // `v18`: Silkscreen 700 on every pixel caption, the Me tab's trainer card, and a gym
+  //        encounter that plays the hit instead of printing it.
+  // `v19`: the update prompt itself — pwa.js now sends the skip-waiting message this file
+  //        has described since v11, so a new build is reachable without closing every tab.
+  // `v20`: the avatar the trainer creator makes is actually sent to the server, so the
+  //        moderation queue and other trainers' faces stop being unreachable code.
+  // `v24`: round-eighteen review — the battle no longer plays its animation in front of the
+  //        write, the encounter guards check identity, and the face follows the map switch.
+  // `v25`: the faction picker writes to the server and locks once allegiance is bound, and
+  //        the pixel dropdown honours `disabled` so a locked control looks locked.
+  // `v26`: gym defender counts read the projected `defenderCount`, so the compatibility shim
+  //        on the server side can go.
+  // `v27`: the defenders array is gone from the wire, so the fallback that read it is gone too.
+  // `v28`: the spin geofence comes from the pack now that the server resolves it, instead of
+  //        a client-side literal 75 that could disagree with the server in either direction.
+  // `v30`: each Spin button and the token hint use the radius the server resolved for that
+  //        stop or venue, instead of one campus number for everything.
+  // `v32`: round-nineteen review — a 409 no longer locks the picker to the stale side, and a
+  //        handover no longer wipes the incoming account's faction.
+  // `v33`: round twenty — the nearest-stop readout uses that stop's fence, not the campus one.
+  // `v34`: round twenty-one — the faction picker is disabled while its write is in flight,
+  //        and a handover re-renders everything that reads the faction, not just the picker.
+  // `v35`: comment corrections only; no behaviour change.
+  // `v36`: round twenty-two — a faction write that never settles no longer disables the
+  //        picker for ever, and the renders that precede it moved inside the try.
+  // `v37`: the map says whether the trainer's position is your GPS or a demo placement, and
+  //        how far off-campus a real fix is.
+  // `v38`: the faction picker's in-flight state is state, not a paint argument.
+  // `v39`: a HackStop on cooldown disables its own Spin button and counts down, instead of
+  //        staying enabled and failing for five minutes after every success.
+  // `v41`: Spin, Contest and Deploy said "place your trainer first" through a toast function
+  //        that never existed, so all three failed silently.
+  // `v42`: the quest board stops offering quests you are already on, and a refused claim is
+  //        said where you are rather than in the War Room console.
+  // `v43`: a handover no longer shows the departing account's shifts as the arriving one's.
+  // `v44`: in lite mode a real GPS fix now beats the hidden demo sprite, for both the button
+  //        gate and the coordinates sent to the server.
+  // `v21`, `v22`, `v23`, `v29`, `v31`: intermediate bumps during the review rounds, each a lock rewrite for
+  //        a change described in the commit rather than here. Named so the sequence has no
+  //        silent gaps — these notes are the audit trail for a cache that evicts everything,
+  //        and a missing number invites the question of what shipped undescribed.
+  // `v40`: plugins.js no longer claims a content pack can carry a plugin.
+  // `v45`: round twenty-three — cooldowns come from the server ledger, the nearest-stop
+  //        readout honours them, and a handover resets faction and position provenance.
+  // `v46`: the Privacy panel no longer tells you presence is symmetric. It is not: a lead
+  //        reads your exact position whether or not they have switched themselves on.
+  // `v47`: the Turf Wars intro's monument count comes from the pack instead of the word
+  //        "Fourteen", which the Campus intro had already been rewriting for months.
+  // `v48`: the Details link on a quest card opens a panel instead of writing one line to a
+  //        console on a tab you are not looking at.
+  // `v50`: the client stopped hardcoding this repository's three factions — Turf Wars threw
+  //        and rendered nothing under any other content pack.
+  // `v49`, `v51`: lock rewrites for changes described in their commits rather than here —
+  //        the same convention as `v21`/`v22`/`v23`/`v29`/`v31` above. Named because the note
+  //        above claims this sequence has no silent gaps, and until now it had two.
+  // `v52`: the OSM attribution named three UIUC buildings a fork does not have, directly
+  //        under a legal credit, with nothing rewriting it.
+  // `v53`: a content pack with no baked campus model said "Renderer failed" over an empty
+  //        grid — indistinguishable from the campus having been deleted. It now names the
+  //        pack and the command that builds one. Also: Spin, Contest and Deploy refusals are
+  //        spoken where you are instead of only in the War Room console.
+  // `v54`: the missing-model notice stacked a second copy on every return to the tab, and a
+  //        later successful boot left the old one on screen.
+  // `v55`: round twenty-five — the jacket now rebakes instead of being repainted (a repaint
+  //        cannot change a colour baked into pixels), the missing-model notice converges to
+  //        one from any count, a Reinforce refusal no longer calls itself a battle, and the
+  //        Details panel stopped removing a host that other dialogs' close path resolves.
+  // `v56`: the map's refusals were silent. The presence server rejects a sample for seven
+  //        distinct reasons; the socket answered three of them and the client discarded
+  //        those three — exactly one listener received a `nack`, dropped the reason and
+  //        repainted — so the chip went on reading
+  //        "Visible" while the server dropped every fix, asserting the opposite of what was
+  //        happening. Each reason now says itself, in its own words: an inaccurate fix
+  //        blames the radio and quotes both numbers, a single fast jump is not an accusation,
+  //        and opting out is not an error. Also: `!navigator.geolocation` could not fire on
+  //        an insecure origin (the object exists, the calls fail), so that case now names
+  //        itself instead of surfacing as the browser blaming the user; and a geolocation
+  //        timeout no longer switches walking off for good — only a refusal does.
+  // `v57`: the SSE fallback discarded the same refusal reasons. `POST /presence` answers
+  //        `{ accepted: false, reason }` and `postPosition` awaited it and dropped it on the
+  //        floor. This mattered more than it sounds at the time: the socket then answered
+  //        only three of the seven reasons, so the HTTP reply was briefly the only place
+  //        OFF_CAMPUS and INACCURATE could be observed by a browser at all. The socket was
+  //        fixed in the same round and now answers everything but RATE.
+  // `v58`: the copy pass. The Chaos Lab credited "Tarjan's algorithm" for a routine that
+  //        ARCHITECTURE.md, docs/DEMO.md and docs/REVIEWS.md all record as a bounded DFS and
+  //        explicitly not Tarjan — the correction had landed in three documents and never in
+  //        the one place an audience reads. Protocol names left the interface (SSE, WS,
+  //        WebGL2, HMAC-SHA256), the privacy notice stopped printing an HTTP route at the
+  //        person whose privacy it describes, and "mint" stopped being a verb on a button.
+  //        Also: the manifest had named two icon files that never existed, so the app could
+  //        not be installed; they exist now and checkShell fails if they stop matching.
+  // `v60`: the gauntlet. Taking a rival gym can now require winning its coding challenge,
+  //        answered standing inside the gym's geofence — checked again on submit, so you
+  //        cannot start at the gym and answer from the bus.
+  // `v61`: spelling out the campus telemetry labels made the strip overflow and clip the last
+  //        two readings; it wraps now instead of truncating.
+  // `v62`: one last "mint" survived on the check-in hint, in the sentence telling a hacker
+  //        what to do — the button beside it had already stopped saying it.
+  const VERSION = 'v64';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];
@@ -113,8 +212,12 @@
   // Fetched one at a time and allowed to fail. A font subset can be renamed by a
   // rebuild of the vendored set, and avatar.js is only pulled in when the trainer
   // opens the builder; neither is worth failing an install over.
+  // The install icons join the fonts here for the same reason: a failed icon fetch should not
+  // fail the whole install, and the app is entirely usable without them.
   const SHELL_OPTIONAL = [
     '/dashboard/avatar.js',
+    '/dashboard/icon-192.png',
+    '/dashboard/icon-512.png',
     '/dashboard/fonts/silkscreen-400-latin.woff2',
     '/dashboard/fonts/silkscreen-400-latin-ext.woff2',
     '/dashboard/fonts/silkscreen-700-latin.woff2',
@@ -160,9 +263,16 @@
     );
   });
 
-  // No skipWaiting() here. A new worker waits until the last dashboard tab is
-  // gone so a running shift never has its scripts swapped mid-session; the page
-  // can opt in with a `nexus-sw-skip-waiting` message when it is safe.
+  // No skipWaiting() here. A new worker waits until the last dashboard tab is gone so a
+  // running shift never has its scripts swapped mid-session; the page opts in with a
+  // `nexus-sw-skip-waiting` message when it is safe.
+  //
+  // That opt-in is sent by `pwa.js`, which shows the "a new version is ready" bar and posts
+  // the message when the user accepts. It is named here because the sentence above described
+  // it for eight versions while no client sent it: the escape hatch was documented and
+  // absent, so the only route to a new build was closing every dashboard tab, and a
+  // cache-first shell meant a tab left open served the old bundle for as long as it stayed
+  // open. If that bar is ever removed, this comment is wrong again.
   self.addEventListener('activate', (event) => {
     event.waitUntil(
       (async () => {
