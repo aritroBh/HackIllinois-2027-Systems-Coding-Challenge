@@ -39,8 +39,9 @@ npm run content:validate -- content/my-event  # one pack
 `event.json`, `venues.json`, `monuments.json`, `factions.json`, `territories.json`,
 `beacons.json` and `loot.json` must all be present and valid. `memorabilia.json` and
 `monuments-info.json` are optional but are validated when present, because the client
-renders them into the DOM. `campus.json` and `campus/` are built by the pipeline, not
-written by hand.
+renders them into the DOM. `quests.json`, `booths.json`, `raids.json` and
+`challenges.json` are optional as well and have their own sections below.
+`campus.json` and `campus/` are built by the pipeline, not written by hand.
 
 The whole pack directory is served to browsers under `/dashboard/content/` — `src/app.ts`
 mounts `express.static(pack.dir)` over it, so a `.md` note or a spreadsheet is as public as
@@ -93,6 +94,22 @@ ones [PRESENCE.md](PRESENCE.md) explains, and they are defaults because a differ
 has different indoor GPS. `karmaCaps`, `bountyCap` and `hackerBountyBudgetPerDay` bound the
 economy. `plugins` lists the plugins this pack activates, by name; see
 [PLUGINS.md](PLUGINS.md).
+
+`gauntlet` is one flag and it defaults to **false**:
+
+```json
+"gauntlet": { "requiredForCapture": true }
+```
+
+Turn it on and control points alone stop being enough to take a *rival* gym: the last hit
+floors that gym at 1 CP instead of flipping it, and the flip needs a challenge win spent
+through `POST /api/v1/pokeshift/gauntlets/:attemptId/spend`, which needs a session. Reinforcing an ally, taking neutral
+ground and every earlier strike are unchanged. Off by default because a pack that ships no
+`challenges.json` would otherwise have every rival gym permanently uncapturable, and because
+a fork pulling this in keeps the behaviour it already had until it opts in;
+`GauntletService.requiredForCapture()` additionally refuses to honour a `true` when the pack
+ships no challenges, so that combination plays as before rather than locking the board.
+`content/hackillinois-2027` sets it to true and `content/example-campus` omits the block.
 
 ## venues.json
 
@@ -255,6 +272,131 @@ sat at zero for the weekend.
 One case the pack check cannot catch, because the name is real: a raid may join on an event that
 carries no account to enrol on — `sos.resolved` is the only one today. `RaidService` warns about
 that at boot, naming the raid.
+
+## challenges.json
+
+Optional, and the file the gauntlet is authored in: the coding challenge a player has to win,
+standing inside a rival gym's geofence, before they can take that gym. A pack without this
+file has no gauntlet at all — `content/example-campus` ships none — and
+`event.gauntlet.requiredForCapture` above is what turns the requirement on.
+
+**Two files, and only one of them is the pack.** Answers live in the clear in
+`design/challenges/<pack>.json`, which is not served and is not copied into the Docker image
+(the `COPY` lines take `content/` and `public/`, not `design/`).
+`npm run gauntlet:hashes -- <pack>` reads that file and writes
+`content/<pack>/challenges.json`, which carries the same challenges with every answer replaced
+by a digest:
+
+```sh
+$EDITOR design/challenges/hackillinois-2027.json
+npm run gauntlet:hashes -- hackillinois-2027
+npm run content:validate -- content/hackillinois-2027
+```
+
+Never hand-edit the generated file. Each `hash` is an HMAC over the challenge id, the case
+index and the normalised answer, keyed on the file's `answerSalt` — so changing the salt, a
+challenge id, the order of the cases or a `normalise` rule invalidates every digest in the
+file, and regenerating is the only way back. `scripts/gauntletHashes.ts` validates what it is
+about to write with the same schema the server loads it through, so a broken pack is refused
+at authoring time rather than at somebody else's boot.
+
+**Why an answer can never be plaintext here.** The whole pack directory is served to browsers
+under `/dashboard/content/`, so an answer written into `content/` is a download — the answer
+key, one guessed filename away. `challengeCaseSchema` is therefore `.strict()`: a case that
+still carries `answer` fails validation instead of being quietly dropped, because a field that
+is silently ignored is a field somebody will believe was honoured. `gauntlet:hashes` checks the
+same thing from the other side before it writes. For `PREDICT_OUTPUT` it refuses if the answer
+text appears anywhere a player can read — title, prompt, choices or case inputs. For
+`MULTIPLE_CHOICE` it cannot: the options have to be rendered, so the answer text is public by
+construction and the secret is *which* option is right. That kind gets the check it can pass
+instead — the answer must be one of the choices, or the question is unanswerable and would
+only be discovered by a player standing at the gym.
+
+**What `answerSalt` buys, exactly.** It is a per-pack string of 16 to 200 characters (`openssl
+rand -hex 16` is a fine source) and it is not a secret in the sense of being unguessable. It
+stops one pack's digests being reusable against another, and it stops an answer being read
+straight off the file. **It does not stop an answer being guessed.** The answer space for
+"what does this print" is small, and anyone who downloads the pack can hash candidates against
+the salt offline until one matches. Every player of a given challenge also sees the same
+input, so a correct answer is a constant and can be shared. What actually bounds cheating is
+physical and temporal, not cryptographic: the geofence is checked when the attempt starts
+**and** again when it is submitted, the attempt carries a server-side deadline, one submission
+ends it, and a partial unique index allows one open attempt per account at a time. Author on
+that basis — assume the answers will circulate, and let the walk be the cost.
+
+The digests are keyed on this salt rather than on `QR_HMAC_SECRET` deliberately. Keying on the
+server secret would be stronger and would also mean that rotating it silently invalidated every
+answer in every pack; outside production that secret is replaced with an ephemeral per-boot
+value whenever it is left at the committed default, so a pack keyed on it would stop judging
+after a restart.
+
+**Nothing is executed.** The judge is normalise, HMAC, `timingSafeEqual`, and that is the whole
+of it: no `vm`, no worker, no container, no sandbox, no new dependency. It verifies answers,
+not programs. Write challenges that can be answered by reading, and do not describe the
+mechanic to players as a code runner.
+
+The file:
+
+| Field | Meaning |
+|---|---|
+| `_about` | optional note; `gauntlet:hashes` writes one if the source has none |
+| `answerSalt` | 16–200 characters, copied through from the source file |
+| `challenges` | 1 to 200 challenges |
+
+Each challenge:
+
+| Field | Meaning |
+|---|---|
+| `id` | lowercase, digits and dashes; unique within the file |
+| `title` | 1–80 characters |
+| `prompt` | 1–4000 characters, plain text — the client renders it in a `<pre>`, not as HTML |
+| `kind` | `PREDICT_OUTPUT` or `MULTIPLE_CHOICE` |
+| `difficulty` | `EASY`, `MEDIUM` or `HARD`; display only, shown in the challenge header |
+| `choices` | 2 to 6 strings of 1–120 characters, `MULTIPLE_CHOICE` only |
+| `cases` | 1 to 8 of `{input, hash}`; `input` is 1–400 characters and is the label the player answers against, `hash` is 64 hex characters |
+| `normalise` | what counts as the same answer: `trim` (default true), `collapseWhitespace` (true), `caseInsensitive` (false) |
+| `timeLimitSeconds` | 30 to 1800, default 300; the server's deadline, and what the client counts down from |
+| `rewardKarma` | 0 to 500, default 0 |
+| `capturePower` | 10 to 500, default 250 |
+
+In the source file under `design/challenges/` you write the same fields, except that each case
+carries `answer` in plaintext where the generated file carries `hash`.
+
+**The two kinds, and the rules that separate them.** A `MULTIPLE_CHOICE` challenge must list
+its `choices` and must have exactly one case: the player picks an option and the option string
+itself is what gets judged. A `PREDICT_OUTPUT` challenge must not carry `choices`, and may ask
+up to eight cases, each with its own input and its own typed answer. Both are judged by the
+same path — the difference is what the client renders and how many cases are meaningful. There
+is no partial credit: every case must pass, because reporting "three of four" would invite a
+player to brute-force the fourth one case at a time. Both mistakes — a `MULTIPLE_CHOICE` with
+no options, a `PREDICT_OUTPUT` with them — are refused at load rather than at play, for the
+same reason `quests.schema.ts` refuses a quest that cannot advance: they boot cleanly and fail
+only when somebody walks to that gym.
+
+**Which challenge a gym asks is not something you author.** `GauntletService` picks
+deterministically from a sha256 over the gym id, modulo the list, so a gym always asks the same
+question and a player cannot reroll by re-opening it until they get one they know. Nothing pins a challenge
+to a particular gym and no cross-check ties the two, so a short list spread over more gyms will
+repeat, and nothing guarantees every challenge you write is ever used. Write a set that is fair
+at any gym.
+
+**Karma and control points.** `capturePower` is the CP a spent win hits with, bounded to the
+same 10–500 the ordinary battle route accepts for `power`, so a won gauntlet cannot express a
+battle that route would refuse. `rewardKarma` is validated and returned to the client in the
+submit response, and nothing mints it: the karma a capture pays is the gym-capture award
+`GymService` already made, under the existing `GYM` source. Raising it does not change what a
+player earns today. The gauntlet adds no karma source of its own on purpose — a new key in
+`KARMA_SOURCES` has to be priced by every pack (see the `karmaCaps` bullet below), so adding
+one would break the boot of every fork that had not come back to add a cap for it.
+
+**What is checked, and what is not.** Zod validates this file at boot and under
+`npm run content:validate`, the same as every other file: an unknown `kind`, a
+`MULTIPLE_CHOICE` with no choices or with more than one case, a `PREDICT_OUTPUT` that carries
+choices, a `hash` that is not 64 hex characters, a duplicate challenge id, a salt shorter than
+16 characters. The
+cross-validation below adds nothing for this file, because nothing in it names a venue, a
+monument or a faction. Nothing checks that a digest is the hash of the answer you meant — that
+is what regenerating from `design/challenges/<pack>.json` is for.
 
 ## What the boot-time cross-validation rejects
 

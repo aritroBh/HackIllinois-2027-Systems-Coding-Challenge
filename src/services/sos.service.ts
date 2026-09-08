@@ -173,6 +173,9 @@ export function ticketFor(
   return redactedTicket(t);
 }
 
+/**
+ * Emergency distress dispatch service coordinating hacker incident tickets, nearest responder routing, and resolution.
+ */
 export class SOSService {
   /**
    * Raise a ticket.

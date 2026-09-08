@@ -63,6 +63,7 @@ export type SessionVerification =
   | { valid: true; payload: SessionPayload }
   | { valid: false; reason: 'MALFORMED' | 'INVALID_SIGNATURE' | 'EXPIRED' };
 
+/** Raw HMAC-SHA256 hex. Mint and verify share it, so there is one signer to audit. */
 function sign(input: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(input).digest('hex');
 }
@@ -193,6 +194,7 @@ export function sessionCookieOptions(isProduction: boolean = env.NODE_ENV === 'p
   return { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/', maxAge: SESSION_TTL_MS };
 }
 
+/** Script-readable counterpart to `sessionCookieOptions`: the client echoes it as `X-CSRF-Token`. */
 export function csrfCookieOptions(isProduction: boolean = env.NODE_ENV === 'production'): CookieOptionsShape {
   // JS-readable on purpose: the client echoes it back in X-CSRF-Token (double submit).
   return { httpOnly: false, secure: isProduction, sameSite: 'lax', path: '/', maxAge: SESSION_TTL_MS };

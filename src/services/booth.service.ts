@@ -124,6 +124,9 @@ export interface BoothScanResult {
   powerUp: PowerUpType | null;
 }
 
+/**
+ * Sponsor booth service managing physical venue booths, QR code scans, and sponsor engagement quests.
+ */
 export class BoothService {
   /**
    * Read the catalog now, so a bad pack fails at boot rather than at the first player.

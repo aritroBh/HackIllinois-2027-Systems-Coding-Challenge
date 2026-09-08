@@ -1,3 +1,5 @@
+import { OBJECT_ID_PATTERN } from '../../schemas/common';
+
 /**
  * Case-insensitive identity comparison for Mongo ObjectIds.
  *
@@ -28,8 +30,6 @@
  *          A null or undefined operand is never equal to anything, including another
  *          null — absent identity must not satisfy an ownership check.
  */
-import { OBJECT_ID_PATTERN } from '../../schemas/common';
-
 export function sameId(a: unknown, b: unknown): boolean {
   const left = normalise(a);
   const right = normalise(b);

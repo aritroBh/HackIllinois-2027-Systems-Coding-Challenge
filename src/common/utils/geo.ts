@@ -149,6 +149,10 @@ export function resolveVenue(location: string | undefined | null): IVenueResolut
 
 const EARTH_RADIUS_METERS = 6371000; // Earth mean radius in meters
 
+/**
+ * Geospatial computation engine for great-circle distance calculation,
+ * geofence validation, and bounding-box spatial tests.
+ */
 export class GeoEngine {
   /**
    * Great-circle distance on a sphere of mean Earth radius.

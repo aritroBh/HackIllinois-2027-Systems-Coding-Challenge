@@ -1,5 +1,3 @@
-import { ErrorCode } from './errorCodes';
-
 /**
  * Standardized HTTP ApiError for HackIllinois Adonix architecture.
  *
@@ -24,6 +22,12 @@ import { ErrorCode } from './errorCodes';
  * each of the ~170 call sites. Two of them take an override for the code (`notFound`,
  * `conflict`) because the status is the stable half of the pair and the code is the half that
  * varies by domain.
+ */
+import { ErrorCode } from './errorCodes';
+
+/**
+ * Standardized HTTP API error carrying an HTTP status code, machine-readable ErrorCode,
+ * human-readable message, and optional sanitised structured details payload.
  */
 export class ApiError extends Error {
   public readonly statusCode: number;

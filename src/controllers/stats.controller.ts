@@ -15,6 +15,9 @@ import { Request, Response, NextFunction } from 'express';
 import { LeaderboardService } from '../services/leaderboard.service';
 import { eventHub } from '../common/sse/eventHub';
 
+/**
+ * Controller serving leaderboard statistics, karma rankings, operational telemetry, and SSE stream subscriptions.
+ */
 export class StatsController {
   /**
    * Karma ranking. The clamp on the next line is the whole of the input handling and the file

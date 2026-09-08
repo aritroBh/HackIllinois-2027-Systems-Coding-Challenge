@@ -153,6 +153,7 @@ export function channelOfType(type: string): Channel {
   return 'ops';
 }
 
+/** Narrows untrusted input (channel query params) to the known channel set. */
 function isChannel(value: string): value is Channel {
   return CHANNELS.has(value as Channel);
 }

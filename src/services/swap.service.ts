@@ -96,6 +96,9 @@ async function failIfStillPending(swapId: Types.ObjectId, reason: string): Promi
   return result.matchedCount > 0;
 }
 
+/**
+ * Shift swap exchange service resolving bilateral trades and multi-party circular transfer chains.
+ */
 export class SwapService {
   /**
    * Record a proposal. Nothing moves yet.

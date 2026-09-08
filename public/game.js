@@ -79,7 +79,22 @@
     try { localStorage.setItem(STICKER_KEY, JSON.stringify(state.flags)); } catch { /* private mode */ }
   }
 
-  /** Level from karma: 1 at 0, 5 at ~800, 12 at ~6000. */
+  /**
+   * Level from karma, and the progress bar under it.
+   *
+   * Level n begins at 50·(n−1)² karma: 1 at 0, 2 at 50, 5 at 800, 12 at 6,050. Those edges are
+   * `lo` and `hi` in `levelProgress` below, and this is the inverse of that same curve — the
+   * numbers above are read off it rather than remembered. The previous version of this line
+   * said "12 at ~6000", which is level 11.
+   *
+   * There is no ceiling, and that is the difference between this ladder and the six named
+   * prestige tiers `views/me.js` draws beside it. Two ladders, one balance: this one is the
+   * client's own arithmetic and appears nowhere on the server; the tiers are the server's
+   * (`computePrestigeTier`) and top out. Neither is derived from the other.
+   *
+   * Both clamp a negative balance to 0 rather than trusting the caller: `me.js` passes a
+   * server-supplied `karma` straight in.
+   */
   const levelFor = (karma) => Math.max(1, 1 + Math.floor(Math.sqrt(Math.max(0, karma) / 50)));
   const levelProgress = (karma) => {
     const lv = levelFor(karma);
@@ -92,6 +107,19 @@
    * ------------------------------------------------------------------ */
 
   let toastTimer = null;
+  /**
+   * The duck's speech bubble. `window.game.toast`, so `lite.js`, `players.js` and `app.js`
+   * all speak through this one.
+   *
+   * Three at a time, oldest dropped: `host.prepend` puts the newest at the top and the
+   * `while` below trims the tail. `ms` is how long before this one fades; each toast owns its
+   * own two timers and removes itself, so nothing here can be cancelled by a later call.
+   *
+   * `toastTimer` is a leftover. It is assigned `null` at declaration and never given a handle,
+   * so the `clearTimeout(toastTimer)` on the last line is a no-op on every call — a survivor of
+   * a one-toast-at-a-time version. It is recorded rather than relied on: nothing is stopped by
+   * it, and a reader must not add a toast that expects to be cancelled by the next one.
+   */
   function toast(text, { ms = 4200 } = {}) {
     let host = $('duck-toasts');
     if (!host) {
@@ -166,6 +194,16 @@
     return true;
   }
 
+  /**
+   * Sort order for the sticker book: commonest first, so the wall fills left to right and the
+   * rare end is the part you scroll to.
+   *
+   * Not a validated enum anywhere. `src/content/schema.ts` types a sticker's `rarity` as
+   * `/^[A-Z_]+$/`, so a pack may ship any word at all; `indexOf` answers −1 for one this list
+   * does not name, which sorts it to the front rather than throwing. The two shipped packs
+   * between them use five of these six — nothing is MYTHIC today — and `styles.css` carries a
+   * `.rarity-*` colour for all six.
+   */
   const RARITY_ORDER = ['COMMON', 'UNCOMMON', 'RARE', 'EPIC', 'LEGENDARY', 'MYTHIC'];
 
   function renderTrainer() {

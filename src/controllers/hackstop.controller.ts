@@ -21,6 +21,9 @@ import { isProvenLead } from '../common/types/account';
 import { sameId } from '../common/utils/id';
 import { ApiError } from '../common/errors/apiError';
 
+/**
+ * Controller exposing HackStop beacon interactions, cooldown inspection, spins, and inventory power-up drops.
+ */
 export class HackStopController {
   /**
    * The beacon list answers an unproved caller rather than refusing one: an identity that was

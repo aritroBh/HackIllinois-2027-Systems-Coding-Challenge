@@ -171,18 +171,21 @@ class WsPresenceClient implements PresenceClient {
     return true;
   }
 
+  /** Transmit JSON presence message over WebSocket connection. */
   send(msg: unknown): boolean {
     if (!this.guard()) return false;
     this.ws.send(JSON.stringify(msg));
     return true;
   }
 
+  /** Transmit binary packed frame over WebSocket connection. */
   sendBinary(buf: ArrayBuffer): boolean {
     if (!this.guard()) return false;
     this.ws.send(Buffer.from(buf), { binary: true });
     return true;
   }
 
+  /** Close the WebSocket client connection with optional status code and reason. */
   close(code = 1000, reason = ''): void {
     try { this.ws.close(code, reason); } catch { /* already closing */ }
   }

@@ -10,6 +10,8 @@
  * the fifty-racing-registrations test: "exactly one winner and nineteen refusals" is a claim
  * about the database, and counting is the only way to make it.
  */
+import fs from 'fs';
+import path from 'path';
 import { Types } from 'mongoose';
 import { GauntletService } from '../src/services/gauntlet.service';
 import { GymService } from '../src/services/gym.service';
@@ -41,16 +43,38 @@ async function makeVolunteer(name: string) {
   return Volunteer.create({ name, email: `${name.toLowerCase()}@test.invalid`, role: 'VOLUNTEER' });
 }
 
-/** The answer that judges as correct for a challenge's case, derived the way the pack was authored. */
-function correctAnswerFor(challengeId: string, caseIndex: number, candidates: string[]): string | null {
+/**
+ * The plaintext answers, read from the authoring source that never ships.
+ *
+ * `design/challenges/` is deliberately outside the pack and outside the Docker image, so this
+ * is the only place a correct answer exists in the clear — which makes it the right source for
+ * a test and the wrong one for anything else. Reading it also gives this suite a property worth
+ * having: if the pack is regenerated and the digests stop matching the authored answers, every
+ * test that wins a challenge fails, rather than the mismatch surfacing at a gym.
+ *
+ * This replaced a hard-coded candidate list, which silently stopped covering the pack the
+ * moment it grew past the four answers that list happened to contain.
+ */
+const SOURCE = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'design', 'challenges', 'hackillinois-2027.json'), 'utf8')
+) as { challenges: { id: string; cases: { answer: string }[] }[] };
+
+/** The answer that judges as correct for a challenge's case. Asserts rather than guesses. */
+function correctAnswerFor(challengeId: string, caseIndex: number): string {
+  const authored = SOURCE.challenges.find((c) => c.id === challengeId);
+  if (!authored) throw new Error(`no authored answers for challenge "${challengeId}"`);
+  const answer = authored.cases[caseIndex].answer;
   const challenge = GauntletService.byId(challengeId)!;
-  for (const candidate of candidates) {
-    if (GauntletService.hashFor(challenge.id, caseIndex, candidate, challenge.normalise) === challenge.cases[caseIndex].hash) {
-      return candidate;
-    }
+  // Prove the authored answer really is the one the shipped digest accepts. If a pack was
+  // regenerated with a different salt or normalise rule, this is where it shows.
+  if (GauntletService.hashFor(challenge.id, caseIndex, answer, challenge.normalise) !== challenge.cases[caseIndex].hash) {
+    throw new Error(`authored answer for "${challengeId}" case ${caseIndex} does not match the shipped digest — regenerate with \`npm run gauntlet:hashes\``);
   }
-  return null;
+  return answer;
 }
+
+/** Every answer for a challenge, in case order. */
+const answersFor = (id: string) => GauntletService.byId(id)!.cases.map((_, i) => correctAnswerFor(id, i));
 
 describe('the pack ships judgeable challenges', () => {
   it('loads challenges and a salt from the content pack', () => {
@@ -71,9 +95,8 @@ describe('the pack ships judgeable challenges', () => {
     // Proven against a real pack challenge rather than a fixture, so a regenerated pack that
     // no longer judges would fail here rather than at a gym.
     const mc = GauntletService.list().find((c) => c.kind === 'MULTIPLE_CHOICE')!;
-    const right = correctAnswerFor(mc.id, 0, mc.choices!);
-    expect(right).not.toBeNull();
-    expect(GauntletService.judge(mc, [right!]).won).toBe(true);
+    const right = correctAnswerFor(mc.id, 0);
+    expect(GauntletService.judge(mc, [right]).won).toBe(true);
     const wrong = mc.choices!.find((ch) => ch !== right)!;
     expect(GauntletService.judge(mc, [wrong]).won).toBe(false);
   });
@@ -103,8 +126,7 @@ describe('you have to be there', () => {
     const v = await makeVolunteer('Walkaway');
     const served = await GauntletService.start(String(v._id), String(gym._id), AT);
     const challenge = GauntletService.byId(served.challengeId)!;
-    const answers = challenge.cases.map((_, i) =>
-      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError']) ?? 'x');
+    const answers = answersFor(challenge.id);
     // This is the line that stops "start at the gym, answer from the bus".
     await expect(GauntletService.submit(String(v._id), served.attemptId, answers, FAR)).rejects.toThrow(/Out of range/);
     const still = await ChallengeAttempt.findById(served.attemptId);
@@ -130,8 +152,7 @@ describe('a win is spent exactly once', () => {
     const v = await makeVolunteer('Spender');
     const served = await GauntletService.start(String(v._id), String(gym._id), AT);
     const challenge = GauntletService.byId(served.challengeId)!;
-    const answers = challenge.cases.map((_, i) =>
-      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    const answers = answersFor(challenge.id);
     const { won } = await GauntletService.submit(String(v._id), served.attemptId, answers, AT);
     expect(won).toBe(true);
 
@@ -152,8 +173,7 @@ describe('a win is never burned on a blow that cannot land', () => {
     const v = await makeVolunteer('Hopeful');
     const served = await GauntletService.start(String(v._id), String(gym._id), AT);
     const challenge = GauntletService.byId(served.challengeId)!;
-    const answers = challenge.cases.map((_, i) =>
-      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    const answers = answersFor(challenge.id);
     expect((await GauntletService.submit(String(v._id), served.attemptId, answers, AT)).won).toBe(true);
 
     await expect(GauntletService.spend(String(v._id), served.attemptId, 'TEAM_KERNEL'))
@@ -169,8 +189,7 @@ describe('a win is never burned on a blow that cannot land', () => {
     const v = await makeVolunteer('Persistent');
     const served = await GauntletService.start(String(v._id), String(gym._id), AT);
     const challenge = GauntletService.byId(served.challengeId)!;
-    const answers = challenge.cases.map((_, i) =>
-      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    const answers = answersFor(challenge.id);
     await GauntletService.submit(String(v._id), served.attemptId, answers, AT);
     const spent = await GauntletService.spend(String(v._id), served.attemptId, 'TEAM_KERNEL');
     expect(spent.gymId).toBe(String(gym._id));
@@ -187,8 +206,7 @@ describe('a deadline is a deadline', () => {
     // comparison, and a test that waits five minutes is a test nobody runs.
     await ChallengeAttempt.updateOne({ _id: served.attemptId }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
     const challenge = GauntletService.byId(served.challengeId)!;
-    const answers = challenge.cases.map((_, i) =>
-      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    const answers = answersFor(challenge.id);
     await expect(GauntletService.submit(String(v._id), served.attemptId, answers, AT)).rejects.toThrow(/Time is up/);
     const after = await ChallengeAttempt.findById(served.attemptId);
     expect(after!.status).toBe('EXPIRED');

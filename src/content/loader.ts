@@ -10,6 +10,11 @@
  * `design/pipeline/config.py` (`Frame.to_world`) and `public/app.js` (`toWorld`): +x east, +z south,
  * in world units of `metersPerUnit`. All three must agree or a presence dot lands on the
  * wrong lawn; the content test asserts the pack's Alma Mater against the baked model.
+ *
+ * `loadPack` has two callers and they want different things from a failure. `loadActivePack()`
+ * below runs at import for the process's own pack and ends the process. `src/content/validate.ts`
+ * (`npm run content:validate`) runs it over every directory under `content/` without booting a
+ * server, which is why the issue list is a returned structure rather than only a printed message.
  */
 import fs from 'fs';
 import path from 'path';
@@ -88,7 +93,31 @@ function readJson<T extends ZodTypeAny>(dir: string, file: string, schema: T, is
   }
 }
 
-/** Loads and validates a pack directory. Throws `ContentPackError` listing every issue. */
+/**
+ * Loads and validates a pack directory. Throws `ContentPackError` listing every issue.
+ *
+ * Seven files are required — `event.json`, `venues.json`, `monuments.json`, `factions.json`,
+ * `territories.json`, `beacons.json`, `loot.json` — and everything else is optional: a pack
+ * with no `booths.json` simply has no booths. Optional does not mean unchecked. A file that is
+ * present is parsed against its schema here, because what an absent check produces is not a
+ * crash but a mechanic that boots green and does nothing all weekend.
+ *
+ * The order below is deliberate:
+ *
+ *   1. read and parse every file, *collecting* issues instead of throwing (`readJson`);
+ *   2. assert the required seven — the only early exit in this function, and it exists because
+ *      `crossValidate` dereferences all seven. Continuing past a missing one would throw a
+ *      TypeError over the issue list the caller was about to be shown;
+ *   3. run the checks that need two optional files at once (venue keys and domain event names
+ *      in the game files, monument dossiers against the monument ids), which `crossValidate`
+ *      cannot do because it is handed a pack object that does not carry those files;
+ *   4. hand the rest to `crossValidate` and throw once, with everything.
+ *
+ * `challenges.json` is optional in the same way, and carries the gauntlet's questions. Its
+ * answers are sha256 HMAC digests rather than plaintext, and the reason is visible three
+ * screens down: `publicContent()` maps *every* JSON file in this directory into a URL under
+ * /dashboard/content. `src/content/challenges.schema.ts` writes out that trade and its limits.
+ */
 export function loadPack(dir: string): ContentPack {
   const issues: PackIssue[] = [];
   const event = readJson(dir, 'event.json', eventSchema, issues);
@@ -113,7 +142,15 @@ export function loadPack(dir: string): ContentPack {
   // schema exists to prevent, with the schema present and unused.
   const quests = fs.existsSync(path.join(dir, 'quests.json')) ? readJson(dir, 'quests.json', questsSchema, issues) : null;
   const info = fs.existsSync(path.join(dir, 'monuments-info.json')) ? readJson(dir, 'monuments-info.json', monumentsInfoSchema, issues) : null;
+  // The gauntlet's questions. Absent is a legitimate pack — `content/example-campus` ships none
+  // — and it is not the same as an empty list: `GauntletService.requiredForCapture()` reads the
+  // difference and refuses to gate captures behind a question set that does not exist. Present
+  // and wrong fails here, where an author is still editing, rather than in front of a player
+  // standing at a gym with a challenge that will not open.
   const challenges = fs.existsSync(path.join(dir, 'challenges.json')) ? readJson(dir, 'challenges.json', challengesSchema, issues) : null;
+  // The only early exit. Everything above collects; from here on the code dereferences these
+  // seven, so a missing one has to stop the run — and it stops it carrying the whole issue list,
+  // not just "event.json: file missing".
   if (!event || !venues || !monuments || !factions || !territories || !beacons || !loot) throw new ContentPackError(issues);
   // Venue keys in the game files, checked here rather than in `crossValidate` because these
   // files are optional and the pack object it receives does not carry them.
@@ -122,6 +159,10 @@ export function loadPack(dir: string): ContentPack {
   // neither checked. A booth or a raid pointing at a venue that does not exist boots without
   // complaint and shows up as a map pin that is not there — at the moment a sponsor asks why
   // nobody can find their table.
+  //
+  // The `if (venues)` is redundant — the throw above has already established it — and is kept
+  // only because it costs nothing and reads as a guard rather than as a narrowing. Do not read
+  // it as a check that can fire; a pack with no venues never reaches this line.
   if (venues) {
     const venueKeys = new Set(Object.keys(venues));
     booths?.booths.forEach((booth, i) => {
@@ -177,11 +218,31 @@ export function loadPack(dir: string): ContentPack {
     });
   });
 
+  // Dossiers are checked in one direction only, on purpose. A dossier keyed to a monument that
+  // does not exist is a typo — the text is written and will never appear — so it is reported. A
+  // monument with no dossier is not: the panel simply has no history section, which is the
+  // ordinary state of a pack whose prose is still being written. `_`-prefixed keys carry the
+  // file's own documentation (a pack is hand-edited JSON with nowhere to put a comment) and are
+  // skipped here rather than tested against the monument ids.
   if (info) {
     const ids = new Set(monuments.monuments.map((m) => m.id));
     for (const key of Object.keys(info)) if (!key.startsWith('_') && !ids.has(key)) issues.push({ file: 'monuments-info.json', path: key, message: 'dossier for an undeclared monument' });
   }
 
+  /*
+   * The baked model, read for one field and no more.
+   *
+   * `campus.json` is pipeline output, not hand-authored content: it can be megabytes of geometry
+   * and its shape is owned by `design/pipeline/`, so there is no Zod schema here and there should
+   * not be one — a schema for it would be a second definition of the pipeline's output format,
+   * kept in step by memory. All this needs is the monument ids, which `crossValidate` compares
+   * against `monuments.json` in both directions.
+   *
+   * Unparseable JSON is an issue; an absent file is not. `null` rather than `[]` is the load-
+   * bearing part of that: a pack whose campus has not been baked yet is a normal state a fork
+   * lives in for days, and `[]` would tell `crossValidate` the bake ran and produced nothing,
+   * turning every monument in the pack into a reported error.
+   */
   let campusMonumentIds: string[] | null = null;
   const campusFile = path.join(dir, 'campus.json');
   if (fs.existsSync(campusFile)) {
@@ -193,6 +254,18 @@ export function loadPack(dir: string): ContentPack {
     }
   }
 
+  /*
+   * The pack as the rest of the server reads it: one level flatter than the files are, so a
+   * caller writes `pack.monuments` rather than `pack.monuments.monuments`, and the per-file
+   * `_about` documentation keys are gone.
+   *
+   * `challenges` and `challengesSalt` are lifted out of the same file and are null together:
+   * the salt is meaningless without the digests it keyed, and a digest cannot be checked
+   * without the salt, so nothing downstream has to handle one arriving without the other.
+   *
+   * `crossValidate` is given this object rather than a finished `ContentPack` because it runs
+   * before `factionIds` and `files` exist — hence the `Omit` in its signature.
+   */
   const partial = {
     dir,
     event,
@@ -209,6 +282,11 @@ export function loadPack(dir: string): ContentPack {
   issues.push(...crossValidate(partial));
   if (issues.length) throw new ContentPackError(issues);
 
+  // The pack's own JSON files, listed only after it has validated — an invalid pack never gets
+  // as far as publishing a file list. This is the top level only and not recursive, which is why
+  // the tiled bake under `campus/` needs the separate existence check in `publicContent()`.
+  // Sorted so the descriptor the client fetches is byte-stable between boots on the same pack;
+  // directory order is not.
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
@@ -312,7 +390,20 @@ export function inBbox(latitude: number, longitude: number): boolean {
   return latitude >= s && latitude <= n && longitude >= w && longitude <= e;
 }
 
-/** What the client needs to boot: branding, venues, factions, monuments and file URLs. */
+/**
+ * What the client needs to boot: branding, venues, factions, monuments and file URLs.
+ *
+ * **Everything this returns is public, and so is everything it links to.** `src/app.ts` serves
+ * the whole pack directory with `express.static(pack.dir)` at /dashboard/content, and `files`
+ * below turns each entry of `pack.files` into a URL under it. There is no filter and there is no
+ * session check: a pack file is a download for anyone who asks.
+ *
+ * That is the constraint every pack file is authored under, and `challenges.json` is where it
+ * bites hardest — a plaintext answer written into a challenge would be the answer key, served.
+ * Hence the digests, `scripts/gauntletHashes.ts`, and the plaintext originals living in
+ * `design/challenges/`, which is neither served nor copied into the image. Anything genuinely
+ * secret does not belong in a pack at all.
+ */
 export function publicContent(): Record<string, unknown> {
   return {
     pack: pack.event.id,

@@ -125,6 +125,7 @@ class DomainEventBus {
     return this.listeners.get(name)?.size ?? 0;
   }
 
+  /** A throwing listener is logged, never propagated: one bad subscriber must not break dispatch. */
   private report(name: DomainEventName, err: unknown): void {
     console.error(`[domainEvents] listener for "${name}" failed:`, err instanceof Error ? err.message : err);
   }

@@ -25,6 +25,9 @@ const actorOf = (req: Request) => ({ id: resolveActorId(req), role: req.account?
  */
 const viewerOf = (req: Request) => ({ id: req.account?.id, role: req.account?.role, source: req.account?.source });
 
+/**
+ * Controller orchestrating hacker SOS distress tickets, incident triage, responder dispatch, and lifecycle progression.
+ */
 export class SOSController {
   /**
    * The responder says they are on their way. 200 with the ticket as this particular caller

@@ -98,9 +98,10 @@ flowchart TD
 ## 2. Database Schema & Entity-Relationship Architecture (ERD)
 
 > The diagram below covers the scheduling and game core. **[docs/DATA-MODEL.md](docs/DATA-MODEL.md)
-> is the complete reference** — all twenty-three collections including the four economy ledgers,
+> is the complete reference** — all twenty-four collections including the four economy ledgers,
 > the two auth tables and the audit tables this ERD does not draw — and explains why each one is
-> a separate collection rather than a field on something else.
+> a separate collection rather than a field on something else. `challengeAttempt`, the gauntlet's
+> collection (§10), is the twenty-fourth and is drawn below.
 
 The domain data model enforces strict data integrity, foreign key references, compound uniqueness constraints, and optimistic version tokens directly within MongoDB:
 
@@ -115,6 +116,8 @@ erDiagram
     SHIFT ||--o{ SHIFT_SWAP : "swapped in"
     SHIFT ||--o{ CHECK_IN : "validated against"
     GYM ||--o{ GYM_DEFENDER : "defended by"
+    GYM ||--o{ CHALLENGE_ATTEMPT : "gated by"
+    VOLUNTEER ||--o{ CHALLENGE_ATTEMPT : "attempts"
     HACK_STOP ||--o{ POWER_UP_INVENTORY : "looted from"
 
     VOLUNTEER {
@@ -216,6 +219,20 @@ erDiagram
         number version
         boolean isShielded
         Date shieldExpiresAt
+    }
+
+    CHALLENGE_ATTEMPT {
+        ObjectId _id PK
+        ObjectId accountId FK
+        ObjectId gymId FK
+        string challengeId
+        string status
+        string openKey "partial unique with accountId"
+        Date startedAt
+        Date expiresAt
+        Date answeredAt
+        Date spentAt
+        boolean[] perCase
     }
 
     HACK_STOP {
@@ -561,6 +578,138 @@ const updated = await Gym.findOneAndUpdate(
 ```
 If another volunteer contests the gym concurrently, `updated` returns `null`, and the algorithm retries with jittered backoff (up to 5 attempts; the pause is `Math.random() * 40 * attempt` ms, linear in the attempt rather than exponential).
 
+### The Gauntlet: the last hit on a rival gym is a coding challenge
+
+Control points alone no longer take a rival gym. The switch is
+`event.gauntlet.requiredForCapture`: it defaults to **false** in `src/content/schema.ts`, the
+shipped `content/hackillinois-2027/event.json` sets it true, and `content/example-campus` ships
+no `challenges.json` at all — so a fork keeps the capture behaviour it already had until it opts
+in, and `GauntletService.requiredForCapture()` additionally refuses a `true` from a pack that has
+no challenges to serve.
+
+Exactly one branch changes. A strike that would have flipped a rival gym instead floors it at
+**1 control point**, and the response says what would finish it; the flip needs a challenge win
+spent through `POST /pokeshift/gauntlets/:attemptId/spend`. Reinforcing an ally, claiming neutral
+ground and every earlier strike behave as before, because gating those would break the first
+thirty seconds of play for the sake of the last one.
+
+**It verifies answers, not programs.** The judge in `src/services/gauntlet.service.ts` is
+`normalise` → HMAC-SHA256 → `timingSafeEqual` against a digest the pack ships. Nothing is
+executed: no `vm`, no worker, no container, no third-party runner and no new dependency, so
+there is nothing to sandbox. Answers can only be digests because `src/app.ts` serves the pack
+directory publicly under `/dashboard/content` — plaintext written into a pack file would be a
+download. The plaintext lives in `design/challenges/hackillinois-2027.json`, which is neither
+served nor copied into the image, and `npm run gauntlet:hashes` (`scripts/gauntletHashes.ts`)
+turns it into the digests in `content/hackillinois-2027/challenges.json` by calling the same
+`GauntletService.hashFor` the judge uses. `challengeCaseSchema` is `.strict()` and rejects a
+plaintext `answer` field outright rather than ignoring it.
+
+Digests are keyed on the pack's own `answerSalt`, not on `QR_HMAC_SECRET`, and that is a trade
+rather than an oversight: outside production an unset `QR_HMAC_SECRET` is replaced with an
+ephemeral per-boot value (`src/config/env.ts:216`), so a pack keyed on it would stop judging
+correctly the next morning. Be exact about what the salt buys —
+**it stops the answer being read, not guessed.** The answer space for "what does this print" is
+small and candidates can be hashed offline, and every player of a challenge sees the same input,
+so an answer is shareable. What bounds cheating here is physical rather than cryptographic: the
+geofence is checked at start **and** again at submit, the attempt carries a server-side deadline,
+one submission ends it, and one attempt is open per account at a time.
+
+**Layering.** Nothing new was invented for it — three routes, one controller, one service, one
+collection:
+
+```text
+  Router      src/routes/v1/pokestop.routes.ts     pokeShiftRouter, all three requireSession
+                POST /pokeshift/gyms/:id/gauntlet             open an attempt
+                POST /pokeshift/gauntlets/:attemptId/submit   judge it
+                POST /pokeshift/gauntlets/:attemptId/spend    spend a win on the capture
+  Controller  src/controllers/gym.controller.ts    startGauntlet / submitGauntlet /
+                spendGauntlet — resolve the actor with resolveActorId, shape the response,
+                judge nothing
+  Service     src/services/gauntlet.service.ts     start / submit / spend: geofence, deadline,
+                the HMAC judge, and the single-spend conditional update
+  Model       src/models/challengeAttempt.model.ts the attempt row, its partial unique
+                index and the lookup index on (accountId, gymId, createdAt)
+```
+
+All three routes carry `requireSession`, unlike `POST /gyms/:id/battle` beside them, which stays
+ungated for the legacy demo posture: these three create and move a durable row owned by a named
+person, and the spend pays karma through the capture path.
+
+#### The ChallengeAttempt state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN : start — inside the geofence, gym unshielded
+
+    OPEN --> WON : submit, inside the geofence, before the deadline, every case matches
+    OPEN --> LOST : submit, before the deadline, any case fails
+    OPEN --> EXPIRED : deadline passed — swept on the next start, or refused at submit
+    WON --> SPENT : spend — conditional update WON to SPENT, then the ordinary capture
+
+    LOST --> [*]
+    EXPIRED --> [*]
+    SPENT --> [*]
+
+    note right of OPEN
+        openKey = OPEN_ATTEMPT_KEY while here,
+        null in every other state
+    end note
+    note right of WON
+        A single-use token, not a capture.
+        The gym has not moved yet.
+    end note
+```
+
+`WON` and `SPENT` are separate states on purpose: winning mints a token, and redeeming it is a
+second request against `GymService`. A losing submission keeps its per-case verdicts in `perCase`
+so a player can see which case they missed without being shown the answer. `EXPIRED` is reached
+two ways, both conditional on the deadline — a sweep of the account's own stale rows when it next
+starts an attempt, and the submit path, which refuses a correct answer that arrives late.
+
+#### Two invariants the database owns
+
+Neither is a count followed by a write, because that shape cannot survive two requests in the
+same millisecond — the shape the compound unique index on `BoothScan` already exists to prevent.
+
+| Invariant | Mechanism | Under twenty concurrent requests |
+|---|---|---|
+| One open attempt per account | Partial unique index on `{ accountId, openKey }`, filtered to rows where `openKey` is a string. `openKey` holds the constant `OPEN_ATTEMPT_KEY` while OPEN and `null` afterwards, so finished rows leave the index entirely and their nulls cannot collide. | One insert; nineteen duplicate-key errors, returned as 409. |
+| One capture per win | `findOneAndUpdate` filtered on `status: 'WON'`, setting `SPENT`. The filter names the state the caller believes they are in. | One spend; nineteen 409s. |
+
+The third invariant is the one section 10 already described: the capture itself is still the
+`version` compare-and-swap on the gym document.
+
+#### Composing with GymService rather than copying it
+
+`spendGauntlet` burns the token and then calls the ordinary capture path —
+`GymService.battleOrContribute(gymId, actor, faction, challenge.capturePower, coordinates, { viaGauntlet: true })`.
+The gauntlet is an argument to the code that already owns the CAS retry loop, the shield rule,
+the faction lock and the karma payout, not a second implementation of it; `opts.viaGauntlet` is
+read at exactly one place, the branch that would otherwise flip the gym.
+
+* `capturePower` is bounded to 10–500 in `src/content/challenges.schema.ts`, the same range
+  `battleGymSchema` accepts for `power`, so a won gauntlet cannot express a battle the ordinary
+  route would refuse.
+* Karma is the existing payout: `awardBattleKarma` under the existing `GYM` source and its
+  per-volunteer cooldown. No new karma source was added — `crossValidate` refuses a pack that
+  leaves a declared source unpriced, so a new key in `KARMA_SOURCES` would boot-break every fork
+  that pulled the change without editing its pack.
+* The order costs something, and it is worth naming: the token is burned before the capture runs,
+  so a capture that throws afterwards loses the win. That is the same survivable direction the
+  karma payout already chose — the alternative is a compensating write against a document other
+  players are contending for.
+
+One authored field is not paid: a challenge's `rewardKarma` is validated, carried, and reported
+in the submit response, and nothing credits it — the karma a capture pays is the ordinary battle
+payout. It is recorded in `docs/LIMITATIONS.md` rather than fixed here, because paying it is an
+economy decision.
+
+The client half is the `CHALLENGE` command in the encounter modal (`public/game.js`), which posts
+the player's own position, renders the prompt and cases, counts down from the server's
+`expiresAt`, and on a win posts the spend. `tests/gauntlet.test.ts` is the suite: it asserts the
+off-campus refusal at both ends, the deadline, the served payload carrying no digest, and both
+concurrency invariants at twenty workers.
+
 ---
 
 ## 11. HackStop Supply Beacons & CAS Power-Up Inventory
@@ -902,7 +1051,7 @@ encounter with no keyboard exit, 7 px labels, and unvalidated content.
 
 ```text
 ========================================================================================
-VERIFICATION MATRIX — 34 suites, 375 tests (snapshot, 2026-09-07)
+VERIFICATION MATRIX — 35 suites, 390 tests (snapshot, 2026-09-07)
 ========================================================================================
 Run `npm test` for the authoritative figure; the numbers above are a snapshot, not a claim.
 
@@ -925,6 +1074,8 @@ Run `npm test` for the authoritative figure; the numbers above are a snapshot, n
   economy          the karma ledger, daily caps, bounty budgets
   game             quests, stickers, streaks over the domain bus
   pokestop         turf-war OCC battles and HackStop beacons
+  gauntlet         the coding-challenge gate: the geofence at both ends, the deadline,
+                   one open attempt and one spend, each at twenty workers
   shifts           catalogue encodings and circadian surge pricing
   content          pack validation and cross-references
   campus           the tiled bake, per-tile hashes, monument ids

@@ -88,6 +88,9 @@ export function eventDayKey(at: Date = new Date(), timeZone: string = pack.event
   }).format(at);
 }
 
+/**
+ * Karma bounty service handling high-urgency shift bounties, concurrency limits, and reward allocations.
+ */
 export class BountyService {
   /**
    * Commits `bounty` karma against `accountId`'s allowance for `day`, inside the caller's

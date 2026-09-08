@@ -23,6 +23,7 @@ import { connectDatabase, disconnectDatabase } from './config/database';
 import { eventHub } from './common/sse/eventHub';
 import { createServer } from './server';
 
+/** Production entry point: connects, serves, and wires ordered shutdown. */
 async function bootstrap() {
   try {
     await connectDatabase();

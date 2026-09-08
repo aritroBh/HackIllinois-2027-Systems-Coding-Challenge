@@ -102,6 +102,9 @@ export function __resetAvatarRate(): void {
   recentFlags.clear();
 }
 
+/**
+ * Avatar customization and procedural pixel-art asset generation service for volunteer trainers.
+ */
 export class AvatarService {
   /**
    * Decode → validate dimensions → re-encode → hash → store. Returns the stored document;

@@ -40,6 +40,7 @@ export class ConsoleMailer implements Mailer {
   /** Captured for tests and for the dev console. */
   public readonly sent: OutboundMail[] = [];
 
+  /** Implements Mailer.send by capture: the mail lands in `sent`, never on the wire. */
   public async send(mail: OutboundMail): Promise<void> {
     this.sent.push(mail);
     if (env.NODE_ENV !== 'test') {
@@ -62,6 +63,7 @@ export class SmtpMailer implements Mailer {
     this.transport = nodemailer.createTransport(url);
   }
 
+  /** Implements Mailer.send over SMTP. */
   public async send(mail: OutboundMail): Promise<void> {
     await this.transport.sendMail({ from: env.MAIL_FROM, to: mail.to, subject: mail.subject, text: mail.text });
   }

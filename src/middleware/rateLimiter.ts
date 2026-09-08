@@ -135,6 +135,7 @@ export interface Limiters {
 
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
+/** Best-effort client IP for the anonymous buckets; unknown callers share one. */
 function ipOf(req: Request): string {
   return req.ip ?? req.socket?.remoteAddress ?? 'unknown';
 }
@@ -168,6 +169,7 @@ function isProvenSession(req: Request): boolean {
  */
 const skipProvenSession = () => (req: Request): boolean => isProvenSession(req);
 
+/** The four write verbs count against the mutation bucket; reads pass through. */
 function isMutation(req: Request): boolean {
   return MUTATING_METHODS.has(req.method);
 }

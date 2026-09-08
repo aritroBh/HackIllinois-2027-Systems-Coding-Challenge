@@ -6,15 +6,27 @@
  * **The geofence is checked twice — at start and again at submit — and the second one is the
  * line that matters.** Checking only at the start means a player opens the challenge at the
  * gym and answers it from the bus; checking only at submit means the question set can be
- * harvested from anywhere. Both checks resolve their radius through `geofenceMetersFor()`,
- * the same one `GymService` uses, so a pack that widens a venue widens all three together.
+ * harvested from anywhere. Both checks call `geofenceMetersFor()` with no venue key, which is
+ * the same call `GymService.battleOrContribute` makes, so all three agree by construction.
+ *
+ * Be exact about what that resolves to, because an earlier version of this line was not. Called
+ * with no key the function returns `event.campus.geofenceMeters`, falling back to
+ * `DEFAULT_GEOFENCE_METERS`; a venue's own `radiusMeters` is never consulted on this path. It
+ * cannot be: a `Gym` document stores coordinates and no venue key, so there is nothing here to
+ * look one up by — the same limit is written out beside the identical call in
+ * `src/services/gym.service.ts`. Widening a venue therefore changes nothing for a gym. Widening
+ * `event.campus.geofenceMeters` widens all three at once.
  *
  * **Judging never interprets what a player sends.** The whole judge is
  * `string -> normalise -> HMAC -> timingSafeEqual` against a digest the pack ships. Nothing is
  * executed, so there is nothing to sandbox: no `vm`, no worker, no container, no third-party
- * runner. The bounded cost is at most eight HMACs over at most 200 bytes each, which is why
- * the route needs no limiter of its own beyond the API's. What this buys is honesty about what
- * it is — it verifies answers, not programs, and `challenges.schema.ts` says so at length.
+ * runner. The cost is bounded before it is reached, by two caps that live outside this file:
+ * `challengeSchema` allows a challenge at most eight cases, and `submitGauntletSchema` allows
+ * at most eight answers of at most 200 characters each. A submission is therefore at most eight
+ * sha256 HMACs over a few hundred bytes apiece, which is why these routes carry no limiter of
+ * their own — `apiRateLimiter` and `mutationLimiter`, mounted on `/api/v1` in `src/app.ts`, are
+ * the whole budget. What this buys is honesty about what it is — it verifies answers, not
+ * programs, and `challenges.schema.ts` says so at length.
  *
  * **A win is spent exactly once**, by a conditional update from WON to SPENT. Twenty requests
  * carrying the same attempt id produce one capture and nineteen conflicts, decided by the
@@ -36,7 +48,18 @@ import { Challenge } from '../content/challenges.schema';
 import { geofenceMetersFor } from '../common/utils/geofence';
 import { GeoEngine } from '../common/utils/geo';
 
-/** Namespaces the digest so a hash can never be reused as any other HMAC in this system. */
+/**
+ * Namespaces the digest so a hash can never be reused as any other HMAC in this system.
+ *
+ * Two things prefix themselves with it: the answer HMAC in `hashFor`, and the plain sha256 in
+ * `challengeForGym` that picks which challenge a gym asks. They are different constructions
+ * over different inputs, and the shared prefix is what keeps either from ever colliding with a
+ * booth QR code or a session digest.
+ *
+ * The `v1` is the escape hatch. Changing this string invalidates every digest in every authored
+ * pack at once — nothing in `content/` can be judged again until `npm run gauntlet:hashes` is
+ * re-run for each pack — so it is versioned rather than edited in place.
+ */
 const HASH_PREFIX = 'gauntlet:v1:';
 
 export interface Coordinates { latitude: number; longitude: number }
@@ -56,22 +79,55 @@ export interface ServedChallenge {
   capturePower: number;
 }
 
+/**
+ * Coding challenge gauntlet service validating algorithmic puzzle solutions required for rival Gym takeovers.
+ */
 export class GauntletService {
-  /** Every challenge the pack ships, or an empty list when it ships none. */
+  /**
+   * Every challenge the pack ships, or an empty list when it ships none.
+   *
+   * `pack.challenges` is `null`, not `[]`, when the pack has no `challenges.json` at all —
+   * `content/example-campus` is that case. The distinction matters to `loader.ts` and to
+   * nothing here, so it is flattened to a list the callers can iterate without a null check.
+   * Anything in this list has been through `challengesSchema`: `loadPack` throws on any issue,
+   * so a pack whose challenges do not validate does not boot, it does not boot degraded.
+   */
   public static list(): Challenge[] {
     return pack.challenges ?? [];
   }
 
-  /** This pack's answer salt. Only meaningful when the pack ships challenges. */
+  /**
+   * This pack's answer salt. Only meaningful when the pack ships challenges.
+   *
+   * The `''` fallback is unreachable while judging rather than merely harmless: `start` refuses
+   * with a 404 when the list is empty, and `submit` refuses when the attempt's challenge is no
+   * longer in the pack, so no digest is ever produced under the empty salt and compared against
+   * one produced under a real salt.
+   */
   public static salt(): string {
     return pack.challengesSalt ?? '';
   }
 
+  /**
+   * A challenge by its pack id, or null when this pack no longer ships it.
+   *
+   * Null is a real case, not defensive padding, and both callers translate it into a 404: an
+   * attempt row outlives the pack that served it, so an event that swaps its `challenges.json`
+   * while somebody has an attempt open leaves rows pointing at an id that is gone.
+   */
   public static byId(id: string): Challenge | null {
     return this.list().find((c) => c.id === id) ?? null;
   }
 
-  /** Whether a pack has turned the gauntlet requirement on. Off means gyms capture as before. */
+  /**
+   * Whether a pack has turned the gauntlet requirement on. Off means gyms capture as before.
+   *
+   * The `length > 0` half is the important one. A pack that sets `requiredForCapture` while
+   * shipping no challenges would otherwise make every rival gym permanently uncapturable — the
+   * flip would demand a win that nothing can serve — so the flag is refused unless there is
+   * something to unlock it with. `src/content/schema.ts` defaults it to false for the same
+   * reason, one layer earlier.
+   */
   public static requiredForCapture(): boolean {
     return this.list().length > 0 && pack.event.gauntlet.requiredForCapture;
   }

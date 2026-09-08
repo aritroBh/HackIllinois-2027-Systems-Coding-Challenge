@@ -88,6 +88,9 @@ import { domainEvents } from '../common/events/domainEvents';
  */
 const CHECK_IN_GRACE_MS = 30 * 60 * 1000;
 
+/**
+ * Attendance service verifying volunteer check-ins via rotating HMAC-SHA256 QR tokens and calculating pro-rata karma.
+ */
 export class CheckInService {
   /**
    * Mints a token for one volunteer and one shift, having first checked that they still hold

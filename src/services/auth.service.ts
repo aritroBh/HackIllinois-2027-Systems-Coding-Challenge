@@ -150,6 +150,9 @@ export function generateClaimCode(): string {
   return out;
 }
 
+/**
+ * Core authentication service handling credential exchange, magic link verification, session cookies, and token management.
+ */
 export class AuthService {
   private static claimFailures: number[] = [];
   private static lastBruteForceAlarmAt = 0;

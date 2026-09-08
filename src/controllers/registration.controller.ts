@@ -19,6 +19,9 @@ import { Request, Response, NextFunction } from 'express';
 import { RegistrationService } from '../services/registration.service';
 import { resolveActorId, resolveOnBehalf } from '../middleware/identity';
 
+/**
+ * Controller governing shift registration, capacity reservation, waitlist queueing, and cancellation cascades.
+ */
 export class RegistrationController {
   /**
    * Reserve a seat, or take a queue place. The status code is the only thing this method

@@ -12,12 +12,21 @@
  * gate tests for had been broken for as long as the split had existed. Nothing failed,
  * because nothing compared the two.
  *
- * Three assertions, in the order a reader would ask them:
- *   1. every script index.html loads is in SHELL or SHELL_OPTIONAL;
- *   2. every SHELL entry exists on disk (a missing one fails the install, and `sw.js` says
- *      so — the previous worker stays in charge and the new shell never lands);
- *   3. every SHELL entry is reachable under /dashboard, i.e. really is a file we serve;
- *   4. `VERSION` in sw.js was bumped if the *contents* of any precached file changed.
+ * Five groups of assertions, in the order the file runs them:
+ *   1. every asset index.html loads from /dashboard/ is in SHELL or SHELL_OPTIONAL — `src=`
+ *      and `href=` both, so a stylesheet or a font counts, not only a script;
+ *   2. every SHELL and SHELL_OPTIONAL entry is under /dashboard/ (`app.ts` mounts `public/`
+ *      there, so the prefix is what makes it a file we serve) and exists on disk. A missing
+ *      SHELL entry fails the install — `cache.addAll` rejects and nothing catches it — so the
+ *      previous worker stays in charge and the new shell never lands. A missing
+ *      SHELL_OPTIONAL entry does not fail the install, because sw.js `cache.add`s those one
+ *      at a time inside a try/catch, but it still fails here: a list naming a file that is not
+ *      there is a mistake either way;
+ *   3. every icon `manifest.webmanifest` declares exists, is a PNG, and really is the pixel
+ *      size it claims;
+ *   4. `VERSION` in sw.js was bumped if the *contents* of any precached file changed;
+ *   5. index.html's pre-script fallback nav still matches the `registerTab()` registry — the
+ *      tabs it names, which tabs it is required to name, their order, and its ARIA.
  *
  * The fourth is the one that cost real time. The shell is served **cache-first**, so an
  * installed worker keeps handing the page the JS it cached at install and only a `VERSION`
@@ -51,6 +60,12 @@ const sw = read('public/sw.js');
  * page and not to `SHELL` would have slipped past a checker written to catch exactly that
  * mistake. The extension filter is gone with it; whatever the page loads from `/dashboard/`
  * has to be precached or explicitly optional, whatever it is.
+ *
+ * Limits worth knowing before you trust a green result: the attribute must be double-quoted
+ * and the URL root-relative. `src='…'` or `href=/dashboard/x.js` matches nothing and is not
+ * reported — the scan has no way to tell "no such attribute" from "an attribute I cannot
+ * read". Everything under `/dashboard/` in this repo is written the quoted, root-relative way,
+ * which is why that has been survivable; keep it that way.
  */
 const loaded = [
   ...new Set([...html.matchAll(/(?:src|href)="(\/dashboard\/[^"]+)"/g)].map((m) => m[1])),
@@ -64,6 +79,15 @@ const loaded = [
  * existence assertions below never covered the one file the whole offline shell is for: the
  * page itself. An identifier that does not resolve to a string constant is an error rather
  * than a skip, since skipping is exactly the failure being fixed.
+ *
+ * Throws rather than returning empty when the declaration is absent: an empty list would make
+ * every assertion below vacuously true, and this gate exists because a check that cannot fail
+ * looks exactly like a check that passed.
+ *
+ * The array must be flat and one-per-entry: the body is taken as everything up to the first
+ * `];` after the declaration and split on commas, so a nested array or an object entry would
+ * truncate or mis-split it. Both SHELL and SHELL_OPTIONAL are flat lists of path strings; the
+ * `throw` at the bottom of the loop is what stops anything else passing quietly.
  */
 function arrayOf(name) {
   const start = sw.indexOf(`const ${name} = [`);
@@ -146,6 +170,23 @@ for (const icon of manifest?.icons ?? []) {
  * under; if the hash has moved and VERSION has not, the deploy would leave returning users on
  * the previous JS and this fails instead. Updating the lock is deliberate work: bump VERSION
  * in sw.js, then run `node scripts/checkShell.mjs --write-lock`.
+ *
+ * The hash is sha256 truncated to 16 hex characters — short enough to read in a diff, and this
+ * is drift detection between two files in one repo, not a defence against someone constructing
+ * a collision.
+ *
+ * Entries are sorted before hashing so reordering the SHELL list alone does not move the hash;
+ * the entry *paths* are fed in as well as the bytes, so adding, removing or renaming a file
+ * does move it. An entry with no file on disk contributes only its path — the digest loop skips
+ * the read — which is not a hole, because the existence loop above has already recorded that
+ * as a problem.
+ *
+ * What this pairing does NOT catch: bumping VERSION while no precached byte changed. Both
+ * branches below require `lockHash !== shellHash`, and sw.js is not itself precached, so a
+ * VERSION-only bump moves nothing the digest sees, reports nothing, and leaves `sw-shell.lock`
+ * recording the older VERSION beside a still-correct hash. That direction is harmless — a
+ * needless bump only costs returning users one re-download — which is why it is tolerated
+ * rather than fixed, but do not read a green result as "the lock's version field is current".
  */
 const versionMatch = sw.match(/const VERSION = '([^']+)'/);
 if (!versionMatch) throw new Error('checkShell: sw.js has no VERSION constant');
@@ -160,6 +201,16 @@ for (const entry of [...shell, ...optional].sort()) {
 const shellHash = digest.digest('hex').slice(0, 16);
 const lockPath = path.join(root, 'public/sw-shell.lock');
 
+/*
+ * `--write-lock` records the current pairing and exits 0 immediately.
+ *
+ * Two things a reader should know about that early exit: it happens before the fallback-nav
+ * block below ever runs, and it discards any `problems` already collected above. So a
+ * `--write-lock` run is not a check — it can succeed on a tree where the real run fails, and
+ * it will happily record a hash for a shell whose files do not exist (missing entries are
+ * simply skipped by the digest loop). Run `node scripts/checkShell.mjs` with no arguments
+ * afterwards; `scripts/verify.sh` runs exactly that form.
+ */
 if (process.argv.includes('--write-lock')) {
   fs.writeFileSync(lockPath, `${version} ${shellHash}\n`);
   console.log(`checkShell: lock written — ${version} ${shellHash}`);
@@ -219,22 +270,6 @@ if (!fs.existsSync(lockPath)) {
      */
     const registered = new Map();
     /**
-     * Every file that can register a tab, discovered rather than listed.
-     *
-     * This was a hard-coded list of five paths, and everything outside it was invisible to
-     * the gate — which is worse than it sounds, because adding `public/views/<name>.js` is
-     * exactly what CONTRIBUTING.md and docs/PLUGINS.md tell a contributor to do. Their tab
-     * went unscanned, so the role-gating check this whole block exists to perform silently
-     * did not run on it; and if they also added it to index.html's fallback nav, the loop
-     * below reported `no registerTab() call declares "tab-x"` — a false statement about
-     * their code that was really a true statement about this scanner's reading list. A
-     * contributor's first meeting with this repository's gates would have been a lie.
-     *
-     * Plugin client assets have the same shape one directory over, so they are globbed too.
-     * The same drift, in `scripts/verify.sh`'s frontend-syntax step, had left it nine files
-     * behind before it was globbed for this reason.
-     */
-    /**
      * A `registerTab(...)` whose argument is not an inline object literal.
      *
      * Both scans key on `registerTab(\s*{`, so `const conf = {...}; registerTab(conf);`
@@ -255,6 +290,14 @@ if (!fs.existsSync(lockPath)) {
       }
     };
 
+    /**
+     * The `.js` files directly inside `rel`, as repo-relative paths. Not recursive.
+     *
+     * A missing directory is an empty list, not a throw: `plugins/` need not exist, and a
+     * checkout with no plugins is not a fault. That tolerance is only safe because the one
+     * directory this gate genuinely depends on — `public/views` — is also read by the loop
+     * below, which throws on a file it cannot open.
+     */
     const listJs = (rel) => {
       try {
         return fs.readdirSync(path.join(root, rel))
@@ -264,6 +307,7 @@ if (!fs.existsSync(lockPath)) {
         return [];   // the directory need not exist; a repo with no plugins is not a fault
       }
     };
+    /** `plugins/<name>/public` for every directory under `plugins/`; empty when there is none. */
     const pluginDirs = (() => {
       try {
         return fs.readdirSync(path.join(root, 'plugins'), { withFileTypes: true })
@@ -273,6 +317,27 @@ if (!fs.existsSync(lockPath)) {
         return [];
       }
     })();
+    /**
+     * Every file that can register a tab, discovered rather than listed.
+     *
+     * This was a hard-coded list of five paths — `public/app.js` plus `me`, `lead`, `sos` and
+     * `quests` under `public/views` — and everything outside it was invisible to the gate.
+     * That is worse than it sounds: CONTRIBUTING.md tells a contributor that frontend files
+     * under `public/` register their tabs with `Nexus.registerTab`, and docs/PLUGINS.md
+     * documents the same call for a plugin script, and neither says anything about being one
+     * of five files a scanner knows by name. A sixth view's tab went unscanned, so the
+     * role-gating check this whole block exists to perform silently did not run on it; and if
+     * they also added it to index.html's fallback nav, the loop below reported `no
+     * registerTab() call declares "tab-x"` — a false statement about their code that was
+     * really a true statement about this scanner's reading list. A contributor's first meeting
+     * with this repository's gates would have been a lie.
+     *
+     * `public/app.js` is still named explicitly rather than globbed, because globbing all of
+     * `public/` would pull in every other browser script for a `registerTab` scan they have no
+     * reason to answer. Plugin client assets have the same shape one directory over, so they
+     * are globbed too. The same drift, in `scripts/verify.sh`'s frontend-syntax step, had left
+     * it nine files behind before it was globbed for this reason.
+     */
     const TAB_SOURCES = ['public/app.js', ...listJs('public/views'), ...pluginDirs.flatMap(listJs)];
     /** The `{...}` object literal starting at `from`, by brace depth, ignoring quoted braces. */
     const objectAt = (src, from) => {

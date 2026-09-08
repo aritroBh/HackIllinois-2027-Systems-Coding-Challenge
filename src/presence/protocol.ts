@@ -192,6 +192,7 @@ function clampI16(v: number): number {
  * volunteer.
  */
 export type JsonRow = [number, number, number, number, number, 0 | 1, 0 | 1];
+/** Binary row projected into its JSON twin; the field contract is `JsonRow` above. */
 export function toJsonRow(r: WireRow): JsonRow {
   return [r.idx, +r.x.toFixed(3), +r.z.toFixed(3), Math.round(r.h), r.faction, r.stale ? 1 : 0, r.kind];
 }

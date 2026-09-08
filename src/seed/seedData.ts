@@ -32,6 +32,7 @@ import { HackStop } from '../models/hackstop.model';
 import { pack } from '../content/loader';
 import { geofenceMetersFor } from '../common/utils/geofence';
 
+/** Wipes every collection and rehydrates from the active pack. Refuses production without `FORCE_SEED`. */
 export async function seedDatabase(): Promise<void> {
   // ponytail: seed wipes every collection — refuse against a real database unless
   // explicitly forced. An accidental `npm run seed` with MONGODB_URI set must not nuke prod.

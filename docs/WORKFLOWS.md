@@ -1,6 +1,6 @@
 # The workflows, start to end
 
-Six things happen in this system that involve more than one request, more than one person, or
+Seven things happen in this system that involve more than one request, more than one person, or
 more than one machine. This is what each of them does from the first tap to the last write,
 where the guarantees live, and what happens when a step fails.
 
@@ -207,8 +207,9 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
    thresholds, and the tool to re-measure; treat the milliseconds as a property of the machine and
    the ratio as the property of the code.
 5. **Privacy is symmetric between players, with one exception.** Opting out hides you from
-   other players and stops your map showing them. A lead's roster still counts you, which is
-   the one asymmetry and is stated in `docs/PRESENCE.md`.
+   other players and stops your map showing them. An opted-out lead still reads exact
+   positions two ways — the shift roster and `GET /presence` — which is the asymmetry
+   and is stated in `docs/PRESENCE.md`.
 
    Exactly **three** things read an exact position, and each writes an audit row that is
    deleted after thirty days: a lead's roster (`GET /shifts/:id/roster`), a lead's
@@ -221,7 +222,101 @@ makes the farm worthless, so that is the rule to keep if this one is ever relaxe
 
 ---
 
-## 6. The campus, from OpenStreetMap to a phone
+## 6. Taking a rival gym
+
+**Who:** any signed-in player. **Where:** `src/services/gauntlet.service.ts`,
+`src/models/challengeAttempt.model.ts`, `src/services/gym.service.ts`, `public/game.js`.
+
+Spending enough control points on a rival stronghold no longer takes it. The last blow is a
+coding challenge, answered while standing inside that gym's own geofence.
+
+This is a pack decision. `event.gauntlet.requiredForCapture` defaults to **false** in
+`src/content/schema.ts`; the shipped `content/hackillinois-2027/event.json` sets it true;
+`content/example-campus` neither sets the flag nor ships a `challenges.json`, and either of those
+alone would be enough, because `GauntletService.requiredForCapture()` refuses to honour the flag
+for a pack that ships no challenges. Reinforcing an ally and taking neutral ground are untouched either way — the flag
+gates the flip of a rival gym and nothing else.
+
+1. **Walk there.** Every step below sends coordinates and every one of them is checked against
+   the gym's position server-side. The client refuses first: `requirePlayerCoords` in
+   `public/app.js` stops the request and says "Taking a gym needs your position. Open Campus and
+   place your trainer first."
+2. **Grind it down.** FIGHT is unchanged — `battleOrFortifyGym` in `public/app.js` posts
+   `power: 150` to `POST /pokeshift/gyms/:id/battle`, and each strike takes that many control
+   points off. What changed is the strike that would have flipped the gym: with the flag on, it
+   floors the gym at **1 control point** instead, and the server's own message says what is
+   left to do — "… is down to its last point. Win its coding challenge to take it."
+3. **Open the challenge.** CHALLENGE in the encounter modal (`public/game.js`), disabled on
+   allied and unclaimed gyms. It posts to `POST /pokeshift/gyms/:id/gauntlet`, and a 201 carries
+   the title, the prompt, the difficulty, the choices for a `MULTIPLE_CHOICE` question or the
+   per-case inputs for a `PREDICT_OUTPUT` one, `expiresAt`, and the `capturePower` the win is
+   worth. No answer travels in any form. The question is chosen by hashing the gym id, so
+   closing the modal and re-opening the same gym asks the same thing — there is no reroll.
+4. **Answer it, still inside the fence.** The countdown is drawn from the server's `expiresAt`
+   rather than a timer started in the browser, and the client re-reads the player's position for
+   the submit. `POST /pokeshift/gauntlets/:attemptId/submit` re-checks the geofence, checks the
+   deadline against the server clock, and judges: normalise the text, HMAC it, compare it to the
+   digest the pack ships with `timingSafeEqual`. **Nothing is executed** — there is no sandbox
+   here because there is nothing to sandbox; it verifies answers, not programs. The reply is a
+   per-case verdict list and a count, never the expected answer.
+5. **Spend the win.** A win is a single-use token, not a capture: the attempt sits in `WON` until
+   `POST /pokeshift/gauntlets/:attemptId/spend` exchanges it, and that exchange is a conditional
+   update from `WON` to `SPENT`, so twenty requests carrying the same attempt id produce one
+   capture and nineteen refusals. The spend calls the ordinary capture path,
+   `GymService.battleOrContribute` with `viaGauntlet` set and the challenge's `capturePower` as
+   the strike — same compare-and-set, same shield rule, same faction binding, same payout. There
+   is no second capture path to drift.
+
+**Grind first, then answer.** The spend is an ordinary strike carrying the challenge's
+`capturePower`, so a win spent on a gym that still holds more control points than that is spent
+on damage rather than on a capture — and the token is gone. The floor at 1 control point is what
+makes the intended order work.
+
+**What the karma is.** A gauntlet capture pays exactly what any capture pays: the fixed capture
+bonus through the existing `GYM` karma source, under the existing cap and the existing
+per-account cooldown. No new source was added, because `crossValidate` refuses a pack that
+leaves a declared source unpriced and adding one would boot-break every fork that pulled the
+commit without editing its pack. A pack may declare `rewardKarma` on a challenge and the submit
+response reports it, but nothing credits it today: that number reaches no ledger.
+
+### What each refusal means
+
+All three routes require a signed-in session, unlike `/battle`. Every message below is the
+server's own; the client shows it verbatim rather than replacing it with something friendlier,
+because "something went wrong" is how a player walks away not knowing to move.
+
+| What you see | Why | What to do |
+|---|---|---|
+| `Out of range: You are …m from …. Must be within …m to attempt its challenge.` | You are outside the gym's geofence, at start or again at submit. The radius is the one `geofenceMetersFor()` resolves, not a literal. A spend from out of range is refused too, in the capture path's own wording ("… to contest this Gym"). | Walk closer. The message quotes the distance and the radius it was measured against. |
+| `You already have a challenge open. Finish it or let it run out first.` | One open attempt per account, across all gyms, enforced by a partial unique index rather than by a count. Backing out of the modal does not close the attempt — the clock keeps running. | Answer the one you have, or wait for its deadline; starting again after it lapses sweeps it first. |
+| `Time is up on that challenge. Start another one.` | The server-side deadline passed. A correct answer arriving late still loses; that is what a deadline means. | Start another attempt. |
+| `That challenge is already finished.` | The attempt is no longer `OPEN` — usually a second submit of the same one. | Read the first reply; if it was a win, spend it. |
+| `That challenge win has already been used.` | The `WON` → `SPENT` update matched nothing: the win is spent. | Nothing to recover. Win another. |
+| `Gym is currently protected by an active Boba Shield. Cannot contest!` | A live shield on the gym, checked at start and again by the capture path. | Wait for it to expire. |
+| `Faction allegiance is locked to …. It is chosen once and cannot be changed.` | The spend named a different faction from the one this account is bound to. | Spend for your own faction. |
+| `This event ships no coding challenges.` | The pack has no `challenges.json`. | Nothing a player can do; the pack decides. |
+| `No such challenge attempt.` | No attempt with that id **belonging to you** — the lookup is scoped to the account, so another player's attempt reads as absent rather than as forbidden. | Start your own. |
+| `Gym contestation was interrupted by high-concurrency write contention. Please retry.` | Five compare-and-set attempts all lost to other writers. | Retry — but if this arrives on a spend, the win was already burned and is not returned. The message is the capture path's own and does not say so. |
+
+**What is not solved, stated plainly.** The pack directory is served publicly at
+`/dashboard/content`, so answers ship only as digests, keyed on a per-pack `answerSalt` rather
+than on `QR_HMAC_SECRET` — outside production an unset `QR_HMAC_SECRET` is replaced with a fresh
+per-boot value (`src/config/env.ts`), so a pack keyed on it would stop judging correctly the next
+morning. Be exact about what the salt buys:
+**it stops the answer being read, not guessed.** The answer space is small and candidates can be
+hashed offline against a salt anybody can download. Every player of a challenge also sees the
+same input, so a correct answer is a constant and can be passed around. Nothing makes a player
+wait after a loss, either, and the question is the same one next time. What actually bounds all
+of this is physical: the geofence at both ends, a server-side deadline, one submission per
+attempt, and one open attempt per account.
+
+**Checked by:** `tests/gauntlet.test.ts`, which fires concurrent starts and concurrent spends and
+asserts exact counts, because "one open attempt" and "one spend per win" are claims about the
+database and counting is the only way to make them.
+
+---
+
+## 7. The campus, from OpenStreetMap to a phone
 
 **Who:** whoever forks this. **Where:** `design/pipeline/`, `public/gl/`.
 

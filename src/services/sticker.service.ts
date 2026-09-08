@@ -63,6 +63,7 @@ function stickerCatalog(): StickerCatalog {
   return catalog;
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -77,6 +78,9 @@ export interface OwnedStickers {
   total: number;
 }
 
+/**
+ * Collectible sticker service granting achievement badges and tracking digital sticker albums.
+ */
 export class StickerService {
   /**
    * Whether the pack declares this sticker id.

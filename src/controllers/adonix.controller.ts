@@ -15,6 +15,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { AdonixSyncService } from '../services/adonixSync.service';
 
+/**
+ * Controller handling inbound HTTP requests for external Adonix schedule synchronisation.
+ */
 export class AdonixController {
   /**
    * Runs one synchronisation pass and reports how many shifts it touched.

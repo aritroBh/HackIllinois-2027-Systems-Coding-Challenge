@@ -84,6 +84,9 @@ export interface IShiftWithSurge extends IShift {
   surge: ISurgeResult;
 }
 
+/**
+ * Shift scheduling service managing operational volunteer shifts, capacity planning, and roster auditing.
+ */
 export class ShiftService {
   /**
    * Open a shift.

@@ -72,6 +72,9 @@ export interface ISpinResult {
   nextAvailableAt: Date;
 }
 
+/**
+ * HackStop beacon interaction service managing 75m geofenced spins, inventory drops, and cooldown timers.
+ */
 export class HackStopService {
   /**
    * The active supply beacons, without the cooldown ledger.

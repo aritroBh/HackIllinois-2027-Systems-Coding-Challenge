@@ -47,6 +47,9 @@ export interface IOperationsStats {
   activeCheckedInCount: number;
 }
 
+/**
+ * Leaderboard service computing live volunteer rankings, hours served, and tier standings with privacy protections.
+ */
 export class LeaderboardService {
   /**
    * The top of the board, karma first and hours as the tiebreak.

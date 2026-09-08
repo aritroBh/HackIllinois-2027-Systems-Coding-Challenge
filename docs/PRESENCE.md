@@ -33,7 +33,70 @@ In order, and each for a reason:
 - **rate** — one accepted sample every 2 s.
 - **speed** — over 15 m/s (campus buses do about 10) three times in a row is a 60 s mute, recorded in `presenceMutes` with a TTL index. The store re-reads it before `hello_ack`, so reconnecting does not clear it.
 
+What the sender is told when one of these refuses them is the next section.
+
 Published positions are snapped to a 20 m grid, jittered by a per-hour stable offset of up to 8 m, and released one tick late. The jitter is derived from a server secret, not from the account id and the clock: both of those are values a viewer already holds (the id ships in every join), so keying it on them would have let any viewer recompute the offset and subtract it, leaving the grid snap doing all the work. The exact position exists only in memory, and only three things read it.
+
+## When a gate refuses you
+
+A refused sample is answered on the socket as `{t:'nack', reason}`, for every verdict except
+`RATE`. The HTTP fallback has always done this — `POST /api/v1/presence`
+(`src/routes/v1/presence.routes.ts`) returns `reason` on every refusal, 403 for `OPT_OUT`, 429
+for the two mute verdicts, 202 with `accepted: false` otherwise — so the two transports now
+agree about whether a sender is entitled to know why they vanished.
+
+The socket used to answer only `MUTED`, `SPEED_STRIKE` and `OPT_OUT`: the three that mean the
+sender is publishing nothing until it or the clock changes something. `OFF_CAMPUS`,
+`INACCURATE` and `TOO_FAST` were dropped with no frame at all, which is backwards, because
+those are the verdicts an ordinary person actually meets. Someone who opted in, granted
+location and sent a fix the server refused on the merits was told nothing, while the interface
+went on reporting them as visible. The stated reason for the silence was noise — a phone with a
+poor indoor fix would be nacked on every sample — and that concern is real; it is handled in
+the client below rather than by withholding the verdict from the person it is about.
+
+| Reason | Why the sample was refused | What the sender is told |
+|---|---|---|
+| `OPT_OUT` | the switch is off — and the refusal also erases any entry left behind | nothing; this is the switch doing what it was asked |
+| `OFF_CAMPUS` | outside the pack's bounding box | "Off the campus map", with roughly how far outside |
+| `INACCURATE` | reported accuracy worse than the pack's `maxAccuracyMeters` (50 m as shipped) | "Waiting for a sharper fix", quoting the device's own figure against the threshold |
+| `TOO_FAST` | one implausible jump; costs that sample and nothing else | "Skipped a reading", and that nothing else follows |
+| `SPEED_STRIKE` | the third jump in a row, which is also the 60 s mute being applied | "Paused on the map… it clears on its own" |
+| `MUTED` | a mute still standing | the same, in the shorter form |
+| `RATE` | under 2 s since the last accepted sample | nothing |
+
+`RATE` stays silent, and not because it is harmless: the protocol header advertises samples
+"≥ 2 s apart", so a client tripping it is out of cadence rather than merely unlucky. It stays
+silent because the answer carries nothing the client can act on, and it would be sent most
+often to the client that is already sending most often.
+
+Two other nacks are not verdicts on a position at all: `BAD_JSON` for a frame that does not
+parse, and `UNKNOWN` for a message type this server does not have. Both answer the message.
+
+### What the client shows
+
+`describeRefusal` in `public/views/players.js` turns a reason into a short chip label and one
+sentence. The chip is `#presence-chip`, the button in the campus view's header that also works
+the opt-in switch, and a live refusal outranks the transport state there — a chip reading "On
+the map" while the server is refusing every sample asserts the opposite of what is happening,
+which is what made this look broken rather than strict. The sentence also appears under the
+"Show me on the campus map" switch in `public/views/me.js`.
+`OPT_OUT` and `RATE` deliberately render nothing: neither is a fault.
+
+The nack carries the reason and no numbers, so the figures in those sentences are the client's
+own — the accuracy and the coordinates it last sent, kept for exactly this. That is why the
+distance in an `OFF_CAMPUS` line is the client's own arithmetic against the campus bounds
+rather than something the server measured for it.
+
+Noise is bounded on the client rather than by silence. A sample goes out when the sender has
+moved `SEND_DISTANCE_M` or `SEND_INTERVAL_MS` has passed, whichever comes first, and a standing
+refusal is one state on one chip rather than a stream of messages, so a problem that persists
+says one thing however many times it is refused. A refusal expires rather than being cleared,
+because the server never acknowledges an accepted sample — success is silence, so there is no
+opposite to clear it. `REFUSAL_TTL_MS` is 12 s, and `TOO_FAST` gets `TRANSIENT_REFUSAL_TTL_MS`
+at 6 s: a repeating jump re-nacks and keeps talking either way, so the shorter life only
+shortens how long a *recovered* one-off goes on reporting a skipped reading after the next
+sample has already been accepted. Both are longer than the send interval, so a healthy sender
+does not flicker between the two states.
 
 ## Who can see an exact position
 

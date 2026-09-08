@@ -95,12 +95,16 @@ const serialised = `${JSON.stringify(out, null, 2)}\n`;
  * short numeric string, so an answer of "60" was reported as leaked because those two
  * characters happen to appear inside a hash. It fired a second time on `rewardKarma: 60`,
  * which is the same mistake one level down: a number in an unrelated numeric field is not a
- * leaked answer either. So this is the prose a player actually reads — title, prompt, choices
- * and case inputs — and nothing else. That is the real question: can a reader see the answer?
+ * leaked answer either. And a third time once the pack grew: "60" is the answer to one
+ * challenge and one of another's four options, which leaks nothing — a reader cannot tell which
+ * challenge it belongs to, and the second challenge has to print it. So the check is scoped to
+ * the prose ONE challenge shows — its own title, prompt, choices and case inputs. That is the
+ * real question: standing in front of THIS question, can a reader see its answer?
  */
-const visible = out.challenges
-  .flatMap((c) => [c.title, c.prompt, ...(c.choices ?? []), ...c.cases.map((cs) => cs.input)])
-  .join('\u0000');
+/** The prose ONE challenge shows, keyed by id. The check is per-challenge, not repo-wide. */
+const visibleFor = new Map(
+  out.challenges.map((c) => [c.id, [c.title, c.prompt, ...(c.choices ?? []), ...c.cases.map((cs) => cs.input)].join('\u0000')])
+);
 
 /*
  * Belt and braces against the one mistake that matters: no plaintext answer may survive into
@@ -127,7 +131,7 @@ for (const c of source.challenges) {
       }
       continue;
     }
-    if (cs.answer.length >= 2 && visible.includes(cs.answer)) {
+    if (cs.answer.length >= 2 && (visibleFor.get(c.id) ?? '').includes(cs.answer)) {
       console.error(`Refusing to write: the answer ${JSON.stringify(cs.answer)} for "${c.id}" appears in the output.`);
       process.exit(1);
     }

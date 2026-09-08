@@ -80,6 +80,7 @@ export function evictAccountCache(accountId: string): void {
   accountCache.delete(accountId);
 }
 
+/** TTL-cached account read. A miss re-reads a narrow projection; a gone account evicts. */
 async function loadAccount(id: string, nowMs: number): Promise<Omit<AccountContext, 'source'> | null> {
   const cached = accountCache.get(id);
   if (cached && nowMs - cached.fetchedAt < ACCOUNT_CACHE_TTL_MS) return cached.ctx;
@@ -100,10 +101,12 @@ async function loadAccount(id: string, nowMs: number): Promise<Omit<AccountConte
   return ctx;
 }
 
+/** Reads are GET, HEAD and OPTIONS; everything else is a mutation. */
 function isMutation(method: string): boolean {
   return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
 }
 
+/** Caller-claimed id from body or query. Believed in legacy mode only; never a credential. */
 function legacyIdFrom(req: Request): string | undefined {
   const body = req.body as Record<string, unknown> | undefined;
   // Every body field that names the CALLER. (`targetVolunteerId` on a swap proposal names the

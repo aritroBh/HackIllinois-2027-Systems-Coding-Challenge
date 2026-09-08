@@ -1,9 +1,22 @@
 /**
  * Campus territory control — the PokéShift gym layer.
  *
- * Volunteers pick a faction and contest the fourteen mapped campus monuments. Reinforcing
- * an allied gym raises its control points; attacking an enemy gym lowers them; driving
- * them to zero flips the gym and makes the attacker its leader.
+ * Volunteers pick a faction and contest the campus monuments the active pack maps —
+ * `content/<pack>/territories.json`, fourteen of them in `hackillinois-2027` and one in
+ * `content/example-campus`, which is why no count belongs in this sentence. Reinforcing an
+ * allied gym raises its control points; attacking an enemy gym lowers them; driving them to
+ * zero flips the gym and makes the attacker its leader — unless the pack turns the gauntlet on,
+ * for which see below.
+ *
+ * **The gauntlet.** When a pack ships `content/<pack>/challenges.json` and sets
+ * `event.gauntlet.requiredForCapture`, the flip off a *rival* stops being a matter of control
+ * points alone: the last blow floors the gym at 1 CP and the capture itself has to be bought
+ * with a coding-challenge win, answered inside the gym's geofence and spent through
+ * `GauntletService`. Only that one branch changed. Reinforcing an ally and claiming neutral
+ * ground behave exactly as they did, because gating those would break the first thirty seconds
+ * of play for the sake of the last one. The flag defaults false in `src/content/schema.ts` and
+ * a pack with no challenges never reaches the branch whatever it sets, so a fork that pulls this
+ * commit and changes nothing keeps the old capture rule.
  *
  * Every battle mutation is an atomic compare-and-swap on a `version` field rather than a
  * read-modify-write. Two volunteers attacking the same gym on the last control point
@@ -47,13 +60,35 @@ import { env } from '../config/env';
 import { KarmaService, KarmaSource } from './karma.service';
 import { domainEvents } from '../common/events/domainEvents';
 
-/** Minimum gap between karma-paying battles per volunteer (anti-farm). */
+/**
+ * Minimum gap between karma-paying battles per volunteer (anti-farm). One minute.
+ *
+ * Not a pack value on purpose: it is not a balance dial an event tunes, it is the thing that
+ * stops a held-down reinforce button minting karma as fast as HTTP can carry it. A minute is
+ * long enough that farming is not worth doing and short enough that a person actually walking
+ * between two gyms never notices it. The gap is enforced by the conditional update in
+ * `awardBattleKarma`, not by a read-then-write, so two battles inside the window cannot both
+ * pass it.
+ */
 const GYM_KARMA_COOLDOWN_MS = 60000;
 
 /**
- * The outcome of one strike. `karmaAwarded` is what actually landed, not what the strike was
- * priced at: zero while this volunteer's minute-long payout cooldown is running, and clamped
- * again by the pack's daily `GYM` ceiling.
+ * The outcome of one strike.
+ *
+ * `karmaAwarded` is what actually landed, not what the strike was priced at, and it can differ
+ * from the price in three directions. It is zero while this volunteer's minute-long payout
+ * cooldown is running. It is clamped down by the pack's daily `GYM` ceiling. And it can come
+ * back *larger* than the price, because `GYM` is one of the sources a raid window multiplies in
+ * `karma.service.ts`. A client that recomputes the number from `power` will be wrong; this
+ * field is the answer.
+ *
+ * There is a fourth zero that is not a cap at all: the gauntlet floor branch pays nothing,
+ * because the strike deliberately did not capture. It reports `action: 'ATTACKED'`.
+ *
+ * `action` is the service's reading of what happened, never the caller's request — `CONTRIBUTED`
+ * covers reinforcing an ally and claiming neutral ground, `ATTACKED` covers both an ordinary
+ * damaging strike and the gauntlet floor, and `CAPTURED` is the only one that emits
+ * `gym.captured`.
  */
 export interface IBattleResult {
   gymId: string;
@@ -74,8 +109,8 @@ export interface IBattleResult {
  * document holds `leaderVolunteerId`, `leaderName`, `lastBattledAt` and a `defenders` array
  * whose entries carry `volunteerName`, `contributedPower` and `assignedAt`.
  *
- * A gym is a named campus building, and contesting one requires standing within 75 m of it. So
- * those fields together said that a named person was at a named place at a stated time, to
+ * A gym is a named campus building, and contesting one requires standing inside its geofence —
+ * the pack's campus radius, 75 m in both shipped packs. So those fields together said that a named person was at a named place at a stated time, to
  * anybody who asked, with no credential behind the request and no audit row behind the read.
  * That is the same disclosure that had already been taken off the beacon listing when
  * `lastSpunUsers` was removed from it, and it is the fourth or fifth appearance in this
@@ -118,6 +153,9 @@ export interface PublicGym {
   defenderCount: number;
 }
 
+/**
+ * Territory control service managing Gym strongholds, atomic CAS battles, reinforcements, and faction dominance.
+ */
 export class GymService {
   /**
    * Every gym, name-ordered, redacted for an audience that may be anonymous.
@@ -168,6 +206,12 @@ export class GymService {
    * reducing them to zero, so a gym is never left standing at nought waiting for somebody to
    * send one more request.
    *
+   * **Unless the gauntlet is on**, and then that last sentence has a second ending: the strike
+   * that would have captured instead floors the gym at 1 CP and returns `ATTACKED` with a
+   * message naming the challenge. Still never nought, still never a silent no-op — the gap
+   * between "your hit did nothing" and "your hit did all it can, here is what finishes it" is
+   * the whole reason the floor is 1 and not 0.
+   *
    * **Reinforcing neutral ground claims it.** The ally branch writes `controllingFaction`
    * unconditionally, and `isAlly` counts NEUTRAL as an ally, so the first person to reinforce
    * an unclaimed gym flies their flag over it. That is a capture in everything but the wire
@@ -198,6 +242,26 @@ export class GymService {
    * Five attempts, jittered, then a 409 that asks the caller to try again. A bounded loop
    * that gives up is the honest answer to contention this cannot resolve; spinning would only
    * move the queue into the database.
+   *
+   * @param gymId            The gym to strike. A bad id is a 404 from the read inside the loop.
+   * @param volunteerId      The actor, already resolved by the controller. Never a body field
+   *                         over a session; see `resolveActorId`.
+   * @param volunteerFaction The side the caller *declares*, not the side the account is known
+   *                         to be on. The two are reconciled by `bindFaction`, which binds an
+   *                         unbound account and refuses a mismatch.
+   * @param power            10..500, and the default of 100 is unreachable over HTTP:
+   *                         `battleGymSchema` makes `power` required, so the only callers who
+   *                         can take the default are other services and tests. The guard below
+   *                         re-checks the range anyway, because a service-to-service caller has
+   *                         no Zod in front of it.
+   * @param coordinates      Optional here, required by the schema on every HTTP path. When
+   *                         present it is always checked, whatever `REQUIRE_GEOFENCE` says.
+   * @param opts.viaGauntlet Set by exactly one caller — `GymController.spendGauntlet`, and only
+   *                         after `GauntletService.spend` has burned a WON attempt. It is not a
+   *                         field a client can send: no schema in `src/schemas/` accepts it and
+   *                         no route parses one. It means "the challenge has already been won
+   *                         and paid for", so the floor branch below stands aside and the
+   *                         ordinary capture runs.
    */
   public static async battleOrContribute(
     gymId: string,
@@ -260,6 +324,12 @@ export class GymService {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       // Jittered backoff between CAS retries. A bare spin makes every loser retry in the
       // same instant, so the same writer keeps losing and the database sees a thundering herd.
+      //
+      // The 40 is the per-attempt spread in milliseconds, so the wait is a uniform draw from
+      // [0, 40 * attempt): up to 40 ms on the first retry, up to 160 ms on the last. It is
+      // chosen against a human contending for a building, not against a benchmark — the worst
+      // case a player can experience is well under a second, and the spread is wide enough that
+      // two phones that collided once are unlikely to collide five times.
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 40 * attempt)));
       }
@@ -323,6 +393,9 @@ export class GymService {
 
         if (!updated) continue; // CAS conflict, retry next iteration
 
+        // Reinforcing is the cheapest of the three prices — a quarter of the power committed —
+        // because it is the safest thing a player can do: your own gym, no opposition, no
+        // travel beyond the walk. `Math.floor` because `awardKarma` refuses a non-integer.
         const karmaAward = await this.awardBattleKarma(volunteerId, Math.floor(power * 0.25));
 
         eventHub.broadcast({
@@ -357,6 +430,10 @@ export class GymService {
 
           if (!updated) continue; // CAS conflict, retry next iteration
 
+          // Attacking pays more than reinforcing (0.35 against 0.25) because it is the move
+          // that costs something: rival ground, and a gym that will be defended. Both rates are
+          // floored against a `power` the schema keeps at 10 or above, so neither can round to
+          // the zero that `awardKarma` rejects.
           const karmaAward = await this.awardBattleKarma(volunteerId, Math.floor(power * 0.35));
 
           eventHub.broadcast({
@@ -378,9 +455,20 @@ export class GymService {
           /*
            * The last hit is the only thing the gauntlet gates.
            *
-           * When a pack turns `event.gauntlet.requiredForCapture` on, raw control points can
-           * grind a rival gym down but cannot take it: the flip needs a challenge win spent
-           * through `POST /pokeshift/gauntlets/:id/spend`. Everything else is untouched —
+           * Reached only from the rival branch, and only when this strike would otherwise have
+           * captured — `gym.controlPoints <= power`, since the greater-than case returned
+           * above. So an ally strike, a neutral claim and every earlier damaging hit never see
+           * this code at all.
+           *
+           * Two things have to be true for `requiredForCapture()` to answer yes, and the second
+           * is easy to forget: the pack sets `event.gauntlet.requiredForCapture`, **and** the
+           * pack actually ships challenges. A pack with the flag on and an empty or absent
+           * `challenges.json` captures the old way rather than becoming untakeable, which is
+           * the only safe way round for a fork that copies a config file without the content.
+           *
+           * When it is on, raw control points can grind a rival gym down but cannot take it:
+           * the flip needs a challenge win spent
+           * through `POST /pokeshift/gauntlets/:attemptId/spend`. Everything else is untouched —
            * reinforcing an ally, taking neutral ground, and every earlier strike behave
            * exactly as before, because gating those would break the first thirty seconds of
            * play for the sake of the last one.
@@ -436,7 +524,18 @@ export class GymService {
 
           if (!updated) continue; // CAS conflict, retry next iteration
 
-          const karmaAward = await this.awardBattleKarma(volunteerId, 150); // Capture bonus!
+          // Capture bonus: flat, and flat on purpose. The other two branches scale with `power`
+          // so that committing more is worth more, but a capture is worth the same whether the
+          // last blow was 10 points or 500 — pricing it off the final hit would pay whoever
+          // arrived last more than the people who ground the gym down.
+          //
+          // Worth doing the arithmetic rather than assuming, because it does not come out the
+          // way the word "bonus" suggests: a maximum-power attack pays floor(500 * 0.35) = 175,
+          // which is more than this. So the flat 150 is not the top payout on this endpoint,
+          // and a player optimising for karma alone would keep hitting a gym rather than take
+          // it. That is a balance choice somebody may want to revisit; it is written down here
+          // instead of being discovered from the ledger.
+          const karmaAward = await this.awardBattleKarma(volunteerId, 150);
 
           // Committed: the capture is durable, so anything that reacts to it can now run.
           domainEvents.emit('gym.captured', { accountId: String(volunteerId), gymId: String(gymId), faction: String(volunteerFaction) });
@@ -473,6 +572,18 @@ export class GymService {
    * conditional update means concurrent battles cannot both mint karma, and
    * spamming reinforce on an allied gym stops paying after the first hit.
    * Battle effects still apply during cooldown; only the payout is gated.
+   *
+   * Returns what actually landed, which is not `amount`: zero when the cooldown claim is lost,
+   * and otherwise whatever `KarmaService.awardKarma` grants after the raid multiplier and the
+   * daily `GYM` cap have both had their say. Callers put that number in `karmaAwarded` rather
+   * than echoing what they asked for.
+   *
+   * The cooldown is claimed *before* the karma is minted, and the order matters: the claim is
+   * the thing two concurrent battles race for, so it has to be the first write. The cost of
+   * that order is a losing window — if `awardKarma` throws, the claim has already moved
+   * `lastGymKarmaAt` forward and this volunteer waits a minute for a payout they never got.
+   * That is the same survivable direction the strike itself takes, and it is preferred to the
+   * alternative, which is minting karma that a second request can mint again.
    */
   private static async awardBattleKarma(volunteerId: string, amount: number): Promise<number> {
     const cutoff = new Date(Date.now() - GYM_KARMA_COOLDOWN_MS);
@@ -487,6 +598,11 @@ export class GymService {
       { new: true }
     );
     if (!claimed) return 0;
+    // `reason` is a ledger label for a human reading rows later, not a claim about what
+    // happened: all three branches pass 'gym-capture', including a reinforce and an ordinary
+    // damaging hit. `KarmaSource.GYM` is the part that carries meaning, because it is the cap
+    // bucket. Widening the label would be a data change — existing rows already say this — so
+    // it is written down rather than quietly corrected.
     const award = await KarmaService.awardKarma(volunteerId, amount, KarmaSource.GYM, { reason: 'gym-capture' });
     return award.awarded;
   }

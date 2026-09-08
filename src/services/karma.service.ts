@@ -135,6 +135,9 @@ function capFor(source: string): number | null {
   return Object.prototype.hasOwnProperty.call(caps, source) ? caps[source] : null;
 }
 
+/**
+ * Karma ledger service minting points, tracking daily source caps, and managing prestige level advancements.
+ */
 export class KarmaService {
   /**
    * Awards karma to an account, clamped to what remains of the source's daily cap.

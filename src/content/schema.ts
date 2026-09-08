@@ -6,11 +6,22 @@
  * and the baked 3D model. Everything HackIllinois/UIUC-specific lives in
  * `content/hackillinois-2027/`; the code reads the pack and never a literal.
  *
- * Validation is Zod per file plus cross-references in `validatePack()`: every venue key a
- * territory, beacon or monument names must exist, every faction a territory names must
- * exist, and the monument ids must equal the ids baked into `campus.json`. A typo here is
- * a geofence anchored to the wrong building, which is exactly the class of bug the
- * original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
+ * This file holds the files every pack must have. The optional ones live beside it and are
+ * loaded the same way — `booths.schema.ts`, `raids.schema.ts`, `quests.schema.ts` and
+ * `challenges.schema.ts`, the last of which carries the gauntlet's questions and is the one
+ * place a pack ships something that must not be readable.
+ *
+ * Validation is Zod per file plus cross-references in `crossValidate()` at the bottom of this
+ * file: every venue key a territory, beacon or monument names must exist, every faction a
+ * territory names must exist, and the monument ids must equal the ids baked into `campus.json`.
+ * A typo here is a geofence anchored to the wrong building, which is exactly the class of bug
+ * the original `resolveVenue` rewrite existed to prevent — so the pack fails at boot, loudly.
+ *
+ * (This paragraph named a `validatePack()` for a long time. No function by that name has ever
+ * existed here: the sentence and `crossValidate` landed in the same commit, so it was wrong the
+ * day it was written and stayed wrong through every review since. Neither gate that could have
+ * caught it can — `npm run docs:check` reads documents, not source comments, and the compiler
+ * does not typecheck prose. A reader who went looking for it found nothing.)
  */
 import { z } from 'zod';
 import type { Challenge } from './challenges.schema';
@@ -25,8 +36,12 @@ import { REPO_ROOT } from '../common/utils/repoRoot';
  *
  * Read rather than hard-coded so it cannot drift from the number a release actually ships as —
  * a version gate whose idea of "this server" is a stale literal is worse than no gate. Falls
- * back to `0.0.0` if the file cannot be read, which fails *closed*: every pack then looks newer
- * and is refused, loudly, rather than every pack silently passing.
+ * back to `0.0.0` if the file cannot be read, which fails *closed*: any pack demanding a
+ * non-zero version — both shipped packs demand 1.0.0 — then looks newer than the server and is
+ * refused loudly, rather than every pack silently passing. A pack asking for `0.0.0` would still
+ * load, which is the honest limit of the fallback and not worth a second branch: an unreadable
+ * `package.json` is a broken install, and this is only meant to make that noisy rather than
+ * permissive.
  */
 export const SERVER_VERSION: string = (() => {
   try {
@@ -41,8 +56,13 @@ export const SERVER_VERSION: string = (() => {
 // object can — `[lng, lat]` is a mistake a reviewer sees, `{ latitude: <a longitude> }` is not.
 const latLng = z.tuple([z.number().min(-90).max(90), z.number().min(-180).max(180)]);
 // Order is south, west, north, east — GeoJSON's is west, south, east, north, so do not assume.
-// Deliberately unbounded: `inBbox` treats it as an inclusive rectangle and a pack with an
-// inverted or absurd box fails the campus bake long before it fails a comparison here.
+// Four bare numbers: no latitude/longitude ranges and, more to the point, no check that south is
+// below north or west of east. Be clear about what that costs rather than claiming it is caught
+// elsewhere. `inBbox` reads the tuple as an inclusive rectangle, so an inverted box does not
+// error — it accepts nothing, and every presence sample on the real campus is refused as
+// OFF_CAMPUS. The bake is what usually finds it first, because a box enclosing nothing extracts
+// nothing and `crossValidate` then reports every declared monument as missing from `campus.json`;
+// that is a consequence, not a check written for the purpose.
 const bbox = z.tuple([z.number(), z.number(), z.number(), z.number()]); // south, west, north, east
 // Six-digit hex only. Shorthand and `rgba()` are refused because these strings are written
 // straight into CSS custom properties and into the renderer's material colours, and the two
@@ -287,7 +307,22 @@ export const lootSchema = z.object({
   items: z.array(z.object({ type: z.string().min(1), weight: z.number().positive() })).min(1),
 });
 
-/** Sticker book. Extra keys are allowed (the UI grows), but ids, names and the pixel grid are shaped. */
+/**
+ * Sticker book. Extra keys are allowed (the UI grows), but ids, names and the pixel grid are shaped.
+ *
+ * The three constants on `palette` and `pixel` are one decision, not three, and they come from
+ * `public/sprites.js`: it decodes a sticker by mapping `palette[0]` to the letter `a`,
+ * `palette[1]` to `b` and so on (`String.fromCharCode(97 + i)`), then reading each character of
+ * each row as an index into that map. So sixteen palette entries is exactly the alphabet
+ * `a`–`p`, which is why the row pattern is `[a-p-]` — a `q` would be a colour that cannot exist
+ * — and `-` is the transparent cell. Sixteen rows of sixteen characters is the grid the renderer
+ * draws; `sprites.js` re-checks those two lengths at fetch time and skips a malformed sticker
+ * with a warning rather than blanking the whole book, so a pack that gets this wrong loses one
+ * sticker in the client and fails here at boot on the server.
+ *
+ * Only `items` is shaped. `gym_badges`, which the same file carries and `sprites.js` also reads,
+ * is not described here at all — it survives as an unvalidated extra key.
+ */
 export const memorabiliaSchema = z.object({
   _about: z.string().optional(),
   palette_note: z.string().optional(),

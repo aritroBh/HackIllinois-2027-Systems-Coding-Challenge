@@ -18,6 +18,10 @@ import { presenceService } from '../presence/service';
 /** Role hierarchy for revocation checks. HACKER and VOLUNTEER are peers at the bottom. */
 const ROLE_RANK: Record<string, number> = { HACKER: 0, VOLUNTEER: 0, SHIFT_LEAD: 1, ORGANIZER: 2, ADMIN: 3 };
 
+/**
+ * Controller exposing authentication endpoints: provider negotiation, magic links,
+ * claim verification, session lifecycle, credential revocation, and role management.
+ */
 export class AuthController {
   /**
    * The sign-in menu, and the only handler in this file that is synchronous and takes no

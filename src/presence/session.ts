@@ -16,6 +16,10 @@ import { IdxTable, JoinRecord, WireRow, encodeRows, toJsonRow } from './protocol
 import type { PresenceClient } from './transport';
 import type { Cohort, PresenceEntry, PresenceStore } from './store';
 
+/**
+ * Per-client presence connection session managing differential delta updates,
+ * tile index caching, and bandwidth-throttled position streaming.
+ */
 export class PresenceSession {
   public readonly idx = new IdxTable();
   private sentVersion = new Map<string, number>();
@@ -258,6 +262,7 @@ export class PresenceSession {
     return out;
   }
 
+  /** Join frame: who arrived. Positions ride the rows, never this record. */
   private joinOf(e: PresenceEntry, idx: number): JoinRecord {
     return { idx, id: e.id, name: e.name, faction: e.faction, avatarHash: e.avatarHash, kind: e.kind };
   }

@@ -3,12 +3,15 @@
  * on campus landmarks, supply beacons you have to physically stand next to, and the power-ups
  * that come out of them.
  *
- *   GET  /gyms                      no gate      the board
- *   POST /gyms/:id/battle           no gate      contest or reinforce a gym
- *   GET  /hackstops                 no gate      the beacon list
- *   POST /hackstops/:beaconId/spin  no gate      spin a beacon you are standing at
- *   GET  /inventory/:volunteerId    requireSession, requireAccount
- *   POST /inventory/use             no gate      spend a power-up
+ *   GET  /gyms                          no gate      the board
+ *   POST /gyms/:id/battle               no gate      contest or reinforce a gym
+ *   POST /gyms/:id/gauntlet             requireSession  open a gym's coding challenge
+ *   POST /gauntlets/:attemptId/submit   requireSession  answer it
+ *   POST /gauntlets/:attemptId/spend    requireSession  turn a win into a capture
+ *   GET  /hackstops                     no gate      the beacon list
+ *   POST /hackstops/:beaconId/spin      no gate      spin a beacon you are standing at
+ *   GET  /inventory/:volunteerId        requireSession, requireAccount
+ *   POST /inventory/use                 no gate      spend a power-up
  *
  * "No gate" here means no identity middleware on the route, not no authorisation. Four things
  * are doing that work instead, and a new route needs all four considered:
@@ -18,8 +21,13 @@
  *  2. Every write resolves its actor with `resolveActorId`, which returns the session's id
  *     when there is one and falls back to a body field only in `legacy`. A body id therefore
  *     never overrides a session, and none of these controllers reads `volunteerId` directly.
- *  3. The mutating gym and beacon routes require GPS coordinates at the schema level, so the
- *     geofence cannot be skipped by omitting a field.
+ *  3. Every mutating gym, gauntlet and beacon route requires GPS coordinates at the schema
+ *     level — `battleGymSchema`, all three gauntlet schemas and `spinBeaconSchema` — so the
+ *     geofence cannot be skipped by omitting a field. The one exception is deliberate and
+ *     documented where it lives: `usePowerUpSchema` makes `coordinates` optional, because only
+ *     the gym-targeted items need a position, and `hackstop.service.ts` demands one for exactly
+ *     those. An optional field in a schema is worth naming as an exception rather than leaving
+ *     a reader to find it.
  *  4. Disclosure is decided per response rather than per route: `listBeacons` is handed the
  *     caller's `source`, and only a *proved* session gets its own per-beacon cooldown back.
  *     A claimed identity gets the bare list, because "when did this account last spin" is a

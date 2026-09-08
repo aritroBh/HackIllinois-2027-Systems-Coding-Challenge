@@ -35,6 +35,9 @@ function projectionFor(req: Request): string {
   return lead ? '-identities -sessionVersion -__v' : '-email -phone -identities -sessionVersion -__v';
 }
 
+/**
+ * Controller providing volunteer profile management, directory search with role-based PII redaction, and karma adjustments.
+ */
 export class VolunteerController {
   /**
    * Creates an account. 201, projected exactly as the reads are, so a lead sees the contact

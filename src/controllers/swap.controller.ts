@@ -11,6 +11,9 @@ import { SwapService } from '../services/swap.service';
 import { SwapStatus } from '../models/swap.model';
 import { resolveActorId } from '../middleware/identity';
 
+/**
+ * Controller handling volunteer shift swap requests, bilateral trades, multi-party cycle execution, and proposal status queries.
+ */
 export class SwapController {
   /**
    * Proposes a swap. 201.

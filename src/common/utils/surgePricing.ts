@@ -75,6 +75,10 @@ export interface ISurgeResult {
   isSurgeActive: boolean;
 }
 
+/**
+ * Surge pricing engine computing dynamic karma multipliers based on circadian rhythms,
+ * volunteer scarcity (unfilled capacity), and upcoming time urgency.
+ */
 export class SurgePricingEngine {
   /**
    * Pure and side-effect free: same inputs, same answer, no reads. That is what lets the

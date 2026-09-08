@@ -212,6 +212,89 @@ name something `POWER_UP_CATALOG` prices, because the pack chooses the odds whil
 chooses the payouts — a type the catalogue does not hold refuses the boot rather than crashing
 inside somebody's spin.
 
+### Coding challenges, if you want the gauntlet
+
+Optional, and inert until you author it. When `event.gauntlet.requiredForCapture` is on, taking a
+**rival** gym requires winning a coding challenge while standing inside that gym's geofence. The
+flag defaults to false in `src/content/schema.ts`, so a fork pulling this change keeps the
+behaviour it already had, and the shipped `content/hackillinois-2027` pack is the one that turns
+it on.
+
+**If you ship no `challenges.json`, nothing breaks.** `content/example-campus` ships none: the
+loader sets `pack.challenges` to null and the mechanic simply is not there. The flag cannot lock a
+board it has nothing to unlock either — `GauntletService.requiredForCapture()` reads the challenge
+list *and* the flag, so a `true` over an empty pack is refused rather than making every rival gym
+permanently uncapturable.
+
+Two files, and only one of them ships.
+
+1. **Write the answers in the clear** in `design/challenges/<pack>.json`. Copy
+   `design/challenges/hackillinois-2027.json` for the shape. `design/` is not served and is not
+   copied into the Docker image, so plaintext is safe there and nowhere else. Set `answerSalt`
+   first — any string of at least 16 characters; the generator's own error message suggests
+   `openssl rand -hex 16`.
+2. **Generate the pack file:**
+
+```sh
+npm run gauntlet:hashes -- my-event
+```
+
+That reads the design file and writes `content/my-event/challenges.json` with every answer
+replaced by a sha256 HMAC digest, keyed on the salt. Never hand-edit the generated file. The
+reason the split exists is that `src/app.ts` serves the whole pack directory at
+`/dashboard/content`: anything you write into `content/` is a public download, so a plaintext
+answer there would be the answer key. `challengeCaseSchema` is `.strict()` for the same reason — a
+forgotten `answer` field fails validation instead of shipping quietly.
+
+Regenerate whenever you change `answerSalt`, a challenge `id`, the order of a challenge's `cases`,
+or a `normalise` rule. All four are inputs to the digest, and changing one invalidates every hash
+under it without any other symptom.
+
+The generator refuses to write rather than hand you a broken pack. It validates its own output
+against `challengesSchema`; it refuses a `PREDICT_OUTPUT` answer that appears anywhere in the text
+a player can read — title, prompt, choices, case inputs — because an answer on screen is not a
+question; and it refuses a `MULTIPLE_CHOICE` answer that is not one of that challenge's own
+`choices`, which is a question nobody could ever get right and which would only be discovered by
+somebody standing at that gym.
+
+**The fields.** `kind` is `PREDICT_OUTPUT` (a snippet, and what does it print) or
+`MULTIPLE_CHOICE` (two to six `choices`, exactly one case). `difficulty` is `EASY`, `MEDIUM` or
+`HARD`. `timeLimitSeconds` is the server's deadline for an attempt, 30 to 1800, default 300.
+`capturePower` is what a win is worth in control points when it is spent, 10 to 500, default 250 —
+the same bounds `battleGymSchema` puts on an ordinary strike, so a won gauntlet cannot express an
+attack the normal route would reject. `src/content/challenges.schema.ts` is the field-by-field
+authority and argues each of these at length.
+
+**Turn it on** in your `event.json`:
+
+```json
+"gauntlet": { "requiredForCapture": true }
+```
+
+With it on, the only thing that changes is the last hit on a rival gym: raw control points still
+grind it down, but they stop at a floor of 1 CP, and the flip needs a win spent through
+`POST /pokeshift/gauntlets/:attemptId/spend`. Reinforcing an ally and taking neutral ground are
+untouched, because gating those would break the first thirty seconds of play for the sake of the
+last one. All three gauntlet routes are on `src/routes/v1/pokestop.routes.ts` and require a
+session.
+
+**Be accurate with your players about what this is.** Nothing is executed. The whole judge is
+normalise, HMAC, `timingSafeEqual` against the digest your pack ships — it verifies answers, not
+programs, and there is no sandbox, worker or container anywhere in it. The salt stops an answer
+being *read* off the served file; it does not stop it being *guessed*, because the answer space is
+small and anyone who downloads the pack can hash candidates against the salt offline. Every player
+of a challenge also sees the same input, so a correct answer is a constant and can be passed
+around. What actually bounds cheating is physical and temporal: the geofence is checked at start
+and again at submit, the attempt carries a server-side deadline, one submission ends it, and one
+attempt is open per account at a time. Author questions that survive being known.
+
+One field not to read too much into: `rewardKarma` is carried through and reported in the submit
+response, but nothing awards it today. The karma a capture pays is the ordinary gym-capture award,
+through the existing `GYM` source and the `karmaCaps.GYM` ceiling your pack already sets. There is
+deliberately no new karma source: `content:validate` refuses a pack that leaves any
+`KARMA_SOURCES` key unpriced, so adding one would refuse the boot of every fork that had not
+edited its `event.json`.
+
 **Art.** `memorabilia.json` carries 16 x 16 pixel grids and a palette per sticker. The
 fonts named in `branding.fonts` must be families already served from `public/fonts/`,
 because the page is under a `script-src 'self'` and `style-src 'self'` policy with no

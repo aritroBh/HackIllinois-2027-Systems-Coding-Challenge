@@ -42,6 +42,9 @@ const IDLE_MS = 60_000;
  * One client per account rather than one per connection, so two devices reading the map on the
  * same account share a single session, a single slot table and therefore identical frames.
  */
+/**
+ * SSE adapter implementing PresenceClient to stream JSON presence updates to connected clients.
+ */
 class SsePresenceClient implements PresenceClient {
   public readonly transport = 'sse' as const;
   public readonly binary = false;
@@ -49,16 +52,19 @@ class SsePresenceClient implements PresenceClient {
 
   constructor(public readonly id: string, public readonly account: AccountContext) {}
 
+  /** Transmit a presence frame message over the SSE event hub. */
   send(msg: unknown): boolean {
     // The hub drops presence frames for a lagging client, which is exactly the policy here.
     eventHub.sendToAccountOn(this.account.id, 'presence', { type: 'PRESENCE_FRAME', data: msg as Record<string, unknown> });
     return true;
   }
 
+  /** Binary transmission stub; SSE presence transport supports JSON only. */
   sendBinary(): boolean {
     return false; // the SSE leg is JSON only
   }
 
+  /** Current buffer backpressure byte count (managed by eventHub). */
   bufferedBytes(): number {
     return 0; // the hub owns SSE backpressure
   }

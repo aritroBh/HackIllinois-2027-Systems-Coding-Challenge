@@ -71,6 +71,7 @@ export class TransactionContentionError extends Error {
   }
 }
 
+/** A duplicate-key write, with the collection, index and key attached for the retry rules. */
 export class DuplicateKeyError extends Error {
   public readonly collection: string;
   public readonly index: string;
@@ -146,6 +147,15 @@ async function backoff(attempt: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * ceiling) + 1));
 }
 
+/**
+ * Execute an operation inside a MongoDB transaction, automatically retrying on write conflicts,
+ * transient transaction errors, and duplicate key retries according to configured backoff options.
+ *
+ * @param fn Callback that executes MongoDB operations receiving the active session.
+ * @param options Configuration options specifying max retry attempts and backoff parameters.
+ * @returns The resolved value returned by `fn`.
+ * @throws TransactionContentionError if retry attempts are exhausted without successful commit.
+ */
 export async function withTransactionRetry<T>(
   fn: (session: ClientSession) => Promise<T>,
   options: ITransactionRetryOptions = {}

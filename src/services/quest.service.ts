@@ -137,6 +137,7 @@ function eventHour(at: Date): string {
   return `${eventDay(at)}T${hour.padStart(2, '0')}`;
 }
 
+/** The streak period a timestamp falls in: the hour, the day, or the whole event. */
 function windowBucket(window: QuestWindow, at: Date): string {
   if (window === 'HOURLY') return eventHour(at);
   if (window === 'DAILY') return eventDay(at);
@@ -189,6 +190,7 @@ function progressOf(quest: Quest, row: Pick<IQuestProgress, 'count' | 'distinct'
   return trailingRun(quest.window, row.distinct);
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -214,6 +216,9 @@ function distinctValue(quest: Quest, meta: Record<string, unknown>, at: Date): s
   return value.length > 0 && value.length <= 200 ? value : null;
 }
 
+/**
+ * Domain event quest engine tracking achievement milestones, sponsor table visits, and sticker album rewards.
+ */
 export class QuestService {
   /**
    * Every `event` name the active pack's quests declare, deduplicated.

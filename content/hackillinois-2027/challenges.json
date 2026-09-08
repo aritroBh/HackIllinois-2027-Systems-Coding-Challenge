@@ -118,6 +118,177 @@
           "hash": "e3c61b8d07c93c1c5d6588d491749ef03b81d045749d091cf3f2ffd1bdeff387"
         }
       ]
+    },
+    {
+      "id": "cas-loser",
+      "title": "The loser of a compare-and-set",
+      "prompt": "Two requests read the same document at version 7 and both try:\n\n  findOneAndUpdate({ _id, version: 7 }, { $inc: { version: 1 } })\n\nHow many of the two get a document back?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "EASY",
+      "timeLimitSeconds": 180,
+      "rewardKarma": 45,
+      "capturePower": 210,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Number that receive a document",
+          "hash": "980c66262840773e8ac330ddf0e3f4eff03cda36bf465c4d128aab129c1e5c94"
+        }
+      ]
+    },
+    {
+      "id": "fuzz-grid",
+      "title": "Fuzzed to a grid",
+      "prompt": "Published positions are snapped to a 20 m grid with Math.round(x / 20) * 20, then nudged by a stable per-hour offset of up to 8 m.\n\nA trainer at x = 31 is published. What is the largest x a viewer could see?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "MEDIUM",
+      "choices": [
+        "31",
+        "40",
+        "48",
+        "60"
+      ],
+      "timeLimitSeconds": 240,
+      "rewardKarma": 65,
+      "capturePower": 240,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Largest published x",
+          "hash": "753ea1db90d3750ac216630d10727a813c8636832a5fb79b16c7086af3ad7c6d"
+        }
+      ]
+    },
+    {
+      "id": "waitlist-cascade",
+      "title": "The seat that never opens",
+      "prompt": "A shift has 2 seats and 48 people waitlisted. One confirmed volunteer cancels, and the server promotes the head of the waitlist inside the same request, holding the seat across the whole cascade.\n\nHow many seats are claimable by a new arrival during that request?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "MEDIUM",
+      "timeLimitSeconds": 240,
+      "rewardKarma": 70,
+      "capturePower": 250,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Seats claimable mid-cascade",
+          "hash": "4810db37678a8756677ade9ad84c950c227c9b51e6cf3820c801c7ef7a4780e5"
+        }
+      ]
+    },
+    {
+      "id": "token-replay",
+      "title": "Scanned twice",
+      "prompt": "An attendance token is HMAC'd, rotates every 30 seconds, and is single-use via a unique index on its nonce.\n\nTwo desks scan the same photographed token at the same instant, inside the window. What happens?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "MEDIUM",
+      "choices": [
+        "Both check in",
+        "One checks in, one gets a 409",
+        "Both are rejected",
+        "The second overwrites the first"
+      ],
+      "timeLimitSeconds": 240,
+      "rewardKarma": 70,
+      "capturePower": 255,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Outcome of two simultaneous scans",
+          "hash": "bce45ef660fec934513d22cf2fde0318ad2d94be17625961363afd63c0759759"
+        }
+      ]
+    },
+    {
+      "id": "fail-open-cap",
+      "title": "The cap that was not there",
+      "prompt": "function capFor(source) {\n  const caps = pack.event.karmaCaps;\n  return Object.prototype.hasOwnProperty.call(caps, source) ? caps[source] : null;\n}\n\nnull means uncapped. A pack ships no entry for a source. What is that source's daily ceiling?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "HARD",
+      "choices": [
+        "Zero — nothing is minted",
+        "The default of 600",
+        "Unlimited",
+        "The request is rejected"
+      ],
+      "timeLimitSeconds": 300,
+      "rewardKarma": 95,
+      "capturePower": 300,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Daily ceiling for an unpriced source",
+          "hash": "9c1dc6901aadfc6a0796bdd59b399afd8f13ee1d450c67299003c2d7112ac748"
+        }
+      ]
+    },
+    {
+      "id": "cycle-count",
+      "title": "Rings in a wants-graph",
+      "prompt": "Four volunteers want each other's shifts: A wants B's, B wants A's, C wants D's, D wants C's.\n\nThe resolver enumerates elementary cycles of length 2 to 4, refusing to traverse below the start node. How many does it find?",
+      "kind": "PREDICT_OUTPUT",
+      "difficulty": "MEDIUM",
+      "timeLimitSeconds": 240,
+      "rewardKarma": 75,
+      "capturePower": 260,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Number of cycles",
+          "hash": "42c4838d841adeab53867403c1fd90c38ed6f2d24d597462dadfced0b30a4dd0"
+        }
+      ]
+    },
+    {
+      "id": "slice-budget",
+      "title": "Sliced, not pinned",
+      "prompt": "The presence tick yields to the event loop every 8 ms, but only checks the clock every 32nd session rather than every one.\n\nCan a single contiguous block exceed 8 ms?",
+      "kind": "MULTIPLE_CHOICE",
+      "difficulty": "HARD",
+      "choices": [
+        "No — 8 ms is a hard ceiling",
+        "Yes — slicing bounds the block, it does not pin it under the budget",
+        "Only when there are fewer than 32 sessions",
+        "Only on a loaded machine"
+      ],
+      "timeLimitSeconds": 300,
+      "rewardKarma": 100,
+      "capturePower": 320,
+      "normalise": {
+        "trim": true,
+        "collapseWhitespace": true,
+        "caseInsensitive": false
+      },
+      "cases": [
+        {
+          "input": "Whether a block can exceed the budget",
+          "hash": "435d021be783fca208a1a37a9cce6db701d0c70f1fcbde961835baba806a3b79"
+        }
+      ]
     }
   ]
 }

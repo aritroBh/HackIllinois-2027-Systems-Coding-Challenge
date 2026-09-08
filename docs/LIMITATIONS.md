@@ -6,7 +6,7 @@ scattered comments under interview pressure — and because a list like this is 
 than a README that only describes what works.
 
 Two things this page is **not**: it is not the review log (`docs/REVIEWS.md` records what was
-found and fixed across seventeen rounds), and it is not a roadmap. These are the things a
+found and fixed, round by round), and it is not a roadmap. These are the things a
 careful reader will find, stated before they find them.
 
 ---
@@ -35,15 +35,109 @@ currently known to hold. That is a test-time check, not a production signal.
 
 ### A geofence cannot tell a spoofed GPS fix from a real one
 
-Check-in and gym capture both compare a **client-supplied** coordinate against a venue. A
-scanner that sends the venue's published latitude and longitude satisfies the check from
-anywhere on earth. The geofence is a guard against honest mistakes and casual cheating, not an
-attestation.
+Check-in, gym capture, and both ends of a coding gauntlet compare a **client-supplied**
+coordinate against a venue. A scanner that sends the venue's published latitude and longitude
+satisfies the check from anywhere on earth. The geofence is a guard against honest mistakes and
+casual cheating, not an attestation.
 
 Closing it properly means binding the scan to the *scanner* rather than to the coordinates it
 claims: a desk device with its own credential, or a token minted against a reading the server
 trusts. `POST /attendance/verify` already requires `SHIFT_LEAD`, which limits who can be at
 that desk in `AUTH_MODE=required`; it does not make the coordinate honest.
+
+### What a gauntlet win proves, and what it does not
+
+Taking a rival gym requires winning a coding challenge inside that gym's geofence when a pack
+sets `event.gauntlet.requiredForCapture` — the shipped `content/hackillinois-2027` pack does.
+The answers ship only as sha256 HMAC digests, keyed on the `answerSalt` that sits in the same
+file, because `src/app.ts` serves the whole pack directory statically at `/dashboard/content`
+and any plaintext written there would be a download. Be exact about what that buys: **it stops
+the answer being read, not guessed.** Anyone can fetch `content/hackillinois-2027/challenges.json`,
+take the salt out of it, and hash candidate answers offline until one matches. For a
+`MULTIPLE_CHOICE` case the candidates are printed in the same file, and `challengeSchema` caps
+`choices` at six, so that offline search is at most six hashes long.
+
+Nor is the question per-player. `GauntletService.challengeForGym` picks by hashing the gym id,
+so one gym asks one question of everybody for the whole event, and the answer is a constant that
+can be posted in a group chat. The shipped pack has five challenges for fourteen territories:
+the board's entire question set is five answers. `src/content/challenges.schema.ts` names the
+fix — deriving each input per attempt — and says why it was not taken, which is that the server
+would then have to compute the answers and challenge authoring would leave the pack.
+
+The digests are deliberately not keyed on `QR_HMAC_SECRET`. Outside production, when that
+variable is unset, `src/config/env.ts` replaces the committed default with a fresh random value
+on every boot, so a pack keyed on it would judge correctly on Tuesday and reject every right
+answer on Wednesday; in production, rotating the secret would invalidate every authored pack at
+once, and the same pack could not be checked offline or shared between two deployments. The
+trade is real in both directions and it was made in favour of packs that keep working.
+
+So what bounds cheating here is physical rather than cryptographic: the geofence at start and
+again at submit, a server-side deadline, one submission per attempt, one open attempt per
+account. Each of those is worth exactly what the entry above says a geofence is worth — the
+coordinate is the client's. Somebody willing to spoof a position could already take a gym before
+this shipped; the gauntlet neither worsens that nor closes it.
+
+One smaller thing, stated because a reader will hit it first: the `_about` string at the top of
+`content/hackillinois-2027/challenges.json` claims the file "is NOT served and NOT copied into
+the Docker image". That is true of the working file it was written for,
+`design/challenges/hackillinois-2027.json`, and false of the generated file it now sits in —
+`scripts/gauntletHashes.ts` carries `_about` over from the source when it is set. The digests
+are still digests; it is the note that is wrong.
+
+### A challenge win is burned on spend, whatever happens next
+
+`GymController.spendGauntlet` does two things in order: `GauntletService.spend` moves the attempt
+from WON to SPENT with a conditional update, and then the ordinary
+`GymService.battleOrContribute` runs. If the second throws, the token is already gone. The
+refusals that can reach it are not exotic — a Boba Shield raised since the challenge started, a
+coordinate that has drifted outside the geofence between submit and spend, a faction mismatch,
+or the five-attempt compare-and-set loop giving up under contention — and the player's only
+recourse is to win a challenge again. That is the same survivable direction chosen for the karma
+payout (the strike stands, the award is lost), and `public/game.js` shows the server's refusal
+without offering a retry, because there is nothing left to retry with.
+
+**The quieter half is that spending a win does not guarantee a capture even when nothing
+throws.** The spend passes the challenge's `capturePower` as the blow's power into the ordinary
+path, so if the gym still holds more control points than that, the branch taken is the damage
+branch: the win lands as a normal hit and the attempt is spent. In the shipped pack that is not
+a corner case — `capturePower` runs from 200 to 300 and no territory starts below 400 control
+points — so a player who opens CHALLENGE at a full-strength gym, instead of grinding it to the
+one-point floor first, spends a correct answer on a scratch. Nothing warns them: the client
+offers the CHALLENGE command on any rival gym whatever its control points, and what comes back
+is the ordinary "Inflicted N damage" message.
+
+### `rewardKarma` is authored, reported, and never paid
+
+Every challenge carries `rewardKarma` — 40 to 90 in the shipped pack — and
+`src/content/challenges.schema.ts` describes it as karma for the win itself, paid through the
+existing `GYM` cap. Nothing pays it. The only two references to the field in `src/` are the
+schema's own default and the line in `GymController.submitGauntlet` that echoes it back in the
+submit response; no ledger row is ever written for it.
+
+What a win does earn is the ordinary battle payout inside `battleOrContribute`,
+`floor(power * 0.35)` under the same `GYM` cap and behind the same 60-second per-volunteer
+cooldown (`GYM_KARMA_COOLDOWN_MS`) — so a player who fought the gym down within the last minute
+is paid nothing for the capture that follows. The discrepancy has stayed invisible because the
+shipped client never renders `rewardKarma`. Either the spend path should award it through
+`KarmaService` like every other source, or the field should come out of both the schema and the
+response; which of those is right is a question about the event's economy, since a win already
+pays once through the capture, and not a defect with one obvious repair.
+
+### Losing a gauntlet costs nothing, so a four-option gym is four attempts away
+
+`GauntletService.submit` marks a lost attempt LOST and clears its `openKey`, which releases the
+one-open-attempt lock immediately. Nothing stops the player starting another on the spot, and
+the pick is deterministic, so the next attempt is the same question. A `MULTIPLE_CHOICE` gym
+therefore falls to at most as many attempts as it has choices, to anybody willing to keep
+standing there; the deadline and the geofence bound where and how fast an attempt happens, not
+how many. The only ceiling above that is the per-account mutation rate limiter, 90 writes a
+minute.
+
+The shape is worth naming because the code half-expects the missing piece:
+`src/models/challengeAttempt.model.ts` justifies its `{ accountId, gymId, createdAt }` index
+with "the cooldown after a loss", and there is no cooldown after a loss — nothing in `src/`
+queries that index at all. A cooldown, or a per-gym attempt count, is what is absent; it is
+unwritten here rather than written untested, like the reconciliation above.
 
 ### The fatigue cap ignores the pack's timezone
 
@@ -165,6 +259,14 @@ geofence radius against how many honest check-ins it rejects at each venue.
   failure is logged rather than retried.
 - **Positions are never persisted.** No history, no replay, no heat maps. Anything that wanted
   those would be a new design decision, not a feature toggle.
+- **No code execution, in the coding gauntlet or anywhere else.** The judge is normalise, HMAC,
+  `timingSafeEqual` against a digest the pack ships: no `vm`, no worker, no container, no
+  third-party runner, no new dependency. What that buys is a mechanic with no sandbox to escape
+  and no untrusted-program resource budget to bound. What it costs is the thing the name
+  suggests — it verifies answers, not programs, so a challenge can ask what a snippet prints or
+  which option is right (`PREDICT_OUTPUT` and `MULTIPLE_CHOICE` are the only two kinds it has)
+  and cannot ask for code that passes tests. Adding a runner is a different piece of work with
+  its own threat model, not a flag.
 
 ---
 

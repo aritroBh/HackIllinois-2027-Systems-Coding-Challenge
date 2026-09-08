@@ -20,6 +20,9 @@ import { Request, Response, NextFunction } from 'express';
 import { CheckInService } from '../services/checkin.service';
 import { resolveActorId } from '../middleware/identity';
 
+/**
+ * Controller managing shift check-in lifecycle: token minting, desk QR verification, and check-out settlement.
+ */
 export class CheckInController {
   /**
    * Mints the volunteer's own rotating QR token. 200, and the body is useful only for the

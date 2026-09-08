@@ -142,11 +142,13 @@ export interface RaidBoard {
 const announcedOpen = new Set<string>();
 const announcedClosed = new Set<string>();
 
+/** UPCOMING before the window, OPEN inside it, CLOSED after. */
 function stateOf(raid: RaidWindow, nowMs: number): RaidState {
   if (nowMs < raid.startsAtMs) return 'UPCOMING';
   return nowMs < raid.endsAtMs ? 'OPEN' : 'CLOSED';
 }
 
+/** Client-facing raid snapshot: static fields plus derived state and countdown. */
 function summarise(raid: RaidWindow, nowMs: number, joinCount: number): RaidSummary {
   const state = stateOf(raid, nowMs);
   return {
@@ -164,6 +166,7 @@ function summarise(raid: RaidWindow, nowMs: number, joinCount: number): RaidSumm
   };
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -173,6 +176,9 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
+/**
+ * Boss raid window scheduler coordinating timed cooperative events and campus-wide karma multipliers.
+ */
 export class RaidService {
   /**
    * Read the catalog now, so a bad pack fails at boot rather than at the first player.

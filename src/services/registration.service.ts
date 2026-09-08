@@ -80,10 +80,12 @@ const VOLUNTEER_LOCK_WAIT_MS = 60;
 // stolen rather than blocking the key for the full 24h document TTL.
 const IDEMPOTENCY_STALE_MS = 2 * 60 * 1000;
 
+/** Bounded wait between volunteer-lock retries. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** True for Mongo duplicate-key write failures, which concurrent first-writes produce. */
 function isDuplicateKeyError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -178,6 +180,9 @@ export interface IReserveResult {
   cached?: boolean;
 }
 
+/**
+ * Volunteer shift registration service managing atomic seat reservations, waitlist promotion cascades, and cancellations.
+ */
 export class RegistrationService {
   /**
    * Claim a seat, or a queue place when the seat is gone.

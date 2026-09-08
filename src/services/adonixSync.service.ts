@@ -59,6 +59,9 @@ export interface IAdonixRawEvent {
   isAsync: boolean;
 }
 
+/**
+ * Synchronisation service translating external Adonix hackathon event schedules into volunteer shifts.
+ */
 export class AdonixSyncService {
   /**
    * The schedule endpoint, hard-coded rather than read from `env.ADONIX_URL`.

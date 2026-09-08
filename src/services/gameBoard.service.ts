@@ -93,6 +93,9 @@ interface AttendanceRow {
   onDuty: number;
 }
 
+/**
+ * Game board aggregation service compiling 2D map entities, beacons, territories, and active campus events.
+ */
 export class GameBoardService {
   /**
    * Each faction's share of attendance, with every faction the pack declares present even

@@ -20,6 +20,9 @@ import { toLocal } from '../content/loader';
 import { ApiError } from '../common/errors/apiError';
 import { ErrorCode } from '../common/errors/errorCodes';
 
+/**
+ * Controller providing shift scheduling, CRUD operations, roster inspection with presence auditing, and emergency broadcasts.
+ */
 export class ShiftController {
   /**
    * The lead's roster for one shift. Alongside each registration it reports how fresh that

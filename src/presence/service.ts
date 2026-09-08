@@ -92,6 +92,10 @@ export interface AccountFacts {
   sessionVersion: number;
 }
 
+/**
+ * Real-time presence orchestration service managing active volunteer socket sessions,
+ * high-frequency tick broadcasting, spatial quantization, adaptive load shedding, and presence audits.
+ */
 export class PresenceService {
   private sessions = new Map<string, PresenceSession>();
   /**
@@ -196,6 +200,7 @@ export class PresenceService {
     if (this.factFlushTimer) { clearTimeout(this.factFlushTimer); this.factFlushTimer = null; }
   }
 
+  /** Total number of currently connected presence client sessions. */
   sessionCount(): number {
     return this.sessions.size;
   }
@@ -216,6 +221,7 @@ export class PresenceService {
     return session;
   }
 
+  /** Deregister a connected client session and clean up account tracking when last session drops. */
   remove(clientId: string): void {
     const s = this.sessions.get(clientId);
     if (!s) return;

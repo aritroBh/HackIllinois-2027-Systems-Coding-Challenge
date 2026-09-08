@@ -14,8 +14,11 @@ same database, and signs the browser in. No configuration, no Docker, no secrets
 In a second terminal:
 
 ```sh
-npm run e2e           # drives the live server through everything below
+npm run e2e           # drives the live server through most of what follows
 ```
+
+(Most, not all: the gauntlet in §8 is not in that script — it shipped without touching it.
+`tests/gauntlet.test.ts` is what covers it.)
 
 ---
 
@@ -145,6 +148,15 @@ or the coordinates.
 
 Opt in on two devices and watch them appear on the campus.
 
+If one of them does not appear, the map now says why instead of looking broken — useful on
+stage, where a phone indoors is the likeliest thing to go wrong. The socket answers a rejected
+position with a nack for every verdict except `RATE` (`src/presence/wsTransport.ts`), and
+`describeRefusal` in `public/views/players.js` turns `INACCURATE`, `OFF_CAMPUS`, `TOO_FAST`,
+`SPEED_STRIKE` and `MUTED` into one chip with a sentence. It used to answer only the three
+punitive reasons, so the two an ordinary person actually meets — a poor indoor fix, and standing
+outside the campus box — vanished them silently while the interface went on reporting them as
+visible.
+
 The number to lead with is a **ratio, not a millisecond count**: an artificially scattered crowd
 costs roughly **2.7x** what a venue-clustered one does, because the expensive part is computed
 once per fifty-metre cell and shared by everyone standing in it. Scattering is precisely what
@@ -200,16 +212,91 @@ good answer to "how do you know the data is right".
 Heights: **88.5% are a per-type default.** 773 come from surveyed levels, 292 from OSM tags,
 and lidar is a step you run yourself. The README used to imply the good sources dominated.
 
+## 8. The gauntlet, which you have to be standing there to win
+
+In the shipped `hackillinois-2027` pack, control points alone no longer take a rival gym. Grind
+one down and it stops at 1 CP with *"down to its last point. Win its coding challenge to take
+it."* The flip needs a challenge win, answered from inside that gym's geofence. Reinforcing an
+ally and taking neutral ground are untouched — gating those would break the first thirty seconds
+of play for the sake of the last one.
+
+**On stage, in order.** Open **Campus** and walk the trainer to a landmark another faction holds
+(WASD or the arrow keys; the radius is this pack's 75 m). Click the landmark and press **Engage**
+— or open the same gym from the **Turf Wars** list. Press **FIGHT**, which is 150 CP a strike,
+until the message says the gym is on its last point: show that before you open the challenge,
+because it is the only visible evidence the rule exists. Then press **CHALLENGE**. The prompt and
+a countdown replace the message box; the countdown runs off the server's `expiresAt` rather than a
+timer the browser started, because the browser clock is not evidence and the server refuses a late
+answer either way. Answer, Submit. On a win the client spends the win immediately and the gym
+flips in the same breath.
+
+Which question a gym asks is a sha256 of the gym's id, so the same gym always asks the same thing.
+You can rehearse against the real one, and a player cannot reroll until they get one they know.
+The shipped pack has five, `PREDICT_OUTPUT` and `MULTIPLE_CHOICE`, with 3–5 minute clocks.
+
+**Say what the judge is, plainly, before somebody assumes something better.** Normalise the
+submitted text, HMAC-SHA256 it under the pack's own `answerSalt`, compare against a digest that
+shipped in the pack with `timingSafeEqual`. That is the whole judge. Nothing is executed — no
+`vm`, no worker, no container, no new dependency — so there is nothing to sandbox. **It verifies
+answers, not programs.** Reading a snippet and predicting what it prints is a real filter; calling
+it a code runner would be a lie, and it is the kind of lie that outlives the person who told it.
+
+Three guarantees the database makes rather than the service, each one line to point at:
+
+- One open attempt per account, from a partial unique index on the account plus an `openKey`
+  that is a constant while OPEN and null afterwards — `src/models/challengeAttempt.model.ts`.
+  Twenty concurrent starts produce one attempt and nineteen duplicate-key errors.
+- A win is a single-use token: the spend is a conditional update from WON to SPENT, so twenty
+  requests carrying the same attempt id produce one capture and nineteen conflicts.
+- The geofence is checked at start **and** at submit (`src/services/gauntlet.service.ts`), and a
+  third time by the capture, which is the ordinary `GymService` path with a `viaGauntlet` flag
+  rather than a second capture implementation. Checking only at the start lets you answer from the
+  bus; checking only at submit lets the question set be harvested from anywhere.
+
+**If they push** — and these are worth getting in first, because each of them is findable in ten
+minutes by anyone who downloads the pack:
+
+- **Every player of a challenge sees the same input**, so the answer is a constant and travels in
+  a group chat. Deriving the input per attempt is the fix and it would move challenge authoring
+  out of the pack and into server code. It is not built.
+- **The salt stops the answer being read, not guessed.** `answerSalt` sits in the pack file, and
+  the pack directory is served publicly under /dashboard/content, so anyone can hash candidate
+  answers against it offline until one matches — and "what does this print" has a small answer
+  space. It is keyed on the pack rather than on `QR_HMAC_SECRET` deliberately: that secret is
+  regenerated on every non-production boot, so a pack keyed on it would stop judging correctly the
+  next morning.
+- **What actually bounds cheating is physical**: two geofence checks, a server-side deadline, one
+  submission, one open attempt at a time. And on a laptop the geofence is the sprite you walked
+  there, which is the same spoofing gap §4 already admits and has the same answer — a convenience
+  check, not an attestation.
+- **Backing out does not close the attempt.** The Back button leaves it OPEN with the clock
+  running, and no other attempt can be started until it expires — up to five minutes in this pack.
+  Do not press it during a rehearsal you intend to repeat.
+- **The plaintext answers are not shipped.** They live in `design/challenges/hackillinois-2027.json`,
+  which `npm run gauntlet:hashes` reads to write the digests into the pack, and which the
+  `Dockerfile` does not copy. The generator refuses to write a pack in which a `PREDICT_OUTPUT`
+  answer appears anywhere a player can read.
+- A gauntlet capture pays the ordinary gym karma — 35% of the power spent, through the existing
+  `GYM` source and its existing daily cap. Not a new source key: a pack that declares a source it
+  does not price refuses to boot, so a new key would break every fork on the next pull. The pack's
+  `rewardKarma` is reported by the submit response and nothing pays it.
+- A pack that ships no `challenges.json` — `content/example-campus` does not — captures on control
+  points exactly as before, and the flag defaults off so a fork keeps the behaviour it had. But the
+  **CHALLENGE** button is still drawn on every rival gym there, and pressing it gets "This event
+  ships no coding challenges." That is the enabled-button-that-always-fails shape this repository
+  has fixed twice elsewhere, and it is not fixed here.
+
 ---
 
 ## What to say about how it was built
 
-The suite is 34 files and 375 tests as of 2026-09-07 — a snapshot, not a claim; `npm test`
+The suite is 35 files and 390 tests as of 2026-09-07 — a snapshot, not a claim; `npm test`
 prints the authoritative figure — and the interesting ones are invariants rather than
 coverage: fifty racing registrations against two seats, ten concurrent bounty reservations
 against a budget for three granting exactly three, twenty phones on one sponsor poster
-producing one winner and nineteen refusals, a lead who cannot spin another player's
-HackStop, a roster that reports buckets and never a coordinate.
+producing one winner and nineteen refusals, twenty simultaneous starts on one gym's challenge
+opening exactly one attempt, a lead who cannot spin another player's HackStop, a roster that
+reports buckets and never a coordinate.
 
 `npm run e2e` is the other half: it drives the real HTTP surface of a running process with
 real cookies and real concurrency, and asserts the same invariants end to end. It is worth
