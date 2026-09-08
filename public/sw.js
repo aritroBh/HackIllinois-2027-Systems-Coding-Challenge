@@ -158,7 +158,11 @@
   // `v60`: the gauntlet. Taking a rival gym can now require winning its coding challenge,
   //        answered standing inside the gym's geofence — checked again on submit, so you
   //        cannot start at the gym and answer from the bus.
-  const VERSION = 'v60';
+  // `v61`: spelling out the campus telemetry labels made the strip overflow and clip the last
+  //        two readings; it wraps now instead of truncating.
+  // `v62`: one last "mint" survived on the check-in hint, in the sentence telling a hacker
+  //        what to do — the button beside it had already stopped saying it.
+  const VERSION = 'v63';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

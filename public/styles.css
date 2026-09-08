@@ -419,7 +419,13 @@ tr.is-top .rank-pill { background: var(--orange); color: var(--ink); }
 #hud-nearest .near-dist span { font-size: 14px; color: var(--cream-dim); }
 #hud-nearest .segbar { width: 220px; }
 #hud-nearest .segbar i.on { background: var(--patina-lt); }
-.telemetry { display: flex; gap: 12px; font-family: var(--f-hud); font-size: 10px; color: var(--mute); text-transform: uppercase; background: rgba(8,21,43,0.86); padding: 6px 10px; border: 2px solid var(--ink); }
+/* Wraps rather than clipping. The labels were `bldg`/`mon`/`dist`, which fit because they were
+   abbreviations nobody could read; spelling them out costs width, and a fixed-width row silently
+   truncated the last two entries instead of moving them. Wrapping is the cheaper half of that
+   trade — the strip is telemetry, not a layout anchor. The max-width keeps the wrapped rows
+   inside the bottom-left corner instead of growing across the viewport into the nearest-HackStop
+   readout, which is what the extra width did on first attempt. */
+.telemetry { display: flex; flex-wrap: wrap; row-gap: 2px; gap: 12px; max-width: 168px; font-family: var(--f-hud); font-size: 10px; color: var(--mute); text-transform: uppercase; background: rgba(8,21,43,0.86); padding: 6px 10px; border: 2px solid var(--ink); }
 .telemetry b { font-family: var(--f-num); font-size: 16px; color: var(--cream); margin-right: 3px; }
 .world-labels { position: absolute; inset: 0; pointer-events: none; z-index: 3; overflow: hidden; }
 .world-label { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 8px; background: rgba(8,21,43,0.9); border: 2px solid var(--c, var(--cream-dim)); white-space: nowrap; transition: opacity 120ms linear; }

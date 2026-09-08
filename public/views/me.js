@@ -365,7 +365,7 @@
           <div>
             <div class="countdown-bar"><div class="countdown-fill" id="me-token-fill" style="width:${live ? 100 : 0}%"></div></div>
             <div class="qr-meta"><span id="me-token-text">${live ? '' : 'No live token'}</span><span>${esc(state.next.title)}</span></div>
-            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres(state.next?.location || state.next?.locationName)} m of the venue, so mint it once you are there.</p>
+            <p class="ob-hint">Rotates every ${TOKEN_WINDOW_S} seconds. The scanner also checks you are within ${geofenceMetres(state.next?.location || state.next?.locationName)} m of the venue, so get it once you are there.</p>
             ${state.tokenError ? `<div class="ob-status is-err">${esc(state.tokenError)}</div>` : ''}
           </div>
         </div>
