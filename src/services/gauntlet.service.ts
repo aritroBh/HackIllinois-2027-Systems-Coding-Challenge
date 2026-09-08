@@ -264,8 +264,36 @@ export class GauntletService {
    * they are in, so a second request carrying the same id matches nothing and is told so.
    * Returns the challenge whose terms the capture should use.
    */
-  public static async spend(accountId: string, attemptId: string): Promise<{ challenge: Challenge; gymId: string }> {
+  public static async spend(accountId: string, attemptId: string, actorFaction?: string): Promise<{ challenge: Challenge; gymId: string }> {
     if (!Types.ObjectId.isValid(attemptId)) throw ApiError.badRequest('Invalid attempt id.', { code: ErrorCode.VALIDATION_ERROR });
+
+    /*
+     * Refuse BEFORE burning the token if the win cannot actually take the gym.
+     *
+     * A challenge is worth `capturePower` control points, and the capture branch needs that to
+     * meet or exceed what the gym has left. Spending anyway did something worse than failing:
+     * the win was consumed and applied as an ordinary hit, so a player who answered correctly
+     * watched the banner not change and had nothing left to try again with. That is the
+     * enabled-button-that-always-fails shape one layer up — the action succeeds and does not
+     * do the thing it was for.
+     *
+     * The check is deliberately *before* the single-spend update. Ordering it the other way
+     * would make the refusal cost the token it is protecting.
+     */
+    const held = await ChallengeAttempt.findOne({ _id: attemptId, accountId: new Types.ObjectId(accountId), status: 'WON' });
+    if (held) {
+      const gym = await Gym.findById(held.gymId);
+      const challenge = this.byId(held.challengeId);
+      if (gym && challenge && actorFaction && gym.controllingFaction !== actorFaction && gym.controllingFaction !== 'NEUTRAL') {
+        if (challenge.capturePower < gym.controlPoints) {
+          throw ApiError.conflict(
+            `${gym.name} still has ${gym.controlPoints} control points and this challenge is worth ${challenge.capturePower}. `
+            + 'Wear it down first, then spend your win on the last blow. Your win is still good.'
+          );
+        }
+      }
+    }
+
     const spent = await ChallengeAttempt.findOneAndUpdate(
       { _id: attemptId, accountId: new Types.ObjectId(accountId), status: 'WON' },
       { $set: { status: 'SPENT', spentAt: new Date(), openKey: null } },

@@ -144,6 +144,40 @@ describe('a win is spent exactly once', () => {
   });
 });
 
+describe('a win is never burned on a blow that cannot land', () => {
+  it('refuses the spend, and keeps the win, when the gym still has more points than the challenge is worth', async () => {
+    const gym = await makeGym('Too Strong Gym');
+    // Rival-held, and holding far more than any challenge in the pack is worth.
+    await Gym.updateOne({ _id: gym._id }, { $set: { controllingFaction: 'TEAM_TENSOR', controlPoints: 5000 } });
+    const v = await makeVolunteer('Hopeful');
+    const served = await GauntletService.start(String(v._id), String(gym._id), AT);
+    const challenge = GauntletService.byId(served.challengeId)!;
+    const answers = challenge.cases.map((_, i) =>
+      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    expect((await GauntletService.submit(String(v._id), served.attemptId, answers, AT)).won).toBe(true);
+
+    await expect(GauntletService.spend(String(v._id), served.attemptId, 'TEAM_KERNEL'))
+      .rejects.toThrow(/control points/);
+    // The whole point: the refusal must not have cost the win.
+    const after = await ChallengeAttempt.findById(served.attemptId);
+    expect(after!.status).toBe('WON');
+  });
+
+  it('allows the spend once the gym has been worn down to within reach', async () => {
+    const gym = await makeGym('Worn Down Gym');
+    await Gym.updateOne({ _id: gym._id }, { $set: { controllingFaction: 'TEAM_TENSOR', controlPoints: 1 } });
+    const v = await makeVolunteer('Persistent');
+    const served = await GauntletService.start(String(v._id), String(gym._id), AT);
+    const challenge = GauntletService.byId(served.challengeId)!;
+    const answers = challenge.cases.map((_, i) =>
+      correctAnswerFor(challenge.id, i, challenge.choices ?? ['2', '60', '1', 'ReferenceError'])!);
+    await GauntletService.submit(String(v._id), served.attemptId, answers, AT);
+    const spent = await GauntletService.spend(String(v._id), served.attemptId, 'TEAM_KERNEL');
+    expect(spent.gymId).toBe(String(gym._id));
+    expect((await ChallengeAttempt.findById(served.attemptId))!.status).toBe('SPENT');
+  });
+});
+
 describe('a deadline is a deadline', () => {
   it('refuses a correct answer submitted after the clock ran out', async () => {
     const gym = await makeGym('Deadline Gym');

@@ -114,7 +114,7 @@ export class GymController {
   public static async spendGauntlet(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const volunteerId = resolveActorId(req);
-      const { challenge, gymId } = await GauntletService.spend(volunteerId as string, req.params.attemptId as string);
+      const { challenge, gymId } = await GauntletService.spend(volunteerId as string, req.params.attemptId as string, req.body.faction);
       const result = await GymService.battleOrContribute(
         gymId,
         volunteerId as string,
