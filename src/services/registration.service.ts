@@ -122,15 +122,23 @@ function chicagoDayRange(date: Date): { dayStart: Date; dayEnd: Date } {
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-      // `hour12: false` alone renders midnight as "24" in some runtimes, which parses as
-      // the next day and moves the whole fatigue window. `h23` pins it to 00.
+      // `h23` pins midnight to "00" on runtimes whose ICU honours it. CI's does not: it
+      // renders "24", and `T24:00:00` is *valid* ISO — midnight ending that date — so
+      // `Date.parse` returns the next midnight instead of NaN, the NaN break below never
+      // fires, and the iteration converges exactly one day early. Every booking was then
+      // weighed against yesterday: today's pile-up passed, and yesterday's hours haunted
+      // today's innocent bookings. Fold the rendering back to the midnight that was meant;
+      // the iteration absorbs any residual skew either way.
       hourCycle: "h23",
     });
     for (let i = 0; i < 3; i++) {
       const parts = partsFmt.formatToParts(guess);
       const get = (t: string): string =>
         parts.find((p) => p.type === t)?.value ?? "";
-      const asWall = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+      const asWall = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`.replace(
+        "T24:",
+        "T00:",
+      );
       const diff = Date.parse(`${wall}Z`) - Date.parse(`${asWall}Z`);
       if (diff === 0 || Number.isNaN(diff)) break;
       guess = new Date(guess.getTime() + diff);

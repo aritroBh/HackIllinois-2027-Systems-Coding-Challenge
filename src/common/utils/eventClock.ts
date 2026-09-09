@@ -47,7 +47,10 @@ const eventClock = new Intl.DateTimeFormat('en-GB', {
 /** The wall-clock hour at the event, as a fraction — 03:30 is `3.5`. */
 export function eventLocalHour(when: Date): number {
   const parts = eventClock.formatToParts(when);
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+  // `h23` does not pin midnight to "00" on every ICU build (see `wallToUtc` in
+  // `registration.service.ts` for the full story): a "24" here would put midnight at the
+  // cosine trough and outside every window. Fold it back; all other hours are unaffected.
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0') % 24;
   const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
   return hour + minute / 60;
 }

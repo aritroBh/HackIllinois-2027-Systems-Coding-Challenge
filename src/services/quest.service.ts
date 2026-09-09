@@ -51,6 +51,7 @@ const KARMA_SOURCE: KarmaSourceKey = 'QUEST';
 /** The window key of a quest that runs once for the whole event. */
 const EVENT_WINDOW_KEY = 'event';
 
+/** The count after one advance: where this account stands against the target. */
 export interface QuestAdvanceResult {
   questId: string;
   windowKey: string;
@@ -60,6 +61,7 @@ export interface QuestAdvanceResult {
   completed: boolean;
 }
 
+/** A quest with this account's progress attached: what the board renders. */
 export interface QuestStatus {
   id: string;
   title: string;
@@ -133,7 +135,11 @@ function eventHour(at: Date): string {
       hourCycle: 'h23',
     });
   }
-  const hour = hourFormatter.formatToParts(at).find((part) => part.type === 'hour')?.value ?? '00';
+  // Midnight may render as "24" where `h23` is not honoured (same ICU split as in
+  // `wallToUtc`): without the fold, the midnight hour lands in a `T24` bucket no other
+  // runtime agrees with, and streaks break across deploys rather than across midnight.
+  const rawHour = hourFormatter.formatToParts(at).find((part) => part.type === 'hour')?.value ?? '00';
+  const hour = rawHour === '24' ? '00' : rawHour;
   return `${eventDay(at)}T${hour.padStart(2, '0')}`;
 }
 
