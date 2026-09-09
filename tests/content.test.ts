@@ -32,10 +32,10 @@ function rewrite(dir: string, file: string, fn: (doc: Record<string, unknown>) =
 describe('content pack', () => {
   it('the active pack loads with the UIUC content and the baked model agrees on monument ids', () => {
     expect(pack.event.id).toBe('hackillinois-2027');
-    expect(Object.keys(pack.venues)).toHaveLength(15);
+    expect(Object.keys(pack.venues)).toHaveLength(23);
     expect(pack.monuments).toHaveLength(14);
     expect(pack.territories).toHaveLength(14);
-    expect(pack.beacons).toHaveLength(12);
+    expect(pack.beacons).toHaveLength(20);
     expect(pack.factionIds.has('NEUTRAL')).toBe(true);
     expect(pack.campusMonumentIds).toHaveLength(14);
   });

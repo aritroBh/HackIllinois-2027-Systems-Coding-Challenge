@@ -14,5 +14,13 @@
   "MAIN_LIBRARY": { "name": "Main Library", "latitude": 40.10455, "longitude": -88.22885, "hints": ["MAIN LIBRARY", "STACKS"] },
   "KRANNERT_CENTER": { "name": "Krannert Center", "latitude": 40.10802, "longitude": -88.22294, "hints": ["KRANNERT"] },
   "MEMORIAL_STADIUM": { "name": "Memorial Stadium", "latitude": 40.09925, "longitude": -88.23597, "hints": ["MEMORIAL STADIUM", "STADIUM", "ZUPPKE"] },
-  "STATE_FARM_CENTER": { "name": "State Farm Center", "latitude": 40.09622, "longitude": -88.23599, "hints": ["STATE FARM CENTER", "STATE FARM", "ASSEMBLY HALL"] }
+  "STATE_FARM_CENTER": { "name": "State Farm Center", "latitude": 40.09622, "longitude": -88.23599, "hints": ["STATE FARM CENTER", "STATE FARM", "ASSEMBLY HALL"] },
+  "ISR_RESIDENCE": { "name": "Illinois Street Residence Halls", "latitude": 40.10979, "longitude": -88.22139, "hints": ["ILLINOIS STREET", "ISR", "TOWNSEND", "WARDALL"] },
+  "PAR_RESIDENCE": { "name": "Pennsylvania Avenue Residence Halls", "latitude": 40.09970, "longitude": -88.22080, "hints": ["PENNSYLVANIA AVENUE", "PAR", "BABCOCK", "BLAISDELL", "CARR", "SAUNDERS"] },
+  "FAR_RESIDENCE": { "name": "Florida Avenue Residence Halls", "latitude": 40.09892, "longitude": -88.22033, "hints": ["FLORIDA AVENUE", "FAR", "OGLESBY", "TRELEASE", "COLLEGE CT"] },
+  "PRESBY_HALL": { "name": "Presby Hall", "latitude": 40.10852, "longitude": -88.23256, "hints": ["PRESBY", "405 JOHN", "PRESBY HALL"] },
+  "BROMLEY_HALL": { "name": "Bromley Hall", "latitude": 40.10706, "longitude": -88.23497, "hints": ["BROMLEY", "910 THIRD", "BROMLEY HALL"] },
+  "LAR_RESIDENCE": { "name": "Lincoln Avenue Residence Halls", "latitude": 40.10420, "longitude": -88.22005, "hints": ["LINCOLN AVENUE", "LAR", "LEONARD", "SHELDEN", "1005 LINCOLN"] },
+  "HENDRICK_HOUSE": { "name": "Hendrick House", "latitude": 40.11086, "longitude": -88.21992, "hints": ["HENDRICK", "HENDRICK HOUSE"] },
+  "ARMORY_HOUSE": { "name": "Armory House", "latitude": 40.10564, "longitude": -88.23673, "hints": ["ARMORY HOUSE", "ARMORY", "1010 SECOND"] }
 }

@@ -72,6 +72,54 @@
       "name": "Stadium Tunnel Locker",
       "where": "Memorial Stadium Gate 4",
       "venue": "MEMORIAL_STADIUM"
+    },
+    {
+      "id": "BEACON_ISR",
+      "name": "ISR Commons Cache",
+      "where": "Illinois Street Residence Halls",
+      "venue": "ISR_RESIDENCE"
+    },
+    {
+      "id": "BEACON_PAR",
+      "name": "PAR Commons Cache",
+      "where": "Pennsylvania Avenue Residence Halls",
+      "venue": "PAR_RESIDENCE"
+    },
+    {
+      "id": "BEACON_FAR",
+      "name": "Trelease Lobby Cache",
+      "where": "Florida Avenue Residence Halls",
+      "venue": "FAR_RESIDENCE"
+    },
+    {
+      "id": "BEACON_PRESBY",
+      "name": "Presby Lobby Cache",
+      "where": "Presby Hall",
+      "venue": "PRESBY_HALL"
+    },
+    {
+      "id": "BEACON_BROMLEY",
+      "name": "Bromley Lobby Cache",
+      "where": "Bromley Hall",
+      "venue": "BROMLEY_HALL"
+    },
+    {
+      "id": "BEACON_LAR",
+      "name": "LAR Lobby Cache",
+      "where": "Lincoln Avenue Residence Halls",
+      "venue": "LAR_RESIDENCE"
+    },
+    {
+      "id": "BEACON_HENDRICK",
+      "name": "Hendrick Lobby Cache",
+      "where": "Hendrick House",
+      "venue": "HENDRICK_HOUSE"
+    },
+    {
+      "id": "BEACON_ARMORY",
+      "name": "Armory Lobby Cache",
+      "where": "Armory House",
+      "venue": "ARMORY_HOUSE"
     }
   ]
 }
