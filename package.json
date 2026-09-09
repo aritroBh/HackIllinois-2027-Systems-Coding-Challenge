@@ -1,5 +1,5 @@
 {
-  "name": "nexus-quest",
+  "name": "hackillinois-2027",
   "version": "1.0.0",
   "description": "A volunteer operations system for a large hackathon, with the campus it runs on rendered as a game world. Point it at your own content pack and it runs your event on your campus.",
   "main": "dist/src/index.js",

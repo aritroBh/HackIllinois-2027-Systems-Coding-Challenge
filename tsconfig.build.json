@@ -1,13 +1,13 @@
 {
   // The production build.
   //
-  // `rootDir` is the repository root rather than `src`, because the plugin registry imports
-  // the bundled example from `plugins/hello-nexus` and TypeScript refuses to compile a file
-  // outside the declared root. That import is deliberate and is what the plan asks for: a
+  // `rootDir` is the repository root rather than `src`, so that author-added plugins under
+  // `plugins/` (see `docs/EXTENDING.md` §3) compile against the hook interface in `src`.
+  // No bundled plugin ships — `CATALOG` in `src/plugins/registry.ts` is empty — but a
   // plugin that is statically imported is one `tsc` type-checks, so a plugin that no longer
   // matches the hook interface is a compile error rather than something that throws at the
-  // first check-in of the event. Excluding it instead would trade a real guarantee for a
-  // tidier output path.
+  // first check-in of the event. Excluding `plugins/` instead would trade a real guarantee
+  // for a tidier output path.
   //
   // The cost is that the output is `dist/src/index.js` rather than `dist/index.js`. That is
   // stated once here and once in `package.json`'s `start`, and nowhere else — the alternative

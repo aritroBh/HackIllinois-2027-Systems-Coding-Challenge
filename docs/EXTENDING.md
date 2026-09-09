@@ -132,10 +132,11 @@ page's full privileges. `npm run csp:audit` checks the first part; the second is
 Use this when you need server behaviour — to react to something happening, to add an endpoint,
 or to ship a tab with a backend behind it.
 
-A plugin is a plain object, not a package. (The tree used to ship `plugins/hello-nexus/` as
-the worked example; it was removed with the demo tab. The shape below, the `ServerPlugin`
-type in `src/plugins/types.ts`, and the mocked plugins in `tests/plugins.test.ts` are the
-reference now.) A plugin does one of each thing it needs and nothing else:
+A plugin is a plain object, not a package. (Earlier revisions shipped a bundled worked
+example; it was removed with the demo tab, so the tree ships none. The shape
+below, the `ServerPlugin` type in `src/plugins/types.ts`, and the mocked plugins in
+`tests/plugins.test.ts` are the reference now.) A plugin does one of each thing it needs
+and nothing else:
 
 ```
 plugins/<your-name>/

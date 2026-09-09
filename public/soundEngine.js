@@ -3,7 +3,7 @@
  * Designed by Muse (Creative Director).
  * Synthesizes dynamic audio cues in real time with zero external audio assets.
  */
-class NexusQuestAudioEngine {
+class HackIllinoisAudioEngine {
   constructor() {
     this.ctx = null;
     this.enabled = true;
@@ -263,6 +263,6 @@ class NexusQuestAudioEngine {
   }
 }
 
-window.soundEngine = new NexusQuestAudioEngine();
+window.soundEngine = new HackIllinoisAudioEngine();
 
 

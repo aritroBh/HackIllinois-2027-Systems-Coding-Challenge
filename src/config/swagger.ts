@@ -9,7 +9,11 @@
  *
  * Every mounted route is now represented here, and nothing is documented that is not
  * mounted: `/adonix/events` was described but never routed, so it was removed rather than
- * implemented, and `/volunteers` was routed but undescribed, so it was written up. The
+ * implemented, and `/volunteers`, `/announcements`, `/avatars`, `/presence` and `/game`
+ * were routed but undescribed, so they were written up. Three endpoints intentionally leave
+ * the `{success, data}` envelope and say so on their own entries: `/auth/claim-codes/bulk`
+ * under `Accept: text/csv` (raw CSV for badge printing), `GET /avatars/{hash}` (raw
+ * `image/png` with an ETag), and `GET /stats/events` (an SSE stream). The
  * `/health` and `/ready` probes sit at the server root rather than under `/api/v1`, so
  * they carry an operation-level `servers` override. It is relative (`/`) rather than an
  * absolute host, so the spec stays correct wherever it is deployed instead of pointing
@@ -46,6 +50,10 @@ export const swaggerDocument = {
     { name: 'Operations', description: 'Liveness and readiness probes for orchestrators' },
     { name: 'Identity', description: 'Cookie sessions: badge claim codes, email magic links, Adonix SSO, revocation (docs/IDENTITY.md)' },
     { name: 'Content', description: 'The active content pack: branding, venues, factions, monuments and pack file URLs' },
+    { name: 'Announcements', description: 'Lead broadcasts to the floor, filtered server-side by audience' },
+    { name: 'Avatars', description: 'Player sprite-sheet upload, lead moderation queue and content-addressed PNG serving' },
+    { name: 'Presence', description: 'HTTP mirror of the map presence protocol (the SSE fallback path)' },
+    { name: 'Game', description: 'Raid board, faction objectives, karma leaderboard and booth scans' },
   ],
   paths: {
     '/auth/providers': {
@@ -149,6 +157,98 @@ export const swaggerDocument = {
         summary: 'Active content pack descriptor: event branding, venues, factions, monuments and pack file URLs',
         tags: ['Content'],
         responses: { 200: { description: 'Content descriptor (public, cacheable 60 s)' } },
+      },
+    },
+    '/announcements': {
+      post: {
+        summary: 'Broadcast a banner to the floor (lead or above)',
+        description: 'Fans out on the `announce` SSE channel as ANNOUNCEMENT. Audience is delivery filtering, not presentation: the GET below never returns a message the caller is not part of.',
+        tags: ['Announcements'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['message'], properties: { message: { type: 'string', minLength: 1, maxLength: 280 }, audience: { type: 'string', enum: ['ALL', 'VOLUNTEERS', 'HACKERS', 'STAFF'], default: 'ALL' }, tone: { type: 'string', enum: ['INFO', 'WARNING', 'URGENT'], default: 'INFO' }, venueKey: { type: 'string', maxLength: 64 }, minutes: { type: 'integer', minimum: 1, maximum: 240, default: 10 } } } } } },
+        responses: { 201: { description: 'Announcement created' }, 401: { description: 'No credential' }, 403: { description: 'Below SHIFT_LEAD' } },
+      },
+      get: {
+        summary: 'Live announcements for the caller\u2019s audience (newest first, at most 50)',
+        description: 'Open to anonymous callers, who see only ALL-audience messages. Filtering happens here, never in the client.',
+        tags: ['Announcements'],
+        responses: { 200: { description: '{ id, message, audience, tone, venueKey, authorName, createdAt, expiresAt }[] (no-store)' } },
+      },
+    },
+    '/announcements/{id}': {
+      delete: {
+        summary: 'Take an announcement down early (lead or above)',
+        description: 'Fans out ANNOUNCEMENT_CLEARED on the `announce` channel so banners vanish without a refresh.',
+        tags: ['Announcements'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' } }],
+        responses: { 200: { description: '{ id, cleared: true }' }, 404: { description: 'NOT_FOUND — already expired or never existed' } },
+      },
+    },
+    '/avatars': {
+      post: {
+        summary: 'Upload a player sprite sheet for review (raw PNG body)',
+        description: 'The body is the PNG bytes (`image/png` or `application/octet-stream`), not JSON. Must be one of 128x48, 128x32, 32x32 or 32x48; it is re-encoded server-side (killing polyglots and ancillary chunks) and content-addressed by sha256. `?share=1` opts in to the public leaderboard face; without it the sheet stays visible only to the owner and leads. Bodies over 64 KB never reach the service — Express answers 413 at the parser limit.',
+        tags: ['Avatars'],
+        parameters: [{ name: 'share', in: 'query', required: false, schema: { type: 'string', enum: ['0', '1', 'true', 'false'] } }],
+        requestBody: { required: true, content: { 'image/png': { schema: { type: 'string', format: 'binary' } } } },
+        responses: { 201: { description: '{ hash, width, height, status, shareOptIn, url }' }, 400: { description: 'Empty, unreadable or wrong-sized PNG' }, 401: { description: 'No credential' }, 413: { description: 'Over the 64 KB parser limit' }, 429: { description: 'Over 20 uploads/hour for this account' } },
+      },
+    },
+    '/avatars/queue': {
+      get: {
+        summary: 'Pending avatar moderation queue (lead or above)',
+        description: 'Returns `ownerId` beside every row: moderation acts on the (hash, ownerId) pair, never on a hash alone, so two uploaders of the same sheet cannot clear each other.',
+        tags: ['Avatars'],
+        responses: { 200: { description: '{ hash, width, height, ownerId, flags, createdAt }[] (no-store)' } },
+      },
+    },
+    '/avatars/{hash}': {
+      get: {
+        summary: 'Serve one avatar as raw image/png (no envelope)',
+        description: 'Public URL — the hash travels on the presence wire. Honors If-None-Match with a 304. A published, share-opted-in avatar is `private, max-age=60, must-revalidate` (and vanishes by AVATAR_UNPUBLISHED event rather than expiry); anything unpublished is `no-store`, because a cached face photo would outlive its takedown. Unpublished avatars are visible only to the owner and to leads.',
+        tags: ['Avatars'],
+        parameters: [{ name: 'hash', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-f]{64}$' } }],
+        responses: { 200: { description: 'Raw PNG bytes' }, 304: { description: 'ETag matches' }, 404: { description: 'Unknown hash, or unpublished and not yours to see' } },
+      },
+    },
+    '/avatars/{hash}/review': {
+      post: {
+        summary: 'Approve or reject an avatar (lead or above)',
+        tags: ['Avatars'],
+        parameters: [{ name: 'hash', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-f]{64}$' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerId'], properties: { ownerId: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' }, approve: { type: 'boolean', default: true } } } } } },
+        responses: { 200: { description: '{ hash, status }' }, 404: { description: 'No row for that (hash, ownerId) pair' } },
+      },
+    },
+    '/avatars/{hash}/flag': {
+      post: {
+        summary: 'Report an avatar (signed-in session; a lead\u2019s flag unpublishes on its own, three ordinary ones do)',
+        description: 'Deliberately session-only: on a claimed legacy identity any `?volunteerId=` was enough to censor a stranger\u2019s photo and to walk past the per-reporter hourly cap.',
+        tags: ['Avatars'],
+        parameters: [{ name: 'hash', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-f]{64}$' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerId'], properties: { ownerId: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' }, reason: { type: 'string', minLength: 1, maxLength: 120, default: 'REPORTED' } } } } } },
+        responses: { 200: { description: '{ hash, status, unpublished, flags }' } },
+      },
+    },
+    '/presence': {
+      post: {
+        summary: 'Publish one position sample (the SSE fallback\u2019s input)',
+        description: 'Session-only: on a claimed identity this published a position *as* the victim. 202 with accepted:false (never a 4xx) means the sample was refused for a stated reason — OPT_OUT, MUTED, SPEED_STRIKE or a validation reason — so the map client keeps its retry loop simple.',
+        tags: ['Presence'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' }, acc: { type: 'number' }, h: { type: 'number' }, spd: { type: 'number' } } } } } },
+        responses: { 202: { description: '{ accepted: true, tick } or { accepted: false, reason }' }, 403: { description: 'OPT_OUT — presence disabled on the account' }, 429: { description: 'MUTED or SPEED_STRIKE' } },
+      },
+      get: {
+        summary: 'Exact positions of everyone publishing (lead or above, one call per 5 s)',
+        description: 'Optional centre/radius filter (radiusMeters, default 300). Audited as ONE PresenceAudit document per call, never one per row. Rate-limited per lead, not per IP.',
+        tags: ['Presence'],
+        parameters: [{ name: 'lat', in: 'query', required: false, schema: { type: 'number' } }, { name: 'lng', in: 'query', required: false, schema: { type: 'number' } }, { name: 'radiusMeters', in: 'query', required: false, schema: { type: 'number', default: 300 } }],
+        responses: { 200: { description: '{ count, players: [{ accountId, name, kind, role, faction, onDuty, latitude, longitude, x, z, accuracyMeters, ageMs, stale }], tick } (no-store)' }, 429: { description: 'RATE_LIMITED — one listing per five seconds' } },
+      },
+      delete: {
+        summary: 'Stop publishing and drop the SSE session',
+        description: 'Session-only, like the POST beside it: taking a named person off the map must take a session, not a query parameter.',
+        tags: ['Presence'],
+        responses: { 200: { description: '{ published: false }' } },
       },
     },
     '/shifts': {
@@ -578,6 +678,39 @@ export const swaggerDocument = {
           200: { description: 'Power-up activated' },
           400: { description: 'Insufficient inventory or item not found' },
         },
+      },
+    },
+    '/game/raids': {
+      get: {
+        summary: 'Raid schedule, the window open now, and who is on its roster',
+        tags: ['Game'],
+        responses: { 200: { description: 'Raid board (no-store)' }, 401: { description: 'AUTH_MODE=required and anonymous' } },
+      },
+    },
+    '/game/objectives': {
+      get: {
+        summary: 'Faction bar: each faction\u2019s share of who actually turned up',
+        tags: ['Game'],
+        responses: { 200: { description: 'Objectives board (no-store)' }, 401: { description: 'AUTH_MODE=required and anonymous' } },
+      },
+    },
+    '/game/leaderboard': {
+      get: {
+        summary: 'Karma ranking, tie-broken by reliability then name so the order is total',
+        description: 'The clamp is the point: `limit` tops out at 100, so this stays a leaderboard and never becomes a whole-roster export.',
+        tags: ['Game'],
+        parameters: [{ name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 25 } }],
+        responses: { 200: { description: 'Leaderboard entries (no-store)' }, 401: { description: 'AUTH_MODE=required and anonymous' } },
+      },
+    },
+    '/game/booths/{id}/scan': {
+      post: {
+        summary: 'Scan a sponsor booth (once per account per booth, ever)',
+        description: 'The code is verified against the deployment secret, not against the pack; the service normalises separators and casing, so a hyphen off a tired hand is still a scan. Both account kinds are accepted on purpose — the sponsor row is the part of the weekend that is for hackers.',
+        tags: ['Game'],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', pattern: '^[a-z0-9-]{1,60}$' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['code'], properties: { code: { type: 'string', minLength: 4, maxLength: 64 } } } } } },
+        responses: { 201: { description: 'Scan recorded' }, 401: { description: 'No credential' }, 403: { description: 'Code does not belong to this booth (timing-safe compare)' }, 404: { description: 'No such booth in this content pack' }, 409: { description: 'DUPLICATE_RESOURCE — already scanned (unique index wins the race)' } },
       },
     },
     '/adonix/sync': {

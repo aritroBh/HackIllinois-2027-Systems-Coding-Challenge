@@ -1,4 +1,4 @@
-# Render Blueprint — a free, one-click deployment of Nexus Quest.
+# Render Blueprint — a free, one-click deployment of HackIllinois 2027.
 #
 # Render is used here rather than a serverless platform because this is not a serverless
 # application: it holds WebSocket presence connections open, streams SSE, and runs a 1 Hz
@@ -31,7 +31,7 @@
 
 services:
   - type: web
-    name: nexus-quest
+    name: hackillinois-2027
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile

@@ -103,14 +103,6 @@ schema reference and starts with the three database mechanisms every collection 
 if you want to find the holes** — it lists what is unsolved and justifies every tuned constant,
 because the interesting question about a system like this is what it does not handle.
 
-**On tooling.** This was built with AI assistance — Claude Code, used throughout for
-implementation and for adversarial review. The review process is not hidden: `docs/REVIEWS.md`
-is a full log of every review round run against three independent external models (muse,
-opencode, agy), every finding, which were real, which were wrong, and what each fix was. Several
-of the most interesting bugs in this repository were found that way, and the log says so. Every
-design decision, the calibration those reviewers were given, and every accept/reject on their
-findings is mine. External data and libraries are credited in [NOTICE](NOTICE).
-
 ## Licence
 
 MIT, in [LICENSE](LICENSE). The campus model is built from OpenStreetMap data under ODbL 1.0 and the fonts are OFL 1.1; attribution and the full list are in [NOTICE](NOTICE).

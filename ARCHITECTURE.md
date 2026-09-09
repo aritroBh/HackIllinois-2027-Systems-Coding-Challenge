@@ -1,4 +1,4 @@
-# 🌊 Nexus Quest — Comprehensive Systems Architecture & Engineering Specification
+# 🌊 HackIllinois 2027 — Comprehensive Systems Architecture & Engineering Specification
 **Target Platform:** HackIllinois 2027 Systems Infrastructure  
 **Adonix Alignment:** Strict compliance with [HackIllinois Adonix](https://github.com/HackIllinois/adonix) architectural standards  
 **Language & Engine:** TypeScript 5.x / Node.js / MongoDB WiredTiger (Document-Level CAS & ACID Transactions)
@@ -32,9 +32,9 @@
 
 ## 1. Executive Summary & High-Level Topology
 
-Nexus Quest is an event-driven volunteer shift scheduling and field operations platform engineered specifically for high-stress collegiate hackathons. During events with 1,000+ attendees across distributed university facilities (e.g. Siebel Center, ECEB, Kenney Gym), standard scheduling systems suffer from catastrophic failure modes: oversold high-demand shifts, cascade dropouts, fatigue-induced safety violations, attendance fraud via static screenshots, and resource starvation during emergency incidents.
+HackIllinois 2027 is an event-driven volunteer shift scheduling and field operations platform engineered specifically for high-stress collegiate hackathons. During events with 1,000+ attendees across distributed university facilities (e.g. Siebel Center, ECEB, Kenney Gym), standard scheduling systems suffer from catastrophic failure modes: oversold high-demand shifts, cascade dropouts, fatigue-induced safety violations, attendance fraud via static screenshots, and resource starvation during emergency incidents.
 
-The following topology diagram illustrates the end-to-end request lifecycle through Nexus Quest:
+The following topology diagram illustrates the end-to-end request lifecycle through HackIllinois 2027:
 
 ```mermaid
 flowchart TD
@@ -275,7 +275,7 @@ In naive systems, slot registration is implemented as:
 When $N=50$ concurrent requests hit step 1 at $t=0$, all 50 observe `filledSlots = 0 < capacity = 2`. All 50 proceed to line 4, overwriting the document and creating **48 oversold registrations**.
 
 ### 3.2 The atomic compare-and-swap solution
-Nexus Quest eliminates application-level race conditions by pushing the saturation condition directly into MongoDB's WiredTiger storage engine:
+HackIllinois 2027 eliminates application-level race conditions by pushing the saturation condition directly into MongoDB's WiredTiger storage engine:
 
 ```mermaid
 sequenceDiagram
@@ -316,7 +316,7 @@ If $\mathcal{P}(S)$ evaluates to `false`, the operation yields a zero-write docu
 
 ## 4. Autonomous FIFO Waitlist Cascade State Machine
 
-When a confirmed volunteer cancels their shift, standard systems leave the slot vacant until an organizer manually notices or a candidate re-applies. Nexus Quest operates an autonomous cascade engine:
+When a confirmed volunteer cancels their shift, standard systems leave the slot vacant until an organizer manually notices or a candidate re-applies. HackIllinois 2027 operates an autonomous cascade engine:
 
 ```mermaid
 stateDiagram-v2
@@ -394,7 +394,7 @@ The assertion is made for every date the shift being booked touches. Attempting 
 
 ## 6. Multi-Party Shift Swaps & the Directed Cyclic Trade Engine
 
-Direct 1-to-1 trades fail in >90% of hackathon logistics situations due to mismatched volunteer preferences. Nexus Quest constructs a directed preference graph $G = (V, E)$ whose nodes are *offers* rather than volunteers: a node is the pair `volunteerId::shiftId`, one volunteer together with the one shift they are putting up. An edge $(u, v) \in E$ denotes that the holder of offer $u$ is willing to surrender the shift in $u$ in exchange for the shift in $v$. The distinction is load-bearing — a volunteer with a pending proposal against each of two shifts they hold is two nodes, and collapsing them onto one lost track of which of their shifts was actually on the table for a given ring.
+Direct 1-to-1 trades fail in >90% of hackathon logistics situations due to mismatched volunteer preferences. HackIllinois 2027 constructs a directed preference graph $G = (V, E)$ whose nodes are *offers* rather than volunteers: a node is the pair `volunteerId::shiftId`, one volunteer together with the one shift they are putting up. An edge $(u, v) \in E$ denotes that the holder of offer $u$ is willing to surrender the shift in $u$ in exchange for the shift in $v$. The distinction is load-bearing — a volunteer with a pending proposal against each of two shifts they hold is two nodes, and collapsing them onto one lost track of which of their shifts was actually on the table for a given ring.
 
 ```mermaid
 flowchart LR
@@ -438,7 +438,7 @@ nothing and the direct search is the whole algorithm.
 
 ## 7. Dynamic Rotating HMAC-SHA256 QR Attendance Protocol
 
-To eliminate attendance fraud (e.g. sharing static screenshots on Discord), Nexus Quest generates cryptographic time-windowed tokens that rotate every 30 seconds:
+To eliminate attendance fraud (e.g. sharing static screenshots on Discord), HackIllinois 2027 generates cryptographic time-windowed tokens that rotate every 30 seconds:
 
 ```mermaid
 sequenceDiagram
@@ -747,14 +747,14 @@ flowchart TD
 
 ## 12. Reactive Event Mesh: Server-Sent Events (SSE) Hub
 
-Nexus Quest employs a lightweight, uni-directional Server-Sent Events hub (`eventHub`) with connection pooling, channel multiplexing, and automated teardown:
+HackIllinois 2027 employs a lightweight, uni-directional Server-Sent Events hub (`eventHub`) with connection pooling, channel multiplexing, and automated teardown:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Browser as War Room Dashboard Client
     participant SSE as SSEBroadcastHub (eventHub)
-    participant Engine as Nexus Quest Core Services
+    participant Engine as HackIllinois 2027 Core Services
 
     Browser->>SSE: GET /api/v1/stats/events
     SSE->>Browser: HTTP 200 OK (Content-Type: text/event-stream)
@@ -783,7 +783,7 @@ sequenceDiagram
 
 ## 13. Security, Threat Modeling & Adversarial Hardening
 
-| Threat Vector | Potential Impact | Nexus Quest Mitigation Mechanism |
+| Threat Vector | Potential Impact | HackIllinois 2027 Mitigation Mechanism |
 |---|---|---|
 | **Race-Condition Overbooking** | 50 volunteers confirm for a 2-slot shift | WiredTiger atomic CAS predicate `$expr: { $lt: ['$filledSlots', '$capacity'] }`. |
 | **Attendance Screenshot Sharing** | Unattended volunteer checks in remotely | Dynamic HMAC-SHA256 tokens rotating every 30s with single-use nonce cache. |
@@ -999,7 +999,7 @@ than surveyed.
 
 ---
 
-### 14.6 Nexus Quest — the retro game layer
+### 14.6 HackIllinois 2027 — the retro game layer
 
 The dashboard's chrome was rebuilt as a pixel-art game UI after two polished
 "ops console" passes were judged generic. Three directions were mocked in

@@ -1,4 +1,4 @@
-# Production image for Nexus Quest.
+# Production image for HackIllinois 2027.
 #
 # Two stages: one that compiles TypeScript and one that runs the result with only the
 # production dependencies installed. The build stage is discarded, so `tsx`, Jest and the
