@@ -1,6 +1,6 @@
 # Identity — how people sign in, and how organisers run it
 
-Nexus Quest has one session and three ways to get one. Every adapter ends in the same
+HackIllinois 2027 has one session and three ways to get one. Every adapter ends in the same
 HttpOnly cookie; the rest of the system only ever sees `req.account`.
 
 ## The two modes

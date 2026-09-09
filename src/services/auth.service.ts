@@ -425,7 +425,7 @@ export class AuthService {
     void getMailer()
       .send({
         to: account.email as string,
-        subject: 'Your Nexus Quest sign-in link',
+        subject: 'Your HackIllinois 2027 sign-in link',
         text: `Tap to sign in (valid 15 minutes, single use):\n\n${link}\n\nIf you did not ask for this, ignore it.`,
       })
       .catch((err: unknown) => {

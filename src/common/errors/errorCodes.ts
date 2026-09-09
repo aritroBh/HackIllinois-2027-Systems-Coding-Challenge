@@ -1,5 +1,5 @@
 /**
- * Canonical application error codes for Nexus Quest.
+ * Canonical application error codes for HackIllinois 2027.
  * Adheres directly to HackIllinois Adonix API error standardization.
  *
  * The code is the half of an error response a client is allowed to branch on. A `message` is

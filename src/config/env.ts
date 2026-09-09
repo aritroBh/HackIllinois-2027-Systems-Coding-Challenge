@@ -58,7 +58,7 @@ const envSchema = z.object({
   PUBLIC_URL: z.string().url().default('http://localhost:3000'),
   // Magic-link mail. Unset → the provider is reported disabled and dev prints the link.
   SMTP_URL: z.string().optional(),
-  MAIL_FROM: z.string().default('Nexus Quest <no-reply@nexus.local>'),
+  MAIL_FROM: z.string().default('HackIllinois 2027 <no-reply@hackillinois.local>'),
   // Adonix (HackIllinois SSO). ADONIX_URL is env-only, never pack-configurable (SSRF).
   ADONIX_URL: z.string().url().default('https://adonix.hackillinois.org'),
   ADONIX_JWT_SECRET: z.string().optional(),

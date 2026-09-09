@@ -155,10 +155,13 @@ function applyBranding(content) {
   const name = typeof ev.name === 'string' ? ev.name : '';
   const eventName = typeof ev.eventName === 'string' ? ev.eventName : '';
   const tagline = typeof ev.tagline === 'string' ? ev.tagline : '';
-  const title = [name, eventName].filter(Boolean).join(' · ');
+  // The product and the event share one name now, so dedupe rather than printing it
+  // twice ("HackIllinois 2027 · HackIllinois 2027"). Packs that still name them
+  // differently render exactly as before.
+  const title = [...new Set([name, eventName])].filter(Boolean).join(' · ');
   if (title) document.title = title;
   setAll('name', name);
-  setAll('event-chip', [eventName, tagline].filter(Boolean).join(' · '));
+  setAll('event-chip', eventName && eventName !== name ? [eventName, tagline].filter(Boolean).join(' · ') : tagline);
   setAll('campus-label', ev.campus?.label);
   setAll('sticker-title', ev.branding?.stickerBookTitle);
   // Two keys for one number, because the two sentences need different nouns.

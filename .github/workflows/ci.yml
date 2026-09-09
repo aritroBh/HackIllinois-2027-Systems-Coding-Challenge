@@ -1,4 +1,4 @@
-name: Nexus Quest CI
+name: HackIllinois 2027 CI
 
 on:
   push:

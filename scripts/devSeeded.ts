@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   const server = createServer(app);
   server.listen(env.PORT, () => {
     console.log('===============================================================');
-    console.log(`🌊 Nexus Quest — seeded demo (auth=${env.AUTH_MODE})`);
+    console.log(`🌊 HackIllinois 2027 — seeded demo (auth=${env.AUTH_MODE})`);
     console.log(`🎛️  War Room:   http://localhost:${env.PORT}/dashboard`);
     console.log(`📖 Swagger UI:  http://localhost:${env.PORT}/docs`);
     console.log('===============================================================');

@@ -1,5 +1,5 @@
 /**
- * Pure Web Audio API Synthesizer for Nexus Quest.
+ * Pure Web Audio API Synthesizer for HackIllinois 2027.
  * Designed by Muse (Creative Director).
  * Synthesizes dynamic audio cues in real time with zero external audio assets.
  */

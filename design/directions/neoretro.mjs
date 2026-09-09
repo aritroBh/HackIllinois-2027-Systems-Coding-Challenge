@@ -373,7 +373,7 @@ const chrome = (active) => {
     <Frame flex="row" gap={14} items="center">
       ${sprite(STICKERS.blockI.rows, P, 3, 'logo')}
       <Frame flex="col" gap={2}>
-        ${head('NEXUS QUEST', C.cream, 20)}
+        ${head('HACKILLINOIS 2027', C.cream, 20)}
         ${hud('HACKILLINOIS 2027 · VOLUNTEER OPS', C.mute, 8)}
       </Frame>
       <Frame w={2} h={30} bg="${C.edge}" />

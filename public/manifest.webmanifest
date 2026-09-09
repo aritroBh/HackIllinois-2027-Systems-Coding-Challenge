@@ -1,7 +1,7 @@
 {
   "id": "/dashboard/",
-  "name": "Nexus Quest",
-  "short_name": "Nexus",
+  "name": "HackIllinois 2027",
+  "short_name": "HackIllinois",
   "description": "Volunteer war room for HackIllinois: quest board, campus map, SOS dispatch and your trainer card.",
   "start_url": "/dashboard/",
   "scope": "/dashboard/",

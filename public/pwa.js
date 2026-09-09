@@ -91,7 +91,7 @@
     bar.setAttribute('role', 'status');
 
     const text = document.createElement('span');
-    text.textContent = 'A new version of Nexus Quest is ready.';
+    text.textContent = 'A new version of HackIllinois 2027 is ready.';
 
     const go = document.createElement('button');
     go.type = 'button';

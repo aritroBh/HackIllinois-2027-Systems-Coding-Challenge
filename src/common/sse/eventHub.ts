@@ -493,7 +493,7 @@ class SSEBroadcastHub {
     this.writeControl(client, 'CONNECTED', {
       clientId: id,
       channels: authorised,
-      message: 'Connected to Nexus Quest SSE Stream.',
+      message: 'Connected to HackIllinois 2027 SSE Stream.',
     });
 
     // --- replay ----------------------------------------------------------------

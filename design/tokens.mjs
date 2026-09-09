@@ -1,5 +1,5 @@
 /**
- * NEXUS QUEST design tokens — "Neo-retro indie".
+ * HACKILLINOIS 2027 design tokens — "Neo-retro indie".
  *
  * The single source of truth for the shipped palette and fonts. Three readers:
  *

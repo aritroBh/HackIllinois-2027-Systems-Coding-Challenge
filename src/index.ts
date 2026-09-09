@@ -33,7 +33,7 @@ async function bootstrap() {
     const server = createServer(app);
     server.listen(env.PORT, () => {
       console.log('===============================================================');
-      console.log(`🌊 Nexus Quest Engine Online [${env.NODE_ENV.toUpperCase()}] auth=${env.AUTH_MODE}`);
+      console.log(`🌊 HackIllinois 2027 Engine Online [${env.NODE_ENV.toUpperCase()}] auth=${env.AUTH_MODE}`);
       console.log(`📡 Server:      http://localhost:${env.PORT}`);
       console.log(`📖 Swagger UI:  http://localhost:${env.PORT}/docs`);
       console.log(`🎛️  War Room:   http://localhost:${env.PORT}/dashboard`);
@@ -50,7 +50,7 @@ async function bootstrap() {
       server.closeAllConnections?.();
       server.close(async () => {
         await disconnectDatabase();
-        console.log('🏁 Nexus Quest shutdown complete.');
+        console.log('🏁 HackIllinois 2027 shutdown complete.');
         process.exit(0);
       });
     };

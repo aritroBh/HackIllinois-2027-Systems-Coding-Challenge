@@ -1,4 +1,4 @@
-# Nexus Quest
+# HackIllinois 2027
 
 A volunteer operations system for a large hackathon, with the campus it runs on rendered as a game world.
 

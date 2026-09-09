@@ -256,7 +256,7 @@ app.use(
 app.get('/health', attachIdentity, (req: Request, res: Response) => {
   const base = {
     status: 'HEALTHY',
-    service: 'Nexus Quest',
+    service: 'HackIllinois 2027',
     authMode: env.AUTH_MODE,
     timestamp: new Date().toISOString(),
   };
@@ -280,7 +280,7 @@ app.get('/ready', (_req: Request, res: Response) => {
   res.status(ready ? 200 : 503).json({
     success: ready,
     status: ready ? 'READY' : 'NOT_READY',
-    service: 'Nexus Quest',
+    service: 'HackIllinois 2027',
     database: ['disconnected', 'connected', 'connecting', 'disconnecting'][dbState] ?? 'unknown',
     timestamp: new Date().toISOString(),
   });

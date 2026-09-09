@@ -73,7 +73,7 @@
       <div class="ob-head">
         <span class="ob-duck" aria-hidden="true">${sprite('duck', 4)}</span>
         <div>
-          <div class="eyebrow">Nexus Quest · HackIllinois 2027</div>
+          <div class="eyebrow">HackIllinois 2027</div>
           <h2 id="ob-title">Who goes there?</h2>
           <p>${state.required ? 'No badge, no campus. Sign in.' : 'Sign in to play as yourself. Karma sticks to you, not the laptop.'}</p>
         </div>
