@@ -151,7 +151,7 @@ check "game router mounted"             "grep -q \"'/game'\" src/routes/v1/index
 check "raid multiplier applied"         "grep -q 'RaidService.multiplierAt' src/services/karma.service.ts"
 # Named jobs, not a file. See the note at the top of this script: as `test -f src/scheduler.ts`
 # this passed green for the whole of M6, while the raid ticker it was about had no caller.
-check "scheduler registers its jobs"    "npx tsx -e \"import('./src/scheduler').then(m => { const n = m.schedulerStats().map(j => j.name); process.exit(['sos-escalation','presence-sse-sweep','raid-windows'].every(w => n.includes(w)) ? 0 : 1); })\""
+check "scheduler registers its jobs"    "npx tsx scripts/checkSchedulerJobs.ts"
 check "economy wires raid enrolment"    "grep -q 'RaidService.subscribe()' src/economy/wiring.ts"
 check "boot warms the game catalogs"    "grep -q 'BoothService.warm' src/economy/wiring.ts && grep -q 'QuestService.warm' src/economy/wiring.ts"
 
