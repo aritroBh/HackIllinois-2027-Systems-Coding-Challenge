@@ -309,6 +309,10 @@ function formatFrame(version: 1 | 2, seq: number, ts: number, type: string, chan
   return `id: ${seq}\nevent: ${type}\ndata: ${envelope}\n\n`;
 }
 
+/**
+ * High-performance Server-Sent Events (SSE) broadcast hub managing active streaming connections,
+ * subscription channels, backpressure-aware socket flushing, client slot leases, and heartbeats.
+ */
 class SSEBroadcastHub {
   private clients = new Map<string, IClient>();
   private byAccount = new Map<string, Set<IClient>>();

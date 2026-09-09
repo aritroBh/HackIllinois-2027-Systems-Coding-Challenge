@@ -1111,7 +1111,10 @@
     if (!g) return;
     if (inFlight.has(enc.gymId)) { encounterMessage('That move is already in flight. Give it a moment.'); return; }
     const coords = window.requirePlayerCoords?.('Taking a gym');
-    if (!coords) return;
+    if (!coords) {
+      encounterMessage('Taking a gym needs your position — open Campus and place your trainer first.');
+      return;
+    }
     inFlight.add(enc.gymId);
     const cmds = document.querySelectorAll('.jrpg.cmd .cmd');
     cmds.forEach((b) => { b.disabled = true; });

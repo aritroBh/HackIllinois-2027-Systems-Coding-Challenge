@@ -162,7 +162,9 @@
   //        two readings; it wraps now instead of truncating.
   // `v62`: one last "mint" survived on the check-in hint, in the sentence telling a hacker
   //        what to do — the button beside it had already stopped saying it.
-  const VERSION = 'v64';
+  // `v65`: mobile html overflow-x fix, in-encounter unplaced gauntlet feedback,
+  //        and graceful multi-tab SSE eviction backoff.
+  const VERSION = 'v65';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

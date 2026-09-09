@@ -114,7 +114,7 @@
    =================================================================== */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
 
 body {
   background: var(--ground);

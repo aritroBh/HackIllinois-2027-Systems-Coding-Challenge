@@ -1208,6 +1208,24 @@ function connectSSE() {
     setTimeout(connectSSE, wait);
   };
 
+  eventSource.addEventListener('EVICTED', (e) => {
+    try {
+      const frame = JSON.parse(e.data);
+      const reason = frame.data?.reason || frame.reason;
+      if (reason === 'REPLACED_BY_NEWER_CONNECTION') {
+        eventSource.close();
+        setSseStatus('Paused (Active elsewhere)', 'c-quiet');
+        logChaosTerminal('[SSE] Live stream paused — active in another tab. Focus this tab to resume.');
+        const onFocus = () => {
+          window.removeEventListener('focus', onFocus);
+          logChaosTerminal('[SSE] Tab focused — resuming live stream…');
+          connectSSE();
+        };
+        window.addEventListener('focus', onFocus);
+      }
+    } catch {}
+  });
+
   /**
    * Subscribe to one server event type.
    *

@@ -69,6 +69,10 @@ export type DomainListener<E extends DomainEventName> = (payload: DomainEventMap
  */
 type StoredListener = (payload: never) => void | Promise<void>;
 
+/**
+ * In-process typed event bus facilitating decoupling between core domain mutations
+ * and reactive side-effects (such as telemetry, audit logging, push notifications, and SSE relays).
+ */
 class DomainEventBus {
   private listeners = new Map<DomainEventName, Set<StoredListener>>();
 
