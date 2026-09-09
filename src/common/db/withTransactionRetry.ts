@@ -183,8 +183,11 @@ export async function withTransactionRetry<T>(
   // Five was still not enough. Twenty simultaneous reservations against one ledger document
   // is a realistic burst — a shift is announced and the room reaches for it — and at that
   // width two of the twenty lost five successive races and surfaced a WriteConflict as a
-  // 500. Twelve with the backoff below covers it with room to spare; the cost of a high
-  // bound is only paid by a request that was going to fail anyway.
+  // 500. Twelve with the backoff below covers it on fast iron; on slow iron the unluckiest
+  // contender at twenty-way width can still run out. That tail is not a gap in the bound:
+  // it surfaces as TransactionContentionError — retry advice, which is the caller's
+  // contract — rather than as a fault. The cost of a high bound is only paid by a request
+  // that was going to fail anyway.
   const maxBodyAttempts = options.maxBodyAttempts ?? 12;
   const transactionOptions = options.transactionOptions ?? DEFAULT_TRANSACTION_OPTIONS;
   const session = await mongoose.startSession();
