@@ -166,6 +166,9 @@ app.use('/dashboard', express.static(publicDir));
 // Plugin client assets: one explicit route per declared file, each behind the same
 // enabled-guard as the plugin's API routes, so a disabled plugin's JS is a 404 too.
 mountPluginAssets(app);
+app.get('/favicon.ico', (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, 'icon-192.png'));
+});
 app.get('/', (_req: Request, res: Response) => {
   res.redirect('/dashboard');
 });
