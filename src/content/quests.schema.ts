@@ -36,7 +36,9 @@ export const QUEST_KINDS = ['COUNT', 'STREAK', 'DISTINCT'] as const;
 /** The three window shapes, which become the `windowKey` on a `questProgress` row — `YYYY-MM-DDTHH`, `YYYY-MM-DD`, or the literal `event`. */
 export const QUEST_WINDOWS = ['HOURLY', 'DAILY', 'EVENT'] as const;
 
+/** How progress accrues: a raw count, consecutive windows, or distinct targets. */
 export type QuestKind = (typeof QUEST_KINDS)[number];
+/** The bucket progress resets in: hourly, daily, or once for the whole event. */
 export type QuestWindow = (typeof QUEST_WINDOWS)[number];
 
 export const questSchema = z
@@ -89,5 +91,7 @@ export const questsSchema = z.object({
     }),
 });
 
+/** A quest definition: what counts, in which window, and what it pays. */
 export type Quest = z.infer<typeof questSchema>;
+/** A parsed `quests.json`: every quest the event offers. */
 export type QuestsFile = z.infer<typeof questsSchema>;

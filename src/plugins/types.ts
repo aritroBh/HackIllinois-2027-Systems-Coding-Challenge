@@ -61,6 +61,7 @@ export interface CheckInHookEvent {
   at: number;
 }
 
+/** Fired when an SOS ticket closes: what, where, who closed it, and when. */
 export interface SOSResolvedHookEvent {
   ticketId: string;
   category: string;
@@ -70,6 +71,7 @@ export interface SOSResolvedHookEvent {
   at: number;
 }
 
+/** Fired when a gym changes hands: which gym, to whom, by whom, and when. */
 export interface GymCapturedHookEvent {
   gymId: string;
   /** The faction that now holds it. */
@@ -78,6 +80,7 @@ export interface GymCapturedHookEvent {
   at: number;
 }
 
+/** Fired when a HackStop spin pays: which beacon, to whom, how much, and when. */
 export interface SpinHookEvent {
   beaconId: string;
   accountId: string;
@@ -85,6 +88,7 @@ export interface SpinHookEvent {
   at: number;
 }
 
+/** Fired when a reservation settles: who, which shift, seat or queue place, and when. */
 export interface RegistrationHookEvent {
   accountId: string;
   shiftId: string;
@@ -93,6 +97,7 @@ export interface RegistrationHookEvent {
   at: number;
 }
 
+/** The five events a plugin may observe; every member is optional. */
 export interface ServerPluginHooks {
   onCheckIn?(event: CheckInHookEvent): void | Promise<void>;
   onSOSResolved?(event: SOSResolvedHookEvent): void | Promise<void>;
@@ -104,6 +109,7 @@ export interface ServerPluginHooks {
 /** Every hook name, so the registry can iterate them without a cast. */
 export const HOOK_NAMES = ['onCheckIn', 'onSOSResolved', 'onGymCaptured', 'onSpin', 'onRegistration'] as const;
 
+/** One of the five hook names; the registry iterates these to invoke plugins. */
 export type HookName = (typeof HOOK_NAMES)[number];
 
 /**
@@ -128,6 +134,7 @@ export interface PluginContext {
   enabled(): boolean;
 }
 
+/** A server plugin: identity, declared API version, optional hooks, optional routes. */
 export interface ServerPlugin {
   readonly name: string;
   /** Free-form, shown in the manifest. Semver by convention, not enforced. */
@@ -154,6 +161,7 @@ export interface PluginAssetEntry {
   sha256: string;
 }
 
+/** One installed plugin as the manifest reports it: name, version, and client assets. */
 export interface PluginManifestEntry {
   name: string;
   version: string;

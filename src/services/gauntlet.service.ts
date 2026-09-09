@@ -62,6 +62,7 @@ import { GeoEngine } from '../common/utils/geo';
  */
 const HASH_PREFIX = 'gauntlet:v1:';
 
+/** A WGS84 point supplied by the player client for the geofence check. */
 export interface Coordinates { latitude: number; longitude: number }
 
 /** What the client is given when an attempt opens. Carries no answer, in any form. */

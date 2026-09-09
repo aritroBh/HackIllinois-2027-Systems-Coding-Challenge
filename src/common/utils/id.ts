@@ -1,3 +1,7 @@
+/**
+ * Canonical ObjectId comparison. Hex casing and populated-document wrapping are
+ * normalised away so ownership and self-dealing checks compare identity, not spelling.
+ */
 import { OBJECT_ID_PATTERN } from '../../schemas/common';
 
 /**

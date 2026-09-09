@@ -51,6 +51,7 @@ import { pack } from '../content/loader';
 /** The faction an account with no allegiance is counted under; the pack must declare it. */
 const UNALIGNED = 'NEUTRAL';
 
+/** One faction's row on the objectives board: who they are and how many are here. */
 export interface FactionObjective {
   id: string;
   label: string;
@@ -64,6 +65,7 @@ export interface FactionObjective {
   sharePercent: number;
 }
 
+/** The faction attendance board: totals, every faction's row, and who leads. */
 export interface ObjectivesBoard {
   totalAttending: number;
   totalOnDuty: number;
@@ -72,6 +74,7 @@ export interface ObjectivesBoard {
   leading: string | null;
 }
 
+/** One row of the karma leaderboard: rank, account, balance, and band. */
 export interface KarmaLeaderboardEntry {
   rank: number;
   accountId: string;

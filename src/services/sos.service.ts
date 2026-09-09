@@ -380,6 +380,7 @@ export class SOSService {
       live.set(p.e.id, { distanceM: p.distanceM, publishedDistanceM: p.publishedDistanceM, ageMs: p.ageMs });
     }
 
+    /** One dispatch contender: who, how far by each measure, and what the distance is worth. */
     type Candidate = {
       vol: IVolunteer;
       /** Exact — ranking, and the lead's view. Never leaves this service un-coarsened for anyone else. */

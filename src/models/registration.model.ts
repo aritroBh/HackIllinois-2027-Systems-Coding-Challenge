@@ -49,6 +49,7 @@ export enum RegistrationStatus {
   SWAP_PENDING = 'SWAP_PENDING',
 }
 
+/** One volunteer's hold on one shift: confirmed seat or queue place, through to completion. */
 export interface IRegistration extends Document {
   shiftId: Types.ObjectId;
   volunteerId: Types.ObjectId;

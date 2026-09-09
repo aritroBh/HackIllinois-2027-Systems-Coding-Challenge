@@ -13,6 +13,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** Moderation state of an avatar: uploaded and awaiting review, approved, or rejected. */
 export enum AvatarStatus {
   /** Uploaded, visible to the owner and to leads, not yet shared with other players. */
   PENDING = 'PENDING',

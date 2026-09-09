@@ -34,4 +34,5 @@ export const KARMA_SOURCES = [
   'BOOTH',
 ] as const;
 
+/** One mintable karma source; the per-source daily cap is keyed on these. */
 export type KarmaSourceKey = (typeof KARMA_SOURCES)[number];

@@ -57,7 +57,9 @@ import { z } from 'zod';
 export const CHALLENGE_KINDS = ['PREDICT_OUTPUT', 'MULTIPLE_CHOICE'] as const;
 export const CHALLENGE_DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD'] as const;
 
+/** How the answer is judged: free-text output prediction, or picking from `choices`. */
 export type ChallengeKind = (typeof CHALLENGE_KINDS)[number];
+/** Displayed difficulty; informational only, the judge treats every case the same. */
 export type ChallengeDifficulty = (typeof CHALLENGE_DIFFICULTIES)[number];
 
 /**
@@ -142,6 +144,9 @@ export const challengesSchema = z
     });
   });
 
+/** One judged case: the input shown, and only the digest of the answer (never plaintext). */
 export type ChallengeCase = z.infer<typeof challengeCaseSchema>;
+/** A gauntlet challenge: prompt, cases, normalisation rules, and the attempt deadline. */
 export type Challenge = z.infer<typeof challengeSchema>;
+/** A parsed `challenges.json`: the gauntlet a pack offers, if it offers one. */
 export type ChallengesFile = z.infer<typeof challengesSchema>;

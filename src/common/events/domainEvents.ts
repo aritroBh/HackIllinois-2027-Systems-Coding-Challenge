@@ -58,8 +58,10 @@ export const DOMAIN_EVENT_NAMES = [
   'booth.scanned',
 ] as const satisfies readonly (keyof DomainEventMap)[];
 
+/** Every event the domain bus can carry — the map keys are the whole vocabulary. */
 export type DomainEventName = keyof DomainEventMap;
 
+/** A subscriber for one event; may be async — the bus never awaits it (fire-and-forget by design). */
 export type DomainListener<E extends DomainEventName> = (payload: DomainEventMap[E]) => void | Promise<void>;
 
 /**

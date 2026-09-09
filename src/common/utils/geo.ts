@@ -36,6 +36,7 @@
  */
 import { pack } from '../../content/loader';
 
+/** A WGS84 point. Every distance and geofence check in the system takes these. */
 export interface IGeoCoordinates {
   latitude: number;
   longitude: number;

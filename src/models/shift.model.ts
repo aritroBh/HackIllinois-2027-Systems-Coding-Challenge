@@ -38,6 +38,7 @@ export enum ShiftCategory {
   CLEANUP = 'CLEANUP',
 }
 
+/** One staffable shift: when, where, what it needs, and how many seats are gone. */
 export interface IShift extends Document {
   title: string;
   description: string;

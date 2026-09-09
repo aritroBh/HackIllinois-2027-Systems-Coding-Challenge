@@ -78,6 +78,7 @@ export enum PrestigeTier {
   LEVIATHAN_PRIME = 'LEVIATHAN_PRIME',     // 3,500+
 }
 
+/** One person: identity, role, karma balance, and the fatigue their bookings accrue against. */
 export interface IVolunteer extends Document {
   name: string;
   /** Optional since M1: badge-claim hackers have no email. Sparse-unique when present. */

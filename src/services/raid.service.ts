@@ -106,8 +106,10 @@ function raidCatalog(): RaidCatalog {
   return catalog;
 }
 
+/** Where a raid window is in its life: announced, paying the multiplier, or over. */
 export type RaidState = 'UPCOMING' | 'OPEN' | 'CLOSED';
 
+/** A raid window as the board shows it: when, where, what it pays, and what joins it. */
 export interface RaidSummary {
   id: string;
   title: string;
@@ -123,6 +125,7 @@ export interface RaidSummary {
   joinCount: number;
 }
 
+/** One enrolled account on the raid roster: who and when they joined. */
 export interface RaidRosterEntry {
   accountId: string;
   name: string;
@@ -130,6 +133,7 @@ export interface RaidRosterEntry {
   joinedAt: Date;
 }
 
+/** The raid board: the open window with its roster, the next window, and the rest. */
 export interface RaidBoard {
   now: Date;
   /** The window that is open, with its roster. Null between raids. */

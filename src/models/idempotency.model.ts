@@ -31,6 +31,7 @@ export enum IdempotencyStatus {
   FAILED = 'FAILED',
 }
 
+/** One client key's server-side state: who owns it, what it asked, and what was answered. */
 export interface IIdempotencyRecord extends Document {
   key: string;
   userId: string;

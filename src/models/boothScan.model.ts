@@ -18,6 +18,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One booth scan by one account: the row whose existence makes a second scan a no-op. */
 export interface IBoothScan extends Document {
   accountId: Types.ObjectId;
   /** A booth id from the pack's `booths.json`, validated by the service before insert. */

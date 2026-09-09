@@ -18,6 +18,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One account enrolled in one raid window: who shares the multiplier. */
 export interface IRaidJoin extends Document {
   /** A raid id from the pack's `raids.json`. */
   raidId: string;

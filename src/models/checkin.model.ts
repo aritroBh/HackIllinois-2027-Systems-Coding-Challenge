@@ -14,6 +14,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One attendance record: the verified scan, its single-use nonce, and any karma paid. */
 export interface ICheckIn extends Document {
   registrationId: Types.ObjectId;
   shiftId: Types.ObjectId;

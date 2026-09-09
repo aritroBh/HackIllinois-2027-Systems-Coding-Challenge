@@ -22,10 +22,13 @@
  */
 export type AccountKind = 'VOLUNTEER' | 'HACKER';
 
+/** What the account may do; `LEAD_ROLES` below is the set that counts as a lead. */
 export type AccountRole = 'VOLUNTEER' | 'SHIFT_LEAD' | 'ORGANIZER' | 'ADMIN' | 'HACKER';
 
+/** How the identity was established: a signed session, or a body-supplied id in legacy mode. */
 export type IdentitySource = 'session' | 'legacy';
 
+/** The resolved caller every gate reads: who, what they may do, and how proved. */
 export interface AccountContext {
   id: string;
   kind: AccountKind;

@@ -23,8 +23,10 @@
  */
 import mongoose, { Schema, Document } from 'mongoose';
 
+/** Which of the exact-position readers asked: SOS dispatch, lead presence view, or roster. */
 export type PresenceAuditReason = 'dispatch' | 'presence-list' | 'lead-view' | 'roster';
 
+/** One audited exact-position read: who was looked at, by whom, and for which reason. */
 export interface IPresenceAudit extends Document {
   readerId: string;
   reason: PresenceAuditReason;

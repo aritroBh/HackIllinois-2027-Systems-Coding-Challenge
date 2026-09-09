@@ -73,6 +73,7 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
+/** An account's sticker album: the memorabilia ids held, and how many. */
 export interface OwnedStickers {
   owned: string[];
   total: number;

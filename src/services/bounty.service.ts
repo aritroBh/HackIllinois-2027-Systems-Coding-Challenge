@@ -29,6 +29,7 @@ import { BountyLedger } from '../models/bountyLedger.model';
 import { ApiError } from '../common/errors/apiError';
 import { pack } from '../content/loader';
 
+/** One charge against an account's daily SOS bounty budget. */
 export interface IReserveBountyInput {
   /** Account the bounty is charged to: the hacker who raised the ticket. */
   accountId: string;
@@ -40,6 +41,7 @@ export interface IReserveBountyInput {
   budget: number;
 }
 
+/** The charge as settled: what was committed and what the day has left. */
 export interface IBountyReservation {
   accountId: string;
   day: string;

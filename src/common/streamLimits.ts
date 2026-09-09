@@ -45,8 +45,10 @@
 
 import { env } from '../config/env';
 
+/** How a stream is connected: Server-Sent Events fallback, or the WebSocket. */
 export type StreamTransport = 'sse' | 'ws';
 
+/** One held stream slot: who holds it, from where, over what, and since when. */
 export interface SlotHandle {
   readonly id: number;
   readonly transport: StreamTransport;
@@ -55,6 +57,7 @@ export interface SlotHandle {
   readonly acquiredAt: number;
 }
 
+/** A connection asking for a slot: its transport, account if any, and source IP. */
 export type AcquireRequest = {
   transport: StreamTransport;
   accountId?: string;
@@ -69,6 +72,7 @@ export type AcquireResult =
   | { ok: true; slot: SlotHandle; evict?: SlotHandle }
   | { ok: false; reason: 'TOTAL' | 'PER_IP' | 'ANON' };
 
+/** The table as `GET /health` reports it: occupancy against every ceiling. */
 export interface StreamLimitStats {
   total: number;
   totalSlots: number;
@@ -79,6 +83,7 @@ export interface StreamLimitStats {
   ips: number;
 }
 
+/** Constructor overrides; production passes none and takes everything from the environment. */
 export interface StreamLimitsOptions {
   totalSlots?: number;
   perAccount?: number;
@@ -197,8 +202,11 @@ export function isTrustedEgress(ip: string | undefined, cidrs: readonly Cidr[] =
  * `perAccount` and `anonPerIp` from the literals above.
  */
 export class StreamLimits {
+  /** Global ceiling from the environment; the venue's capacity, not a code constant (see header). */
   public static readonly TOTAL_SLOTS = env.STREAM_TOTAL_SLOTS;
+  /** Connections per account across transports: phone + laptop, no more. */
   public static readonly PER_ACCOUNT = 2;
+  /** Per-IP anti-abuse ceiling from the environment; trusted egress is exempt (see header). */
   public static readonly PER_IP = env.STREAM_PER_IP;
   /** Anonymous streams (no account to cap them) share this small pool… */
   public static readonly ANON_SLOTS = env.STREAM_ANON_SLOTS;
@@ -219,6 +227,7 @@ export class StreamLimits {
   private readonly byIp = new Map<string, number>();
   private readonly byIpAnon = new Map<string, number>();
 
+  /** Resolves each ceiling from options, falling back to the static above; parses trusted CIDRs. */
   constructor(opts: StreamLimitsOptions = {}) {
     this.totalSlots = opts.totalSlots ?? StreamLimits.TOTAL_SLOTS;
     this.perAccount = opts.perAccount ?? StreamLimits.PER_ACCOUNT;

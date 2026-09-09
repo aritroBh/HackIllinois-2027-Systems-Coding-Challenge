@@ -21,6 +21,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One account's progress on one quest: the count the domain bus advances. */
 export interface IQuestProgress extends Document {
   accountId: Types.ObjectId;
   /** A quest id from the pack's `quests.json`. */

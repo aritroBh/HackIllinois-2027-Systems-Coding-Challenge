@@ -21,6 +21,7 @@ import type { Cohort, PresenceEntry, PresenceStore } from './store';
  * tile index caching, and bandwidth-throttled position streaming.
  */
 export class PresenceSession {
+  /** This connection's account-id to wire-slot table; slots die with the socket. */
   public readonly idx = new IdxTable();
   private sentVersion = new Map<string, number>();
   /**
@@ -51,8 +52,11 @@ export class PresenceSession {
   /** Slots released by `forget` between frames, drained by the next `send`. */
   private pendingExpire: number[] = [];
   private lastSnapshotAt = 0;
+  /** When the client last said hello; the service closes connections that never do (4401). */
   public helloAt = 0;
+  /** Reserved, currently unused: set nowhere and read nowhere. Kept for the per-client staleness accounting a future tick may want, rather than re-derived. */
   public lastPosAt = 0;
+  /** Degraded mode, set by the service's load ladder: cluster counts instead of rows. */
   public clusterOnly = false;
   /**
    * How many rows this session may carry this tick, set by the service's load ladder.
@@ -86,6 +90,7 @@ export class PresenceSession {
     this.lead = role === 'SHIFT_LEAD' || role === 'ORGANIZER' || role === 'ADMIN';
   }
 
+  /** The owning account's id, convenience over the client context. */
   get accountId(): string {
     return this.client.account.id;
   }

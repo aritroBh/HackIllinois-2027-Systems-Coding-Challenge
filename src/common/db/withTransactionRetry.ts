@@ -59,9 +59,12 @@ type TransactionOptions = NonNullable<Parameters<ClientSession['startTransaction
  * hint rather than a 500.
  */
 export class TransactionContentionError extends Error {
+  /** How many attempts ran before giving up; reported so the 409 can say how busy it was. */
   public readonly attempts: number;
+  /** The last driver error, kept for the log — the message above is what the client sees. */
   public readonly cause: unknown;
 
+  /** Names the error and records the evidence; the prototype line below keeps `instanceof` working where the target predates native classes. */
   constructor(attempts: number, cause: unknown) {
     super(`Transaction lost ${attempts} successive write conflicts; nothing was committed.`);
     this.name = 'TransactionContentionError';
@@ -73,11 +76,16 @@ export class TransactionContentionError extends Error {
 
 /** A duplicate-key write, with the collection, index and key attached for the retry rules. */
 export class DuplicateKeyError extends Error {
+  /** Collection the write targeted — the retry rules key off this, not the message. */
   public readonly collection: string;
+  /** Index that rejected, so the rule can tell a first-row race from a true duplicate. */
   public readonly index: string;
+  /** The conflicting key, for the log line, never for the client. */
   public readonly keyValue: Record<string, unknown>;
+  /** The raw driver error, kept for the log — the message above is what the client sees. */
   public readonly cause: unknown;
 
+  /** Names the error and records the evidence; the prototype line below keeps `instanceof` working where the target predates native classes. */
   constructor(collection: string, index: string, keyValue: Record<string, unknown>, cause: unknown) {
     super(`Duplicate key on ${collection}${index ? ` (index ${index})` : ''}.`);
     this.name = 'DuplicateKeyError';
@@ -89,6 +97,7 @@ export class DuplicateKeyError extends Error {
   }
 }
 
+/** Tuning for `withTransactionRetry`: which races are worth re-running, and how often. */
 export interface ITransactionRetryOptions {
   /**
    * Collections whose duplicate-key rejection means "somebody else got there first, try

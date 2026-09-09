@@ -36,6 +36,7 @@ export interface Mailer {
  * without one, so nothing routes mail here.
  */
 export class ConsoleMailer implements Mailer {
+  /** Discriminator for `/auth/providers`, so the dashboard can name where the link went. */
   public readonly kind = 'console' as const;
   /** Captured for tests and for the dev console. */
   public readonly sent: OutboundMail[] = [];
@@ -56,9 +57,11 @@ export class ConsoleMailer implements Mailer {
  * is logged, not retried, and the response time must not disclose whether an address exists).
  */
 export class SmtpMailer implements Mailer {
+  /** Discriminator for `/auth/providers`, so the dashboard can name where the link went. */
   public readonly kind = 'smtp' as const;
   private readonly transport: Transporter;
 
+  /** Builds the one shared transport from `SMTP_URL`; sends reuse its pool. */
   constructor(url: string) {
     this.transport = nodemailer.createTransport(url);
   }

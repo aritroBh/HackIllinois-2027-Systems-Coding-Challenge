@@ -112,6 +112,7 @@ function normaliseCode(raw: string): string {
   return raw.replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
 }
 
+/** What a booth scan pays: booth identity, karma (and whether the cap trimmed it), and sticker. */
 export interface BoothScanResult {
   boothId: string;
   sponsor: string;

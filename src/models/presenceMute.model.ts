@@ -6,6 +6,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One account muted from another's map: a TTL row, so mutes lapse without a sweeper. */
 export interface IPresenceMute extends Document {
   accountId: Types.ObjectId;
   until: Date;

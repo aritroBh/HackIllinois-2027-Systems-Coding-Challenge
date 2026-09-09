@@ -17,6 +17,7 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 /** Collection name, for matching a duplicate-key error against this ledger by name. */
 export const BOUNTY_LEDGER_COLLECTION = 'bountyledgers';
 
+/** One account's SOS bounty spending for one day: the row the oversell guard increments. */
 export interface IBountyLedgerEntry extends Document {
   accountId: Types.ObjectId;
   day: string;

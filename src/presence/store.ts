@@ -146,6 +146,7 @@ export interface CellMembers {
   key: string;
 }
 
+/** The per-tick spatial index: fine cells plus the coarse block overlay that skips empty ground. */
 export interface TickIndex {
   cells: Map<string, CellMembers>;
   /**
@@ -231,6 +232,7 @@ export interface Cohort {
   sig: number;
 }
 
+/** Tunables: the first seven come from the pack, the last four are wire timings (see below). */
 export interface StoreConfig {
   metersPerUnit: number;
   cellMeters: number;
@@ -336,10 +338,12 @@ export class PresenceStore {
    * durable record across a restart, but it is the one the gate consults.
    */
   private mutes = new Map<string, number>();
+  /** Resolved tunables: pack values over defaults. Every gate below reads these, never the pack. */
   public readonly cfg: StoreConfig;
   /** ms since epoch of the last tick that promoted pending positions. */
   public lastTickAt = 0;
 
+  /** Merges pack values over the defaults; a test may pass a partial config. */
   constructor(cfg: Partial<StoreConfig> = {}) {
     this.cfg = { ...DEFAULT_CONFIG, ...cfg };
   }

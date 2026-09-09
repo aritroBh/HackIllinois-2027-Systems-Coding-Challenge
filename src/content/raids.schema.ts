@@ -66,5 +66,7 @@ export const raidsSchema = z.object({
     }),
 });
 
+/** A boss-raid window: when cooperation pays a karma multiplier, and how much. */
 export type Raid = z.infer<typeof raidSchema>;
+/** A parsed `raids.json`: the cooperative windows of the event. */
 export type RaidsFile = z.infer<typeof raidsSchema>;

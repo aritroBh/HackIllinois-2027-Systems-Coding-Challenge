@@ -30,10 +30,14 @@ import { ErrorCode } from './errorCodes';
  * human-readable message, and optional sanitised structured details payload.
  */
 export class ApiError extends Error {
+  /** HTTP status the handler answers with; the cascade's probe filters on this alone. */
   public readonly statusCode: number;
+  /** Machine-readable code from the `ErrorCode` enum — what clients branch on. */
   public readonly errorCode: ErrorCode;
+  /** Structured payload echoed verbatim: only ever sanitised values, never raw input (see above). */
   public readonly details?: Record<string, unknown> | Array<unknown>;
 
+  /** Carries the four fields; the prototype line at the end is explained where it stands. */
   constructor(
     statusCode: number,
     errorCode: ErrorCode,

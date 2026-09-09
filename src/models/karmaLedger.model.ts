@@ -24,6 +24,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 import { pack } from '../content/loader';
 
+/** One karma mint: source, amount, and day — the append-only record a balance rebuilds from. */
 export interface IKarmaLedger extends Document {
   accountId: Types.ObjectId;
   /** Uppercase source key, matched against `pack.event.karmaCaps`. Absent there means uncapped. */

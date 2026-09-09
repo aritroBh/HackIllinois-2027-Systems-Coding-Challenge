@@ -7,8 +7,10 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** What the token is for; only magic-link tokens exist today, the union is the seam for more. */
 export type AuthTokenPurpose = 'MAGIC';
 
+/** A single-use login token: what was issued, to whom, and whether it has been spent. */
 export interface IAuthToken extends Document {
   tokenHash: string;
   accountId: Types.ObjectId;

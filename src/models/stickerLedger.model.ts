@@ -12,6 +12,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** One sticker award: which memorabilia, to whom, and for what — awarded once. */
 export interface IStickerLedger extends Document {
   accountId: Types.ObjectId;
   /** An item id from the pack's `memorabilia.json`, validated by the service before insert. */

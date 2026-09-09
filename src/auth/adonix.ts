@@ -25,6 +25,7 @@ import { env } from '../config/env';
 import { ApiError } from '../common/errors/apiError';
 import { AccountKind, VolunteerRole } from '../models/volunteer.model';
 
+/** The verified Adonix claims a login carries in: who, how to reach them, and what they may be. */
 export interface AdonixIdentity {
   /** Adonix user id — the `identities.subject` for provider `adonix`. */
   subject: string;

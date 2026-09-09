@@ -123,6 +123,7 @@ export interface ISOSHistoryEntry {
   note?: string;
 }
 
+/** One distress call: exact position and table for responders only — the public copy is redacted (see `redactSos`). */
 export interface ISOSTicket extends Document {
   hackerName: string;
   tableLocation: string;

@@ -50,6 +50,7 @@ import { DOMAIN_EVENT_NAMES } from '../common/events/domainEvents';
  * stays structured for `content:validate` and the tests.
  */
 export class ContentPackError extends Error {
+  /** Keeps every issue structured (for `content:validate`) while the message stays printable. */
   constructor(public readonly issues: PackIssue[]) {
     super(`Content pack invalid:\n${issues.map((i) => `  - ${i.file} ${i.path}: ${i.message}`).join('\n')}`);
     this.name = 'ContentPackError';

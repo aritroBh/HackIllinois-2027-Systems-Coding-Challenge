@@ -28,11 +28,13 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export const CHALLENGE_ATTEMPT_STATUSES = ['OPEN', 'WON', 'LOST', 'EXPIRED', 'SPENT'] as const;
+/** Lifecycle of a gauntlet attempt: open while the deadline runs, then won, lost, expired, or spent. */
 export type ChallengeAttemptStatus = (typeof CHALLENGE_ATTEMPT_STATUSES)[number];
 
 /** The constant `openKey` carries while an attempt is open. Its value is irrelevant; its presence is the lock. */
 export const OPEN_ATTEMPT_KEY = 'open';
 
+/** One open gauntlet attempt per account (partial unique index): the geofenced, deadlined shot at a capture. */
 export interface IChallengeAttempt extends Document {
   accountId: Types.ObjectId;
   gymId: Types.ObjectId;

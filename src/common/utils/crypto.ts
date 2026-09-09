@@ -94,7 +94,9 @@ export interface IVerificationResult {
  * `clearNonceCache` exists because static state persists between tests in one process.
  */
 export class DynamicQrTokenEngine {
+  /** Token rotation: a screenshot is worthless after one slice plus drift either way. */
   public static readonly TIME_STEP_SECONDS = 30;
+  /** Payload version; unknown versions are rejected, so a future format cannot slip through. */
   public static readonly TOKEN_VERSION = 1;
   private static consumedNonces = new Map<string, number>();
   private static lastCleanAt = 0;

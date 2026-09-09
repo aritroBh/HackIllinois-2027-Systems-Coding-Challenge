@@ -14,6 +14,7 @@
  */
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+/** A badge claim code: the no-email identity path, bound once to the account that claims it. */
 export interface IClaimCode extends Document {
   codeHash: string;
   accountId: Types.ObjectId;

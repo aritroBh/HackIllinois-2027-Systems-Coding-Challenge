@@ -62,4 +62,5 @@ export const boothsSchema = z.object({
 
 /** Inferred rather than hand-written, so the type and the validator cannot drift. */
 export type Booth = z.infer<typeof boothSchema>;
+/** A parsed `booths.json`: the sponsor booths an account may scan, once each. */
 export type BoothsFile = z.infer<typeof boothsSchema>;

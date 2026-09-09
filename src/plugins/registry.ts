@@ -124,6 +124,7 @@ function withTimeout(work: Promise<void>, ms: number, label: string): Promise<vo
  * This is the shape `content/loader.ts` already uses for a bad pack, for the same reason.
  */
 export class PluginBootError extends Error {
+  /** Carries the pre-rendered message; naming the error keeps it greppable in boot logs. */
   constructor(message: string) {
     super(message);
     this.name = 'PluginBootError';

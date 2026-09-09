@@ -1,3 +1,7 @@
+/**
+ * Repository-root resolution that survives both layouts: `src/` under tsx and
+ * `dist/src/` compiled, where naive `..`-counting breaks.
+ */
 import fs from 'fs';
 import path from 'path';
 

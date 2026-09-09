@@ -58,6 +58,7 @@ import { ErrorCode } from '../errors/errorCodes';
 import { streamLimits, SlotHandle } from '../streamLimits';
 import { refreshAccountContext } from '../../middleware/identity';
 
+/** One SSE stream. `presence:exact` carries coordinates and is lead-only; `presence` is fuzzed. */
 export type Channel = 'ops' | 'sos' | 'game' | 'presence' | 'presence:exact' | 'announce' | 'me';
 
 export const CHANNELS: ReadonlySet<Channel> = new Set<Channel>([

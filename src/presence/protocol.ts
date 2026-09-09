@@ -207,6 +207,7 @@ export class IdxTable {
   private byId = new Map<string, number>();
   private byIdx = new Map<number, string>();
   private released: Array<{ idx: number; tick: number }> = [];
+  /** When set, the next frame re-joins every visible player: index wrap or mass expiry. */
   public needsFullSnapshot = true;
 
   /**

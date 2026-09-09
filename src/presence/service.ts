@@ -130,7 +130,9 @@ export class PresenceService {
    * that state loses the privilege rather than keeping it.
    */
   private pendingRevalidate = new Set<string>();
+  /** Boot timestamp; the denominator under every uptime and rate the health endpoint reports. */
   public readonly startedAt = Date.now();
+  /** Tick telemetry, spread into `GET /health`: counts, timings, and the load-ladder rung. */
   public stats = {
     ticks: 0, lastTickMs: 0, p95TickMs: 0, rowsLastTick: 0, sessions: 0, clusterMode: false,
     bytesLastTick: 0,
@@ -159,6 +161,7 @@ export class PresenceService {
   private mutes = new Map<string, number>();
   private mutesAt = 0;
 
+  /** Defaults to the shared store; a test may inject its own. */
   constructor(private readonly store: PresenceStore = presenceStore) {
     setFactionOrder(pack.factions.map((f) => f.id));
   }

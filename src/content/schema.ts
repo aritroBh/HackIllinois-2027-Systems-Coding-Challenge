@@ -362,12 +362,19 @@ export const monumentsInfoSchema = z.record(
   ])
 );
 
+/** A parsed `event.json`: the event's identity, clock, and feature switches. */
 export type EventConfig = z.infer<typeof eventSchema>;
+/** A named place with coordinates: shifts and geofences anchor to these. */
 export type Venue = z.infer<typeof venueSchema>;
+/** A territory gym: a landmark players of rival factions contest. */
 export type Monument = z.infer<typeof monumentSchema>;
+/** One playable side, sans NEUTRAL, which is the unclaimed state rather than a team. */
 export type FactionDef = z.infer<typeof factionSchema>;
+/** A contestable region of the map, held by whichever faction controls it. */
 export type Territory = z.infer<typeof territorySchema>;
+/** A HackStop beacon: a fixed point players visit to spin for loot. */
 export type Beacon = z.infer<typeof beaconSchema>;
+/** One loot-table entry: what a spin can pay, and at what weight. */
 export type Loot = z.infer<typeof lootSchema>;
 
 /**
