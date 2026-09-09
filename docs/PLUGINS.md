@@ -92,8 +92,10 @@ Every plugin's client files are served same-origin under `/dashboard/plugins/<na
 off disk from `plugins/<name>/public/`. `GET /api/v1/plugins` is the single manifest:
 
 ```json
-[{ "name": "hello-nexus", "version": "1.0.0", "assets": [{ "url": "/dashboard/plugins/hello-nexus/hello.js", "sha256": "…" }] }]
+[{ "name": "example-plugin", "version": "1.0.0", "assets": [{ "url": "/dashboard/plugins/example-plugin/ui.js", "sha256": "…" }] }]
 ```
+(The tree currently ships no plugins, so today this endpoint answers `[]`; the shape above
+is what a fork's plugin produces once one is added.)
 
 `public/plugins.js` reads that manifest and injects one `<script>` per asset carrying
 `integrity="sha256-…"` from it. The hash is computed by the server over the bytes it will

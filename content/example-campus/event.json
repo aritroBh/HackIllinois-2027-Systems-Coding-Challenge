@@ -56,7 +56,5 @@
     "SOS": 1000,
     "BOOTH": 500
   },
-  "plugins": [
-    "hello-nexus"
-  ]
+  "plugins": []
 }

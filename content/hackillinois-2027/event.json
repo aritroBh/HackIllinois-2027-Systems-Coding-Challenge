@@ -2,7 +2,7 @@
   "packVersion": 1,
   "minServerVersion": "1.0.0",
   "id": "hackillinois-2027",
-  "name": "Nexus Quest",
+  "name": "HackIllinois 2027",
   "eventName": "HackIllinois 2027",
   "tagline": "Volunteer Ops",
   "timezone": "America/Chicago",
@@ -83,9 +83,7 @@
     "CRITICAL": 800
   },
   "hackerBountyBudgetPerDay": 600,
-  "plugins": [
-    "hello-nexus"
-  ],
+  "plugins": [],
   "gauntlet": {
     "requiredForCapture": true
   }

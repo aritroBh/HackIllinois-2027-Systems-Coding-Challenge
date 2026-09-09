@@ -52,17 +52,17 @@ import {
   ServerPluginHooks,
   SpinHookEvent,
 } from './types';
-import { helloNexusPlugin } from '../../plugins/hello-nexus';
 
 /**
- * Every plugin that ships in this tree.
+ * Every plugin that ships in this tree — currently none; the demo tab was removed and no
+ * replacement has been added.
  *
  * Adding a directory under `plugins/` is not enough — a fork adds its export here, and then
  * names it in its pack's `event.json`. Two steps rather than one, deliberately: this array is
  * what makes every plugin type-check with the rest of the codebase, and the pack entry is what
  * makes running it a decision the event makes rather than a consequence of a file existing.
  */
-const CATALOG: readonly ServerPlugin[] = [helloNexusPlugin];
+const CATALOG: readonly ServerPlugin[] = [];
 
 /**
  * Two seconds is a long time for a hook and a short time for the check-in desk. Anything a

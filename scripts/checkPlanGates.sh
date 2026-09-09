@@ -33,7 +33,7 @@ pass=0; fail=0
 # A gate's own output is captured rather than streamed, so a passing gate prints its `ok` line
 # and nothing else — the value of this list is that it is scannable. (An earlier version of this
 # sentence said a passing gate "stays silent", which it plainly is not: it prints one line per
-# gate, 58 of them.)
+# gate, 57 of them — 58 before the hello-nexus example plugin was removed.)
 #
 # Which lines to show is the part that was wrong on the first attempt. That version took
 # `tail -8`, on the stated premise that "the failure is almost always at the end". For anything
@@ -165,7 +165,6 @@ check "verify.sh quick (all)"           "bash scripts/verify.sh quick"
 echo "M8 — plugins, docs, CI"
 check "plugin registry + guard"         "test -f src/plugins/registry.ts -a -f src/plugins/index.ts"
 check "client plugin loader"            "test -f public/plugins.js"
-check "example plugin"                  "test -d plugins/hello-nexus"
 check "fork guide + pack docs"          "test -f docs/FORK_GUIDE.md -a -f docs/CONTENT-PACKS.md"
 check "identity + presence + plugins docs" "test -f docs/IDENTITY.md -a -f docs/PRESENCE.md -a -f docs/PLUGINS.md"
 check "deployment + drills + reviews"   "test -f docs/DEPLOYMENT.md -a -f docs/DRILLS.md -a -f docs/REVIEWS.md"
