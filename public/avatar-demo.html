@@ -11,16 +11,16 @@
     @font-face { font-family: 'VT323'; font-style: normal; font-weight: 400; font-display: swap; src: url('/dashboard/fonts/vt323-400-latin.woff2') format('woff2'); }
     :root { --navy: #13294b; --ground: #0b1220; --panel: #111b2e; --orange: #ff5f05; --cream: #f4ede1; --line: #243450; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--ground); color: var(--cream); font-family: 'VT323', monospace; font-size: 20px; padding: 28px; min-height: 100vh; }
-    h1 { font-family: 'Silkscreen', monospace; font-size: 20px; color: var(--orange); letter-spacing: 0.02em; margin-bottom: 6px; }
-    h2 { font-family: 'Silkscreen', monospace; font-size: 11px; color: #8e9090; text-transform: uppercase; margin-bottom: 10px; }
+    body { background: var(--ground); color: var(--cream); font-family: 'VT323', monospace; font-size: 30px; padding: 28px; min-height: 100vh; }
+    h1 { font-family: 'Silkscreen', monospace; font-size: 30px; color: var(--orange); letter-spacing: 0.02em; margin-bottom: 6px; }
+    h2 { font-family: 'Silkscreen', monospace; font-size: 17px; color: #8e9090; text-transform: uppercase; margin-bottom: 10px; }
     .sub { color: #8e9090; margin-bottom: 24px; }
     .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
     .panel { background: var(--panel); border: 2px solid var(--line); padding: 16px; box-shadow: 4px 4px 0 #000; }
     canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; }
     video { width: 220px; height: 220px; object-fit: cover; background: #000; transform: scaleX(-1); display: block; }
     button, label.btn, select {
-      font-family: 'Silkscreen', monospace; font-size: 11px; text-transform: uppercase; cursor: pointer;
+      font-family: 'Silkscreen', monospace; font-size: 17px; text-transform: uppercase; cursor: pointer;
       background: var(--orange); color: #0b0d14; border: 2px solid #0b0d14; padding: 9px 14px; box-shadow: 3px 3px 0 #000;
     }
     button:active, label.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #000; }
@@ -30,15 +30,15 @@
     .drop { border: 2px dashed #31456a; padding: 14px; text-align: center; color: #8e9090; margin-top: 12px; }
     .drop.over { border-color: var(--orange); color: var(--cream); }
     .pal { display: flex; flex-direction: column; gap: 8px; align-items: center; cursor: pointer; }
-    .pal .name { font-family: 'Silkscreen', monospace; font-size: 10px; color: #8e9090; }
+    .pal .name { font-family: 'Silkscreen', monospace; font-size: 15px; color: #8e9090; }
     .pal.picked .name { color: var(--orange); }
     .pal.picked canvas { outline: 3px solid var(--orange); outline-offset: 3px; }
     .swatches { display: flex; gap: 2px; }
     .swatches i { width: 12px; height: 12px; display: block; }
     #status { color: var(--orange); min-height: 26px; margin-top: 8px; }
-    .count { font-family: 'Silkscreen', monospace; font-size: 48px; color: var(--orange); text-align: center; min-height: 60px; }
+    .count { font-family: 'Silkscreen', monospace; font-size: 72px; color: var(--orange); text-align: center; min-height: 60px; }
     .reveal { display: flex; gap: 20px; align-items: flex-end; }
-    .tag { font-family: 'Silkscreen', monospace; font-size: 10px; color: var(--orange); }
+    .tag { font-family: 'Silkscreen', monospace; font-size: 15px; color: var(--orange); }
     input[type=file] { display: none; }
   </style>
 </head>

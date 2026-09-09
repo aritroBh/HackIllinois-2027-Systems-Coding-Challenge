@@ -166,7 +166,9 @@
   //        and graceful multi-tab SSE eviction backoff.
   // `v66`: the Live badges and the quest-board stream terminal are gone, and the
   //        micro type steps up two sizes — precached index.html and styles.css move.
-  const VERSION = 'v66';
+  // `v67`: product renamed to HackIllinois 2027, all type 1.5×, hello-nexus demo
+  //        plugin removed, quest kind icons, fluid creator layout.
+  const VERSION = 'v67';
   const SHELL_CACHE = 'nexus-shell-' + VERSION;
   const CARD_CACHE = 'nexus-card-' + VERSION;
   const CURRENT_CACHES = [SHELL_CACHE, CARD_CACHE];

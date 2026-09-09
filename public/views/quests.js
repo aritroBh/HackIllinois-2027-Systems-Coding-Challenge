@@ -202,9 +202,12 @@
     return sticker || `${karma} karma`;
   }
 
-  const rewardArt = (q) => (q.reward?.sticker && window.Sprites?.item?.(q.reward.sticker)
-    ? window.Sprites.img(q.reward.sticker, 2)
-    : '');
+  /** Karma-only quests have no sticker to show; fall back to one icon per kind so no card
+   *  is a blank box. Every id here is a core UI sprite (see RARITY_ICON in app.js), never pack
+   *  content, and each is guarded — a sheet that has not loaded yet still renders empty. */
+  const KIND_ICON = { STREAK: 'zap', DISTINCT: 'star', COUNT: 'flag' };
+  const artFor = (id) => (id && window.Sprites?.item?.(id) ? window.Sprites.img(id, 2) : '');
+  const rewardArt = (q) => artFor(q.reward?.sticker) || artFor(KIND_ICON[q.kind]) || artFor('gift') || '';
 
   function questHtml(q) {
     const target = Math.max(1, Number(q.target) || 1);
