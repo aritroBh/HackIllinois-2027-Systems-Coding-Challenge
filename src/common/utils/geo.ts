@@ -15,7 +15,8 @@
  * inventing a coordinate of their own.
  *
  * **The gazetteer is the content pack.** It used to be a second copy: a `HACKILLINOIS_VENUES`
- * literal and a `VENUE_KEYWORDS` table in this file, holding the same fifteen keys, the same
+ * literal and a `VENUE_KEYWORDS` table in this file, holding the same keys as the pack
+ * (fifteen then; twenty-three now with the eight dorm venues), the same
  * coordinates and the same hints as `content/hackillinois-2027/venues.json`, with nothing
  * checking that they still agreed. The pack's copy was what `BoothService` and `RaidService`
  * validated against and what the client rendered; this copy was what the check-in geofence and
@@ -23,8 +24,8 @@
  * says is how you move a venue — moved the map pin and not the geofence, so its check-ins
  * failed against buildings in Urbana.
  *
- * The two were diffed before they were merged, and they were byte-identical: all fifteen keys,
- * both coordinates each, every hint list. So this change moved nothing for the shipped pack and
+ * The two were diffed before they were merged, and they were byte-identical: all fifteen keys
+ * then in the pack, both coordinates each, every hint list. So this change moved nothing for the shipped pack and
  * it is the reason it could be made at all. `CONTRIBUTING.md` has always said that nothing in
  * `src/` names a building; `scripts/checkPackDriven.mjs` now enforces it.
  *

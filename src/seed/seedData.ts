@@ -419,8 +419,8 @@ export async function seedDatabase(): Promise<void> {
   // 6. Seed HackStop Beacons across campus
   /*
    * Beacons likewise. `beacons.json` was the other dead pack file: validated at boot, unique
-   * ids enforced, venue keys checked — and never read, while this file built twelve beacons of
-   * its own from the same data.
+   * ids enforced, venue keys checked — and never read, while this file built the twelve beacons
+   * of its own from the same data (twelve then; twenty now with the eight dorm beacons).
    *
    * `cooldownSeconds` and `geofenceRadiusMeters` keep their defaults here rather than moving
    * into the pack schema, because both are already per-beacon columns on the model and
